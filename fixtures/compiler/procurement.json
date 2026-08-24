@@ -1,0 +1,50 @@
+{
+  "name": "procurement-demo",
+  "description": "The PRD §11 primary demo. Note the wording: 'Ask me before spending more than $150' produces STEP_UP at $203, which is what the demo script shows. See procurement-strict.json for the 'Never spend more than $150' variant, which denies instead.",
+  "intent_text": "You may spend $500 per month on office supplies. Amazon and Staples are approved. Ask me before spending more than $150 in a single transaction. Ask me before buying from another merchant.",
+  "output": {
+    "status": "compiled",
+    "policy": {
+      "schema_version": "agentpay.policy/v1",
+      "summary": "Spend up to $500 per calendar month on office supplies at Amazon and Staples, with your approval required above $150 or at any other merchant.",
+      "currency": "USD",
+      "cumulative_limits": [{ "window": "month", "max_amount": 50000 }],
+      "merchants": {
+        "allow": [
+          { "scheme": "domain", "value": "amazon.com", "label": "Amazon" },
+          { "scheme": "domain", "value": "staples.com", "label": "Staples" }
+        ],
+        "deny": [],
+        "unlisted": "STEP_UP",
+        "step_up_on_first_use": false
+      },
+      "categories": {
+        "allow": ["office_supplies"],
+        "deny": ["gambling", "cash_advance", "crypto", "adult", "firearms"],
+        "deny_mcc": ["7995", "6051", "6010", "6011"],
+        "unlisted": "STEP_UP"
+      },
+      "step_up": { "above_amount": 15000, "ttl_seconds": 900 },
+      "accounting": {
+        "timezone": "America/New_York",
+        "basis": "authorization",
+        "reserve_on_step_up": true,
+        "refunds_credit_budget": true
+      },
+      "constraints": [],
+      "expires_at": "2026-09-23T12:00:00.000Z",
+      "compiler_notes": [
+        "'Amazon' mapped to amazon.com and 'Staples' to staples.com. Verify these are the storefronts you meant.",
+        "'another merchant' read as any merchant not on the allowlist."
+      ]
+    },
+    "assumptions": [
+      "Mapped 'Amazon' to amazon.com and 'Staples' to staples.com. A merchant is only recognized by domain, so a lookalike site would not match.",
+      "Blocked gambling, cash advance, crypto, adult, and firearms outright, since the instruction was about office supplies and did not permit them.",
+      "Categories other than office supplies require your approval rather than being blocked, matching 'ask me' for anything unexpected.",
+      "Set this authority to expire in 30 days. The $500 monthly budget resets each calendar month until then.",
+      "Monthly budget follows calendar months in America/New_York.",
+      "Spend counts when AgentPay authorizes it, and a pending approval holds budget while it waits."
+    ]
+  }
+}

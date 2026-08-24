@@ -1,0 +1,397 @@
+// AgentPay Router — Postgres schema
+//
+// Tenancy: Organization is the boundary. Every row carries organizationId and
+// nothing is queried without it.
+//
+// Immutability: MandateVersion, Authorization, LedgerEntry and EvidenceEvent are
+// append-only. Mandates are edited by writing a new version, never by mutating
+// an old one, so a receipt can always cite the exact bytes that authorized a
+// payment.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy
+// ---------------------------------------------------------------------------
+
+model Organization {
+  id        String   @id
+  name      String
+  createdAt DateTime @default(now())
+
+  agents         Agent[]
+  principals     Principal[]
+  mandates       Mandate[]
+  apiKeys        ApiKey[]
+  authorizations Authorization[]
+  transactions   Transaction[]
+  ledgerEntries  LedgerEntry[]
+  evidenceEvents EvidenceEvent[]
+
+  @@map("organizations")
+}
+
+enum PrincipalType {
+  INDIVIDUAL
+  ORGANIZATION
+}
+
+model Principal {
+  id             String        @id
+  organizationId String
+  displayName    String
+  email          String?
+  type           PrincipalType @default(INDIVIDUAL)
+  createdAt      DateTime      @default(now())
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mandates       Mandate[]
+  credentials    PasskeyCredential[]
+  authorizations Authorization[]
+
+  @@index([organizationId])
+  @@map("principals")
+}
+
+enum AgentStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+model Agent {
+  id             String      @id
+  organizationId String
+  name           String
+  description    String?
+  status         AgentStatus @default(ACTIVE)
+  createdAt      DateTime    @default(now())
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  apiKeys        ApiKey[]
+  authorizations Authorization[]
+  mandateGrants  MandateAgent[]
+
+  @@index([organizationId])
+  @@map("agents")
+}
+
+/// Agent service credentials. Only a hash is stored; the secret is shown once.
+model ApiKey {
+  id             String    @id
+  organizationId String
+  agentId        String?
+  /// Non-secret lookup prefix, e.g. "ap_live_7f2c".
+  prefix         String    @unique
+  /// SHA-256 of the full secret.
+  secretHash     String
+  name           String
+  lastUsedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent        Agent?       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([agentId])
+  @@map("api_keys")
+}
+
+/// WebAuthn credential for a principal. Public key only — no biometric data.
+model PasskeyCredential {
+  id             String   @id
+  principalId    String
+  credentialId   String   @unique
+  publicKey      Bytes
+  counter        BigInt   @default(0)
+  transports     String[]
+  /// RP ID the credential was registered against. Changing the domain invalidates it.
+  rpId           String
+  createdAt      DateTime @default(now())
+  lastUsedAt     DateTime?
+
+  principal Principal @relation(fields: [principalId], references: [id], onDelete: Cascade)
+
+  @@index([principalId])
+  @@map("passkey_credentials")
+}
+
+// ---------------------------------------------------------------------------
+// Mandates
+// ---------------------------------------------------------------------------
+
+enum MandateStatus {
+  DRAFT
+  PENDING_AUTHENTICATION
+  ACTIVE
+  EXPIRED
+  REVOKED
+  SUPERSEDED
+}
+
+model Mandate {
+  id               String        @id
+  organizationId   String
+  principalId      String
+  status           MandateStatus @default(DRAFT)
+  currentVersionId String?       @unique
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  principal      Principal       @relation(fields: [principalId], references: [id], onDelete: Cascade)
+  versions       MandateVersion[] @relation("MandateVersions")
+  currentVersion MandateVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  authorizations Authorization[]
+
+  @@index([organizationId, status])
+  @@index([principalId])
+  @@map("mandates")
+}
+
+/// Immutable. Never updated after creation except to stamp authentication.
+model MandateVersion {
+  id        String @id
+  mandateId String
+  version   Int
+
+  /// The principal's original words, verbatim.
+  intentText String
+
+  /// Compiled policy, agentpay.policy/v1.
+  policy Json
+
+  /// SHA-256 over the canonical policy bytes. What the principal signs.
+  policyHash String
+
+  /// Compiler provenance: which compiler and model produced this policy.
+  compilerName  String
+  compilerModel String?
+
+  /// Choices the compiler made that the principal did not state.
+  assumptions String[]
+
+  authenticatedAt         DateTime?
+  authenticationEvidenceId String?
+
+  createdAt DateTime @default(now())
+
+  mandate        Mandate         @relation("MandateVersions", fields: [mandateId], references: [id], onDelete: Cascade)
+  currentFor     Mandate?        @relation("CurrentVersion")
+  agents         MandateAgent[]
+  authorizations Authorization[]
+
+  @@unique([mandateId, version])
+  @@index([policyHash])
+  @@map("mandate_versions")
+}
+
+/// Which agents a mandate version delegates to. No ambient authority.
+model MandateAgent {
+  mandateVersionId String
+  agentId          String
+
+  mandateVersion MandateVersion @relation(fields: [mandateVersionId], references: [id], onDelete: Cascade)
+  agent          Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@id([mandateVersionId, agentId])
+  @@index([agentId])
+  @@map("mandate_agents")
+}
+
+// ---------------------------------------------------------------------------
+// Authorization
+// ---------------------------------------------------------------------------
+
+enum Decision {
+  ALLOW
+  DENY
+  STEP_UP
+}
+
+enum AuthorizationStatus {
+  AUTHORIZED
+  DENIED
+  PENDING_STEP_UP
+  STEP_UP_APPROVED
+  STEP_UP_DECLINED
+  EXPIRED
+  EXECUTED
+}
+
+model Authorization {
+  id             String @id
+  organizationId String
+  agentId        String
+  principalId    String
+  mandateId      String
+
+  /// The exact policy version this decision was made against.
+  mandateVersionId String
+  policyHash       String
+
+  decision    Decision
+  status      AuthorizationStatus
+  reasonCodes String[]
+  /// Full structured reasons, including limits and observed values.
+  reasons     Json
+
+  /// The proposed action, exactly as submitted.
+  action Json
+
+  amount   Int
+  currency String
+
+  /// Resolved merchant identity and how it was resolved.
+  merchant Json
+
+  /// Caller-supplied idempotency key, unique per organization.
+  idempotencyKey String?
+  /// Hash of the request body, so a reused key with a different body is rejected.
+  requestHash    String?
+
+  stepUpExpiresAt DateTime?
+  stepUpEvidenceId String?
+
+  createdAt DateTime @default(now())
+  decidedAt DateTime @default(now())
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agent          Agent          @relation(fields: [agentId], references: [id])
+  principal      Principal      @relation(fields: [principalId], references: [id])
+  mandate        Mandate        @relation(fields: [mandateId], references: [id])
+  mandateVersion MandateVersion @relation(fields: [mandateVersionId], references: [id])
+  transactions   Transaction[]
+  ledgerEntries  LedgerEntry[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, createdAt])
+  @@index([mandateId, createdAt])
+  @@index([status])
+  @@map("authorizations")
+}
+
+// ---------------------------------------------------------------------------
+// Spend ledger
+// ---------------------------------------------------------------------------
+
+enum LedgerEntryType {
+  /// Budget held by an ALLOW or a pending STEP_UP.
+  RESERVATION
+  /// Reservation released: step-up declined, expired, or payment failed.
+  RELEASE
+  /// Settled spend.
+  CAPTURE
+  /// Refund or reversal credited back.
+  CREDIT
+}
+
+/// Append-only. Cumulative spend is the SUM over this table, never a counter
+/// column, so concurrent authorizations cannot lose an update. Authorization
+/// writes take a row lock on the mandate to serialize limit checks.
+model LedgerEntry {
+  id             String          @id
+  organizationId String
+  mandateId      String
+  authorizationId String
+  type           LedgerEntryType
+  /// Signed minor units: RESERVATION and CAPTURE positive, RELEASE and CREDIT negative.
+  amount         Int
+  currency       String
+  /// Calendar window keys precomputed in the policy timezone, e.g. "2026-08".
+  dayKey         String
+  weekKey        String
+  monthKey       String
+  createdAt      DateTime        @default(now())
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  authorization Authorization @relation(fields: [authorizationId], references: [id], onDelete: Cascade)
+
+  @@index([mandateId, monthKey])
+  @@index([mandateId, dayKey])
+  @@index([mandateId, weekKey])
+  @@index([authorizationId])
+  @@map("ledger_entries")
+}
+
+// ---------------------------------------------------------------------------
+// Execution
+// ---------------------------------------------------------------------------
+
+enum TransactionStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+model Transaction {
+  id              String            @id
+  organizationId  String
+  authorizationId String
+  status          TransactionStatus @default(PENDING)
+  amount          Int
+  currency        String
+  /// Adapter name: "stripe", "x402".
+  provider          String
+  providerReference String?
+  /// Agent-reported fulfillment claims. Claims, not verified facts.
+  fulfillment       Json?
+  verificationResult Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  authorization Authorization @relation(fields: [authorizationId], references: [id])
+
+  @@unique([provider, providerReference])
+  @@index([organizationId, createdAt])
+  @@map("transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Evidence
+// ---------------------------------------------------------------------------
+
+/// Append-only, hash-chained per organization. `hash` covers the payload and
+/// `previousHash`, so any edit to history is detectable.
+model EvidenceEvent {
+  id             String   @id
+  organizationId String
+  sequence       Int
+  type           String
+  subjectType    String
+  subjectId      String
+  payload        Json
+  previousHash   String?
+  hash           String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, sequence])
+  @@index([subjectType, subjectId])
+  @@map("evidence_events")
+}
+
+/// Idempotent webhook ingestion from payment providers.
+model ProviderEvent {
+  id          String   @id
+  provider    String
+  externalId  String
+  type        String
+  payload     Json
+  processedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  @@unique([provider, externalId])
+  @@map("provider_events")
+}

@@ -1,0 +1,242 @@
+/**
+ * Domain model.
+ *
+ * The PRD names eight objects but does not say who owns them. Tenancy is the
+ * one thing that is genuinely expensive to retrofit, so it is decided here:
+ *
+ *   Organization  (a developer account; the tenant boundary)
+ *     ├── Agent        many per org
+ *     ├── Principal    many per org
+ *     └── Mandate      binds ONE principal to ONE OR MORE agents
+ *
+ * Every row in the system carries an `organization_id`. Nothing is queried
+ * without it. An Agent may serve many Principals, but only through a mandate
+ * that names it — there is no ambient authority.
+ */
+
+import { z } from "zod";
+import { MerchantAssertionSchema } from "./merchant.js";
+import { MinorUnitsSchema, CurrencySchema } from "./money.js";
+import { PolicySchema } from "./policy.js";
+
+// --- Identifiers ------------------------------------------------------------
+
+/** Prefixed, opaque, sortable identifiers. Prefix tells you the type at a glance. */
+export const ID_PREFIX = {
+  organization: "org",
+  principal: "prin",
+  agent: "agt",
+  mandate: "mdt",
+  mandate_version: "mdv",
+  authorization: "auth",
+  transaction: "txn",
+  evidence: "ev",
+  step_up: "stp",
+  api_key: "key",
+} as const;
+
+export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];
+
+// --- Lifecycle enums --------------------------------------------------------
+
+export const MandateStatus = {
+  /** Compiled but not yet confirmed by the principal. Cannot authorize anything. */
+  DRAFT: "DRAFT",
+  /** Awaiting the principal's passkey authentication. */
+  PENDING_AUTHENTICATION: "PENDING_AUTHENTICATION",
+  ACTIVE: "ACTIVE",
+  EXPIRED: "EXPIRED",
+  REVOKED: "REVOKED",
+  /** Replaced by a newer version of the same mandate. */
+  SUPERSEDED: "SUPERSEDED",
+} as const;
+
+export type MandateStatus = (typeof MandateStatus)[keyof typeof MandateStatus];
+
+export const AgentStatus = {
+  ACTIVE: "ACTIVE",
+  SUSPENDED: "SUSPENDED",
+} as const;
+
+export type AgentStatus = (typeof AgentStatus)[keyof typeof AgentStatus];
+
+export const AuthorizationStatus = {
+  /** Terminal: ALLOW was returned and the authorization can be executed. */
+  AUTHORIZED: "AUTHORIZED",
+  /** Terminal: DENY. */
+  DENIED: "DENIED",
+  /** Waiting on a human. Holds budget if the policy reserves on step-up. */
+  PENDING_STEP_UP: "PENDING_STEP_UP",
+  /** The human approved; equivalent to AUTHORIZED from here on. */
+  STEP_UP_APPROVED: "STEP_UP_APPROVED",
+  /** The human declined. Terminal. */
+  STEP_UP_DECLINED: "STEP_UP_DECLINED",
+  /** Nobody answered before ttl_seconds elapsed. Terminal, releases budget. */
+  EXPIRED: "EXPIRED",
+  /** Executed against a payment rail. Terminal. */
+  EXECUTED: "EXECUTED",
+} as const;
+
+export type AuthorizationStatus =
+  (typeof AuthorizationStatus)[keyof typeof AuthorizationStatus];
+
+export const TransactionStatus = {
+  PENDING: "PENDING",
+  SUCCEEDED: "SUCCEEDED",
+  FAILED: "FAILED",
+  REFUNDED: "REFUNDED",
+  PARTIALLY_REFUNDED: "PARTIALLY_REFUNDED",
+} as const;
+
+export type TransactionStatus =
+  (typeof TransactionStatus)[keyof typeof TransactionStatus];
+
+// --- The proposed action ----------------------------------------------------
+
+/**
+ * What an agent asks permission to do. This is the payload of
+ * `authorize(agent, principal, action, context)`.
+ */
+export const ProposedActionSchema = z.object({
+  /** Integer minor units. See money.ts — never a decimal. */
+  amount: MinorUnitsSchema,
+  currency: CurrencySchema,
+  merchant: MerchantAssertionSchema,
+  /** Category slug the agent believes applies, e.g. "office_supplies". */
+  category: z.string().min(1).optional(),
+  /** Free-text description of what is being bought, for the receipt. */
+  description: z.string().max(2000).optional(),
+  /**
+   * Agent attestations about the purchase — "refundable": true, "stops": 0.
+   * Evaluated against policy constraints and recorded as *claims*, not facts.
+   */
+  attestations: z.record(z.union([z.string(), z.number(), z.boolean()])).default(
+    {},
+  ),
+});
+
+export type ProposedAction = z.infer<typeof ProposedActionSchema>;
+
+export const AuthorizationRequestSchema = z.object({
+  agent_id: z.string().min(1),
+  principal_id: z.string().min(1),
+  /** Optional: pin the evaluation to a specific mandate. */
+  mandate_id: z.string().min(1).optional(),
+  action: ProposedActionSchema,
+  /** Caller-supplied key making retries safe. Required in production. */
+  idempotency_key: z.string().min(8).max(255).optional(),
+  /** Arbitrary caller context recorded on the receipt. */
+  context: z.record(z.unknown()).default({}),
+});
+
+export type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
+
+// --- Entities ---------------------------------------------------------------
+
+export interface Organization {
+  id: string;
+  name: string;
+  created_at: Date;
+}
+
+export interface Principal {
+  id: string;
+  organization_id: string;
+  /** Display name; for an org principal, the company name. */
+  display_name: string;
+  email: string | null;
+  type: "individual" | "organization";
+  created_at: Date;
+}
+
+export interface Agent {
+  id: string;
+  organization_id: string;
+  name: string;
+  status: AgentStatus;
+  /** Free-form description of what the agent does; shown on step-up prompts. */
+  description: string | null;
+  created_at: Date;
+}
+
+/**
+ * A Mandate is a stable handle. Its *content* lives in immutable
+ * MandateVersions, so an authorization can always cite the exact bytes that
+ * authorized it even after the principal edits the mandate.
+ */
+export interface Mandate {
+  id: string;
+  organization_id: string;
+  principal_id: string;
+  status: MandateStatus;
+  current_version_id: string | null;
+  created_at: Date;
+}
+
+export interface MandateVersion {
+  id: string;
+  mandate_id: string;
+  /** Monotonic, starting at 1. */
+  version: number;
+  /** The original natural-language instruction, verbatim. */
+  intent_text: string;
+  /** The compiled, validated policy. Immutable once written. */
+  policy: z.infer<typeof PolicySchema>;
+  /** SHA-256 over canonicalizePolicy(policy). What the principal signs. */
+  policy_hash: string;
+  /** Agent ids this version delegates to. */
+  agent_ids: string[];
+  /** Populated when the principal authenticates this version with a passkey. */
+  authenticated_at: Date | null;
+  authentication_evidence_id: string | null;
+  created_at: Date;
+}
+
+export interface AuthorizationRecord {
+  id: string;
+  organization_id: string;
+  agent_id: string;
+  principal_id: string;
+  mandate_id: string;
+  mandate_version_id: string;
+  /** Denormalized so the decision is legible without a join. */
+  policy_hash: string;
+  status: AuthorizationStatus;
+  decision: "ALLOW" | "DENY" | "STEP_UP";
+  reason_codes: string[];
+  action: ProposedAction;
+  idempotency_key: string | null;
+  step_up_expires_at: Date | null;
+  created_at: Date;
+  decided_at: Date;
+}
+
+export interface TransactionRecord {
+  id: string;
+  organization_id: string;
+  authorization_id: string;
+  status: TransactionStatus;
+  amount: number;
+  currency: string;
+  /** Adapter name: "stripe", "x402", ... */
+  provider: string;
+  provider_reference: string | null;
+  created_at: Date;
+}
+
+/**
+ * Append-only, hash-chained event log. `previous_hash` links each event to the
+ * one before it within an organization, so tampering is detectable.
+ */
+export interface EvidenceEvent {
+  id: string;
+  organization_id: string;
+  sequence: number;
+  type: string;
+  subject_type: string;
+  subject_id: string;
+  payload: Record<string, unknown>;
+  previous_hash: string | null;
+  hash: string;
+  created_at: Date;
+}

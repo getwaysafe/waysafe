@@ -1,0 +1,71 @@
+{
+  "name": "travel",
+  "description": "PRD §9. Exercises agent-attested constraints — the case where a payment is authorized but the agent fails the actual instruction.",
+  "intent_text": "Book me a refundable nonstop flight to Miami next Friday, under $800.",
+  "output": {
+    "status": "compiled",
+    "policy": {
+      "schema_version": "agentpay.policy/v1",
+      "summary": "Book one refundable nonstop flight to Miami for under $800.",
+      "currency": "USD",
+      "per_transaction_max": 80000,
+      "cumulative_limits": [
+        { "window": "mandate", "max_amount": 80000, "max_count": 1 }
+      ],
+      "merchants": {
+        "allow": [],
+        "deny": [],
+        "unlisted": "STEP_UP",
+        "step_up_on_first_use": false
+      },
+      "categories": {
+        "allow": ["air_travel"],
+        "deny": ["gambling", "cash_advance", "crypto", "adult", "firearms"],
+        "deny_mcc": ["7995", "6051"],
+        "unlisted": "DENY"
+      },
+      "step_up": { "above_amount": 60000, "ttl_seconds": 900 },
+      "accounting": {
+        "timezone": "America/New_York",
+        "basis": "authorization",
+        "reserve_on_step_up": true,
+        "refunds_credit_budget": true
+      },
+      "constraints": [
+        {
+          "key": "refundable",
+          "operator": "equals",
+          "value": true,
+          "required": true,
+          "verification": "agent_attested"
+        },
+        {
+          "key": "stops",
+          "operator": "equals",
+          "value": 0,
+          "required": true,
+          "verification": "agent_attested"
+        },
+        {
+          "key": "destination_city",
+          "operator": "equals",
+          "value": "Miami",
+          "required": true,
+          "verification": "agent_attested"
+        }
+      ],
+      "expires_at": "2026-08-31T12:00:00.000Z",
+      "compiler_notes": [
+        "No airline was named, so no merchant allowlist was set; any airline requires your approval.",
+        "'Refundable', 'nonstop' and the destination are reported by the agent. AgentPay records the claim on the receipt but cannot independently verify it."
+      ]
+    },
+    "assumptions": [
+      "Limited this to a single booking of at most $800.",
+      "No airline was specified, so any merchant requires your approval before payment.",
+      "You will be asked to approve anything at or above $600, below the $800 ceiling.",
+      "Set this to expire a week from now, after 'next Friday' has passed.",
+      "'Refundable', 'nonstop' and 'Miami' are recorded as agent claims. If the agent books a one-stop nonrefundable fare and reports otherwise, the payment would still go through — the receipt will show the mismatch."
+    ]
+  }
+}

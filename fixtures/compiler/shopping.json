@@ -1,0 +1,62 @@
+{
+  "name": "shopping",
+  "description": "PRD §6. The qualitative-instruction case: 'nothing ridiculous' has no enforceable meaning, so the compiler picks numbers and says so. Deliberately keeps the PRD's exact figures (max_transaction $900, step_up_above $1,250), which are internally contradictory — the coherence checker emits a warning about it. See DECISIONS.md, OQ-7.",
+  "intent_text": "Get me a good hotel in Miami. Nothing ridiculous.",
+  "output": {
+    "status": "compiled",
+    "policy": {
+      "schema_version": "agentpay.policy/v1",
+      "summary": "Book a Miami hotel for at most $900 per booking and $1,800 in total, with your approval required at or above $1,250.",
+      "currency": "USD",
+      "per_transaction_max": 90000,
+      "cumulative_limits": [{ "window": "mandate", "max_amount": 180000 }],
+      "merchants": {
+        "allow": [],
+        "deny": [],
+        "unlisted": "STEP_UP",
+        "step_up_on_first_use": false
+      },
+      "categories": {
+        "allow": ["lodging"],
+        "deny": ["gambling", "cash_advance", "crypto", "adult", "firearms"],
+        "deny_mcc": ["7995", "6051"],
+        "unlisted": "DENY"
+      },
+      "step_up": { "above_amount": 125000, "ttl_seconds": 900 },
+      "accounting": {
+        "timezone": "America/New_York",
+        "basis": "authorization",
+        "reserve_on_step_up": true,
+        "refunds_credit_budget": true
+      },
+      "constraints": [
+        {
+          "key": "refundable",
+          "operator": "equals",
+          "value": true,
+          "required": true,
+          "verification": "agent_attested"
+        },
+        {
+          "key": "destination_city",
+          "operator": "equals",
+          "value": "Miami",
+          "required": true,
+          "verification": "agent_attested"
+        }
+      ],
+      "expires_at": "2026-08-25T12:00:00.000Z",
+      "compiler_notes": [
+        "'Nothing ridiculous' is not enforceable, so it was converted to explicit dollar limits that you should check.",
+        "Gambling is blocked even though many Miami hotels are attached to casinos; a resort charge coded as gambling will be denied."
+      ]
+    },
+    "assumptions": [
+      "Read 'nothing ridiculous' as at most $900 per booking and $1,800 in total. Change these if they are not what you meant.",
+      "You will be asked to approve anything at or above $1,250, so you see the expensive end before it is charged.",
+      "Required the booking to be refundable, since you did not say it was final.",
+      "No hotel or booking site was named, so any merchant requires your approval.",
+      "Set this to expire in 24 hours — it reads as a request to act now, not standing authority."
+    ]
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "underspecified",
+  "description": "The clarification path. No ceiling of any kind is stated, so the compiler refuses to invent one. This is the behavior the PRD did not specify and the most important one to get right — an invented limit is a guess about someone's money that they never see.",
+  "intent_text": "Let my shopping agent buy things from Amazon for me.",
+  "output": {
+    "status": "needs_clarification",
+    "clarifications": [
+      {
+        "path": "/per_transaction_max",
+        "question": "What is the most this agent may spend in a single purchase?",
+        "suggested_default": 10000,
+        "rationale": "No spending ceiling was stated. AgentPay will not invent one, because an incorrect guess is either useless or expensive."
+      },
+      {
+        "path": "/cumulative_limits",
+        "question": "Is there a total or monthly budget, and over what period?",
+        "suggested_default": null,
+        "rationale": "Without a cumulative limit, a per-transaction cap can be exhausted by repeated purchases."
+      },
+      {
+        "path": "/categories",
+        "question": "Amazon sells nearly everything. Which categories should this agent be able to buy?",
+        "suggested_default": null,
+        "rationale": "A merchant allowlist alone does not constrain what is bought when the merchant is a general marketplace."
+      }
+    ],
+    "draft": {
+      "schema_version": "agentpay.policy/v1",
+      "summary": "Buy from Amazon, limits not yet set.",
+      "currency": "USD",
+      "merchants": {
+        "allow": [
+          { "scheme": "domain", "value": "amazon.com", "label": "Amazon" }
+        ],
+        "deny": [],
+        "unlisted": "DENY",
+        "step_up_on_first_use": false
+      },
+      "categories": {
+        "allow": [],
+        "deny": ["gambling", "cash_advance", "crypto", "adult", "firearms"],
+        "deny_mcc": [],
+        "unlisted": "STEP_UP"
+      }
+    }
+  }
+}

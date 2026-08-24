@@ -1,0 +1,48 @@
+{
+  "name": "procurement-strict",
+  "description": "The PRD §11 instruction verbatim. 'Never spend more than $150' is a hard ceiling, so $203 at Staples is DENIED, not stepped up — which contradicts the demo script in the PRD. See DECISIONS.md, open question OQ-1.",
+  "intent_text": "You may spend $500 per month on office supplies. Amazon and Staples are approved. Never spend more than $150 in a single transaction. Ask me before buying from another merchant.",
+  "output": {
+    "status": "compiled",
+    "policy": {
+      "schema_version": "agentpay.policy/v1",
+      "summary": "Spend up to $500 per calendar month on office supplies at Amazon and Staples, never more than $150 at once, with your approval required at any other merchant.",
+      "currency": "USD",
+      "per_transaction_max": 15000,
+      "cumulative_limits": [{ "window": "month", "max_amount": 50000 }],
+      "merchants": {
+        "allow": [
+          { "scheme": "domain", "value": "amazon.com", "label": "Amazon" },
+          { "scheme": "domain", "value": "staples.com", "label": "Staples" }
+        ],
+        "deny": [],
+        "unlisted": "STEP_UP",
+        "step_up_on_first_use": false
+      },
+      "categories": {
+        "allow": ["office_supplies"],
+        "deny": ["gambling", "cash_advance", "crypto", "adult", "firearms"],
+        "deny_mcc": ["7995", "6051", "6010", "6011"],
+        "unlisted": "STEP_UP"
+      },
+      "step_up": { "ttl_seconds": 900 },
+      "accounting": {
+        "timezone": "America/New_York",
+        "basis": "authorization",
+        "reserve_on_step_up": true,
+        "refunds_credit_budget": true
+      },
+      "constraints": [],
+      "expires_at": "2026-09-23T12:00:00.000Z",
+      "compiler_notes": [
+        "'Never spend more than $150' read as a hard ceiling, so amounts above it are denied outright rather than escalated for approval."
+      ]
+    },
+    "assumptions": [
+      "Read 'never more than $150' as a hard limit: transactions above it are denied, not sent to you for approval. Say 'ask me before spending more than $150' if you would rather approve them.",
+      "Mapped 'Amazon' to amazon.com and 'Staples' to staples.com.",
+      "Blocked gambling, cash advance, crypto, adult, and firearms outright.",
+      "Set this authority to expire in 30 days."
+    ]
+  }
+}
