@@ -326,6 +326,68 @@ Implemented in `apps/api/src/authorization/prisma-repository.ts`
 
 ---
 
+## D-16 — The evidence chain gets its own lock, independent of D-4's
+
+The hash chain (`EvidenceEvent.sequence`/`previousHash`) is scoped per
+*organization*, not per mandate. D-4's row lock is scoped per *mandate*. Two
+authorizations against two different mandates in the same organization can
+run concurrently under D-4's lock — each has its own mandate row to lock —
+but both would still be appending to the *same* evidence chain. Without a
+lock of its own, two such appends can race on "what's the next sequence
+number / what's the current tip hash" exactly the way two authorizations
+would race on cumulative spend without D-4's lock.
+
+So `EvidenceRepository` gets its own `withOrganizationLock`, a real
+`SELECT ... FOR UPDATE` on the `organizations` row in the Prisma
+implementation, structurally identical to `withMandateLock` (same
+`AsyncLocalStorage`-routing trick so nested reads/writes inside the callback
+share the locked transaction, same `disableLockForTesting` negative control,
+same `AGENTPAY_REQUIRE_DB` fail-loud gate). Where a call site needs both
+locks in one transaction (an authorization decision writing its own
+evidence event), the convention is: acquire the organization lock before the
+mandate lock, consistently, so two call sites can never deadlock by taking
+them in opposite orders.
+
+`Mutex` (the in-memory lock's building block) was previously private to
+`InMemoryAuthorizationRepository`; it's now `apps/api/src/util/mutex.ts`,
+shared with `InMemoryEvidenceRepository`, since there are now two real
+callers instead of one.
+
+Implemented in `apps/api/src/evidence/prisma-repository.ts`
+(`withOrganizationLock`) and `apps/api/src/evidence/in-memory-repository.ts`.
+Tested in `apps/api/src/evidence/prisma-repository.test.ts`, including the
+negative control (race passes with the lock disabled) and the
+`AGENTPAY_REQUIRE_DB` hard-failure test, both following the D-15 pattern
+exactly. The reachability probe and the `AGENTPAY_REQUIRE_DB` gate itself
+were pulled out to `apps/api/src/test-support/db-gate.ts` and both
+`prisma-repository.test.ts` files now share it, rather than let two copies
+of a security-relevant test mechanism drift apart.
+
+---
+
+## D-17 — Evidence is "tamper-evident," never "tamper-proof" or "verifiable," until OQ-8 lands
+
+A hash chain proves a *record was mutated after the fact to someone who
+already has an independent copy of it, or who trusts the person recomputing
+the chain*. It does not prove anything to a third party who has to trust the
+operator's own database to fetch the chain from in the first place —
+whoever controls the database can mutate a row and recompute every hash
+after it, chain intact. That's the gap OQ-8 exists to close with signing.
+
+Until it's closed, no receipt, API response, SDK type, or demo copy may
+describe the evidence log as "verifiable" or "tamper-proof" in a way that
+implies a third party can check it without trusting us — that would be the
+same class of defect as D-14: a security property claimed in words that the
+code does not actually provide. "Tamper-evident" is the accurate word for
+what hash-chaining alone gives you, and it's the only word to use for it
+until OQ-8 resolves.
+
+Applies to: `packages/core/src/evidence.ts` doc comments,
+`verifyEvidenceChain`'s naming and description, any future receipt-rendering
+code, and `packages/sdk` types once evidence is exposed there.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -403,3 +465,34 @@ visible. Presumably `max_transaction` was meant as a per-*night* cap and
 dimension it currently does not have — lodging is priced per night but charged
 as one transaction. **Does the policy schema need per-unit limits, or should the
 example's numbers just be corrected?**
+
+## OQ-8 — The evidence chain is tamper-evident, not tamper-proof, until it's signed
+
+Hash-chaining (D-16) makes the evidence log tamper-*evident*: mutate a
+historical row and recomputing the chain shows exactly where it breaks. It
+does not make the log tamper-*proof* or independently *verifiable* — both of
+those require someone who does not have to trust AgentPay's own database to
+be able to check the record, and hash-chaining alone can't give them that.
+Whoever controls the database can mutate a row and recompute every hash
+after it; the chain stays internally consistent throughout. Tamper-evident
+protects against an outside attacker or a bug; it does not protect against
+the operator, and it does not let a principal, a regulator, or a counterparty
+verify a receipt without trusting AgentPay to have run the check honestly.
+
+Signing each event (or periodically signing the chain's tip) with the
+Ed25519 key already wired into `.env.example` as
+`AGENTPAY_EVIDENCE_SIGNING_KEY` is what closes that gap — a signature a third
+party can check against a published public key, independent of whether they
+trust the database it came from. That is load-bearing for how AgentPay
+positions itself (an authorization record a principal or auditor can trust
+without trusting AgentPay's operators), not a nice-to-have hardening pass.
+
+Deliberately not built in Week 3: hash-chaining alone already satisfies
+Week 3's stated scope (append-only, tamper-evident, a verification function
+that detects mutation), and signing is additive on top of it rather than a
+rework — the chain structure doesn't change when signing is added, only a
+signature gets attached to each tip. Until it lands, see D-17: nothing may
+describe the evidence log as "verifiable" or "tamper-proof" in the
+third-party sense. **Targeted for Week 6 hardening — does the signing scheme
+sign every event, or just periodically sign the chain's tip, and who holds
+the verification public key?**

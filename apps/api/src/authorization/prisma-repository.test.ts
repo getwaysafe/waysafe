@@ -36,31 +36,15 @@ import {
   type MandateStatus,
   type Policy,
 } from "@agentpay/core";
+import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaAuthorizationRepository } from "./prisma-repository.js";
 import { authorize } from "./service.js";
 
 const prisma = new PrismaClient();
-const REQUIRE_DB = process.env.AGENTPAY_REQUIRE_DB === "1";
+const SUITE_NAME = "PrismaAuthorizationRepository: row lock against real Postgres";
+const reachable = await probeDatabase(prisma);
 
-let reachable = false;
-try {
-  await prisma.$queryRaw`SELECT 1`;
-  reachable = true;
-} catch {
-  reachable = false;
-}
-
-if (!reachable && REQUIRE_DB) {
-  describe("PrismaAuthorizationRepository: row lock against real Postgres", () => {
-    it("requires a reachable database because AGENTPAY_REQUIRE_DB=1", () => {
-      throw new Error(
-        "AGENTPAY_REQUIRE_DB=1 but DATABASE_URL is unset or unreachable -- " +
-          "refusing to silently skip the D-4 row-lock proof. Fix the " +
-          "connection, or unset AGENTPAY_REQUIRE_DB to allow skipping.",
-      );
-    });
-  });
-}
+requireDbOrExplainSkip(SUITE_NAME, reachable);
 
 const DIRECTORY = createStaticDirectory([
   { domain: "staples.com", display_name: "Staples" },
@@ -157,7 +141,7 @@ function request(organizationId: string, agentId: string, principalId: string, a
 
 const NOW = new Date("2026-08-24T12:00:00.000Z");
 
-describe.skipIf(!reachable)("PrismaAuthorizationRepository: row lock against real Postgres", () => {
+describe.skipIf(!reachable)(SUITE_NAME, () => {
   beforeAll(() => {
     if (!reachable) return;
     // eslint-disable-next-line no-console

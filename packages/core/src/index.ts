@@ -4,6 +4,7 @@ export * from "./merchant.js";
 export * from "./policy.js";
 export * from "./domain.js";
 export * from "./time.js";
+export * from "./evidence.js";
 export * from "./engine/index.js";
 export * from "./compiler/index.js";
 export * from "./fixtures.js";

@@ -35,19 +35,7 @@ import type {
   SaveAuthorizationInput,
   StoredAuthorization,
 } from "./types.js";
-
-class Mutex {
-  private tail: Promise<unknown> = Promise.resolve();
-
-  run<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(fn, fn);
-    this.tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
-}
+import { Mutex } from "../util/mutex.js";
 
 interface AgentRow {
   id: string;
