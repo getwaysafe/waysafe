@@ -8,9 +8,18 @@
  * concurrency scenarios against `PrismaAuthorizationRepository` and a real
  * database to close that gap. See DECISIONS.md D-15.
  *
- * Skips itself (not fails) when DATABASE_URL isn't set or isn't reachable,
- * so `npm test` stays green offline; CI and any environment with a real
- * Postgres instance run it for real.
+ * Two safeguards against this suite passing for the wrong reason:
+ *
+ *  - A negative control (`disableLockForTesting`) proves the race test would
+ *    actually catch a regression -- e.g. someone deleting the `FOR UPDATE`
+ *    clause -- rather than passing by accident because the two operations
+ *    never happened to overlap.
+ *  - `AGENTPAY_REQUIRE_DB=1` turns "database unreachable" into a hard
+ *    failure instead of a skip. Without it, a broken `DATABASE_URL` in an
+ *    environment that's supposed to have one makes this entire block
+ *    disappear silently and the suite stays green -- for the single test
+ *    that exists specifically to catch money-losing races. Unset (the
+ *    default), it skips, so `npm test` stays green with no database at all.
  */
 
 import { PrismaClient, type Prisma } from "@prisma/client";
@@ -31,6 +40,7 @@ import { PrismaAuthorizationRepository } from "./prisma-repository.js";
 import { authorize } from "./service.js";
 
 const prisma = new PrismaClient();
+const REQUIRE_DB = process.env.AGENTPAY_REQUIRE_DB === "1";
 
 let reachable = false;
 try {
@@ -38,6 +48,18 @@ try {
   reachable = true;
 } catch {
   reachable = false;
+}
+
+if (!reachable && REQUIRE_DB) {
+  describe("PrismaAuthorizationRepository: row lock against real Postgres", () => {
+    it("requires a reachable database because AGENTPAY_REQUIRE_DB=1", () => {
+      throw new Error(
+        "AGENTPAY_REQUIRE_DB=1 but DATABASE_URL is unset or unreachable -- " +
+          "refusing to silently skip the D-4 row-lock proof. Fix the " +
+          "connection, or unset AGENTPAY_REQUIRE_DB to allow skipping.",
+      );
+    });
+  });
 }
 
 const DIRECTORY = createStaticDirectory([
@@ -204,6 +226,44 @@ describe.skipIf(!reachable)("PrismaAuthorizationRepository: row lock against rea
       const decisions = [a.authorization.decision, b.authorization.decision];
       expect(decisions.filter((d) => d === Decision.ALLOW)).toHaveLength(1);
       expect(decisions.filter((d) => d === Decision.DENY)).toHaveLength(1);
+    },
+    30_000,
+  );
+
+  it(
+    "negative control: WITHOUT the row lock, both racing authorizations land ALLOW -- the exact bug D-4 exists to prevent",
+    async () => {
+      // Same scenario as the test above, same repository class, same
+      // transaction wrapping -- the only difference is disableLockForTesting
+      // skipping the `SELECT ... FOR UPDATE` line. If this assertion ever
+      // stops holding (i.e. the lock somehow still serializes these), the
+      // positive test above is not proving what it claims to: it would keep
+      // passing even if someone deleted the FOR UPDATE clause from
+      // prisma-repository.ts, because the two operations just wouldn't have
+      // overlapped in that run.
+      const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY, {
+        disableLockForTesting: true,
+      });
+      const { organizationId, agentId, principalId } = await seedMandate(policyFrom());
+
+      const [a, b] = await Promise.all([
+        authorize(repo, {
+          organizationId,
+          request: request(organizationId, agentId, principalId, 450),
+          now: NOW,
+        }),
+        authorize(repo, {
+          organizationId,
+          request: request(organizationId, agentId, principalId, 60),
+          now: NOW,
+        }),
+      ]);
+
+      if (a.kind !== "decided" || b.kind !== "decided") throw new Error("unreachable");
+      const decisions = [a.authorization.decision, b.authorization.decision];
+      // Both read the same $0 starting balance before either commits, so
+      // both pass the $500 cap independently -- $510 total gets through.
+      expect(decisions.filter((d) => d === Decision.ALLOW)).toHaveLength(2);
     },
     30_000,
   );

@@ -58,11 +58,28 @@ const TRANSACTION_OPTIONS = { timeout: 20_000, maxWait: 20_000 };
 
 const SETTLED_STATUSES: AuthorizationStatus[] = ["AUTHORIZED", "STEP_UP_APPROVED", "EXECUTED"];
 
+export interface PrismaAuthorizationRepositoryOptions {
+  /**
+   * Testing only. Skips the `SELECT ... FOR UPDATE` line -- nothing else --
+   * so the transaction and the AsyncLocalStorage wiring stay identical and
+   * the row lock is the single variable under test. Exists so the D-4
+   * concurrency test has a negative control: proof that the test actually
+   * detects an unserialized race, not just that two operations happened not
+   * to overlap. Never set outside a test.
+   */
+  disableLockForTesting?: boolean;
+}
+
 export class PrismaAuthorizationRepository implements AuthorizationRepository {
+  private readonly disableLockForTesting: boolean;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly directory: MerchantDirectory,
-  ) {}
+    options: PrismaAuthorizationRepositoryOptions = {},
+  ) {
+    this.disableLockForTesting = options.disableLockForTesting ?? false;
+  }
 
   private get client(): Db {
     return mandateLockContext.getStore() ?? this.prisma;
@@ -227,7 +244,9 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
 
   async withMandateLock<T>(mandateId: string, fn: () => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM mandates WHERE id = ${mandateId} FOR UPDATE`;
+      if (!this.disableLockForTesting) {
+        await tx.$queryRaw`SELECT id FROM mandates WHERE id = ${mandateId} FOR UPDATE`;
+      }
       return mandateLockContext.run(tx, fn);
     }, TRANSACTION_OPTIONS);
   }

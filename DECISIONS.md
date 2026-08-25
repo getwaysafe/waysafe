@@ -292,16 +292,36 @@ called from inside a lock, and to the plain `PrismaClient` otherwise.
 
 `prisma-repository.test.ts` re-runs the same two concurrency scenarios from
 `service.test.ts` against `PrismaAuthorizationRepository` and a real
-database, and self-skips (`describe.skipIf`) rather than fails when
-`DATABASE_URL` isn't set or isn't reachable — so `npm test` stays green
-offline, and a real Postgres instance (Neon or otherwise) runs it for real.
-Verified by temporarily replacing the lock body with a bare `fn()` (no
-transaction, no `FOR UPDATE`): the race test failed as expected — both the
-$450 and the $60 request landed `ALLOW`, $510 against a $500 cap — confirming
-the test actually exercises the lock and isn't passing by accident the way
-an under-tested guard did in the D-3 amendment above.
+database.
 
-Implemented in `apps/api/src/authorization/prisma-repository.ts`. Tested in
+**Negative control, not a one-off manual check.** A race test that passes
+proves little on its own — it may just mean the two operations never
+overlapped that run, and it would keep passing even if someone later deleted
+the `FOR UPDATE` line. `PrismaAuthorizationRepository` therefore takes a
+constructor option, `disableLockForTesting`, that skips only the `FOR UPDATE`
+line — same transaction, same `AsyncLocalStorage` wiring, one variable
+changed. A permanent test in `prisma-repository.test.ts` ("negative control:
+WITHOUT the row lock...") constructs the repository with that option and
+asserts the race test's failure mode directly: both the $450 and the $60
+request land `ALLOW`, $510 against a $500 cap. That test failing would mean
+the positive test above isn't proving what it claims to. (This was first
+verified by hand — temporarily replacing the lock body with a bare `fn()` and
+watching the race test go red — before being made a permanent, committed
+test rather than a one-time manual check.)
+
+**Fail loud, don't fail quiet.** `describe.skipIf` skips the whole block —
+tests included — when `DATABASE_URL` is unset or unreachable, so `npm test`
+stays green with no database configured at all. Left unconditional, that's a
+hazard the other direction: a broken `DATABASE_URL` in an environment that's
+*supposed* to have a database (CI, staging) makes the single test suite that
+exists to catch a money-losing race silently vanish, and everything else
+stays green regardless. Setting `AGENTPAY_REQUIRE_DB=1` turns that case into
+a hard failure — one test throws with a message naming the flag and the
+fix, instead of the block quietly disappearing. Default (unset) behavior is
+unchanged: skip and stay green.
+
+Implemented in `apps/api/src/authorization/prisma-repository.ts`
+(`PrismaAuthorizationRepositoryOptions.disableLockForTesting`). Tested in
 `apps/api/src/authorization/prisma-repository.test.ts`.
 
 ---
