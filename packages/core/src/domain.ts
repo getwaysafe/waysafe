@@ -34,6 +34,8 @@ export const ID_PREFIX = {
   evidence: "ev",
   step_up: "stp",
   api_key: "key",
+  webauthn_challenge: "wch",
+  passkey_credential: "pkc",
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];

@@ -359,6 +359,18 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return toStoredAuthorization(updated);
   }
 
+  async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
+    const client = this.client;
+    const result = await client.mandateVersion.updateMany({
+      where: { id: mandateVersionId, mandateId },
+      data: { authenticatedAt: now },
+    });
+    if (result.count === 0) {
+      throw new Error(`mandate version ${mandateVersionId} does not belong to mandate ${mandateId}`);
+    }
+    await client.mandate.update({ where: { id: mandateId }, data: { status: "ACTIVE" } });
+  }
+
   // --- Internal --------------------------------------------------------------
 
   private async timezoneFor(mandateId: string): Promise<string> {

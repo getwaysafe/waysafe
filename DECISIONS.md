@@ -465,6 +465,135 @@ Implemented in `apps/api/src/agent-keys/` (`keys.ts`, `types.ts`,
 
 ---
 
+## D-19 — The product is renamed from "AgentPay Router" to "Bles"
+
+Resolves OQ-2. Mastercard Agent Pay already owns "Agent Pay" as a category
+name, and the collision was only going to get more expensive to unwind the
+longer the name stuck around in code, package scopes, and a growing surface
+of external-facing strings.
+
+The positioning is deliberately not payments: Bles is the system of record
+for delegated financial authority. The category being built around here is
+permission issuance -- deciding, recording, and proving what an agent was
+allowed to do -- not moving money. Nobody else is building liability
+resolution for agentic spend; that is the position Bles occupies, and it is
+a different pitch than "another way to route a payment."
+
+**The rename is a mechanical pass, deliberately deferred to Week 6, before
+anything is public:**
+
+- Repo name
+- Package scope: `@agentpay/*` → the new scope
+- Env vars: `AGENTPAY_*`
+- The policy schema id: `agentpay.policy/v1`
+- `README.md`, SDK naming, any other AgentPay-branded string
+
+Mid-sprint, this is pure churn with no compensating benefit -- every week
+between now and Week 6 that isn't spent on it is a week spent on the thing
+the name is attached to. After a first external integration, it's expensive
+in a different way: someone else's code now depends on the old names. Week 6
+is the window between "nothing to break" and "something to break."
+
+**The schema id is the one entry on this list with a real compatibility
+cost, not just a search-and-replace.** `POLICY_SCHEMA_VERSION` /
+`agentpay.policy/v1` is baked into every policy document, and every
+`policy_hash` (D-5) is a SHA-256 over the canonical bytes of that exact
+document -- change the string and every previously-computed hash stops
+matching a freshly-canonicalized policy with otherwise-identical content.
+Week 6 needs to decide: bump to a new versioned id (`bles.policy/v1`) and
+carry a translation for hashes computed under the old one, or alias the old
+id as a recognized-but-deprecated schema version indefinitely. Not decided
+here -- flagging it now so Week 6 doesn't discover it as a surprise.
+
+Not implemented yet -- this decision records the rename and its timing, not
+the rename itself.
+
+---
+
+## D-20 — WebAuthn: the challenge is the policy_hash, RP ID is localhost for the sprint
+
+**Resolves OQ-5.** RP ID is `localhost` for the whole sprint. Every
+credential registered during development is disposable -- passkeys are
+bound to a domain, so moving to the real one at launch invalidates them
+regardless of when that move happens. Doing it now, mid-sprint, buys
+nothing; the migration is the same size whenever it happens, and OQ-2's
+answer (the product is now Bles, D-19) means the real domain wasn't even
+known until this decision was already due. Re-register against the real
+domain once D-19's rename lands.
+
+**The authentication challenge is `policyHash`'s UTF-8 bytes,
+base64url-encoded (`webauthn.ts`'s `policyHashToChallenge`) -- not a random
+server nonce.** This is the load-bearing design choice, not a detail: a
+random nonce proves the principal completed *a* WebAuthn ceremony recently
+(closer to a login). Encoding the policy hash itself as the challenge means
+a verified signature proves the principal's authenticator signed *this
+exact mandate version* -- the same property a "sign this transaction"
+flow gets from putting the transaction hash in the signed payload. A
+signature that verifies against the wrong policy_hash (a real signature,
+genuinely produced by the registered key, just over a different mandate)
+is rejected by `@simplewebauthn/server`'s own challenge check, not by
+anything this codebase added -- confirmed in
+`webauthn/webauthn.test.ts` and, end to end through challenge
+storage and mandate lookup, in `webauthn/service.test.ts`.
+
+**A `MandateVersion` reaches `authenticatedAt` / `Mandate.ACTIVE` through
+exactly one path.** `AuthorizationRepository.activateMandate` stamps both;
+its only caller is `webauthn/service.ts`'s `completeMandateAuthentication`,
+and only after `verifyAuthentication` has returned `ok: true` -- there is no
+branch, no default, no fallback that reaches it otherwise. Proven directly:
+a test spies on `activateMandate` and asserts it is never called when
+verification fails (missing challenge, wrong policy_hash, forged signature)
+and is called exactly once when it succeeds -- the same
+spy-plus-sanity-check pattern D-18 used for `evaluate()`. A second test
+runs the full lifecycle end to end: a `PENDING_AUTHENTICATION` mandate
+returns `DENY_MANDATE_NOT_AUTHENTICATED` from `authorize()` (the gate
+D-13 already had, now exercised against a mandate nothing has fabricated
+`authenticatedAt` for), a real WebAuthn ceremony activates it, and the
+identical request now reaches `evaluate()`.
+
+**Challenges are single-use by construction, not by convention.**
+`WebauthnChallenge.consumedAt IS NULL AND expiresAt > now` is the `WHERE`
+clause of one atomic conditional update (`consumeChallenge`), the same
+pattern the idempotency-key claim in `InMemoryAuthorizationRepository`
+already used -- there is no read-then-write gap for a race to land in.
+5-minute expiry. Proven with a genuine replay (the identical, validly
+signed response submitted twice: second attempt rejected because the
+challenge row is already consumed, not because the signature stopped being
+valid) and, in `webauthn/prisma-repository.test.ts`, ten concurrent
+redemption attempts against real Postgres resolving to exactly one success
+— no row lock needed here (contrast D-4/D-16): a single row's own
+consumed/not-consumed state is already atomic under one conditional
+`UPDATE`, with nothing cumulative to serialize.
+
+**Tested against the real verifier, not a fake.** `@simplewebauthn/server`
+does the actual signature and CBOR/authenticator-data parsing;
+`webauthn/test-support/virtual-authenticator.ts` is a real (if synthetic)
+ECDSA P-256 authenticator -- genuine keypair, genuine CBOR attestation
+object, genuine DER signature -- built from the library's own
+`isoCBOR`/`isoBase64URL`/`isoUint8Array` helpers so encoding is guaranteed
+byte-compatible with what it decodes. A stubbed verifier would only prove
+this codebase's orchestration; it could never catch a regression in the
+verification logic itself, and that's the piece D-3/D-14/D-15's whole
+standard exists to hold to a higher bar. Every negative case in this
+decision -- wrong challenge, wrong RP ID, wrong signing key, non-advancing
+counter, reused challenge, signature over a different mandate's policy_hash
+-- runs against the genuine library call, not a double.
+
+**Deliberately not built this pass:** the HTTP endpoints
+(`POST /v1/passkeys/register/*`, `POST /v1/mandates/:id/authenticate`) and
+`POST /v1/mandates` (persisting a compiled policy as a
+`PENDING_AUTHENTICATION` mandate, closing the gap D-7 left open). Everything
+here is exercised at the repository/service layer, the same altitude as
+every other Week 2/3 feature so far -- wiring the HTTP surface is Phase 4.
+
+Implemented in `apps/api/src/webauthn/` (`webauthn.ts`, `types.ts`,
+`in-memory-repository.ts`, `prisma-repository.ts`, `service.ts`) and
+`apps/api/src/authorization/{types,in-memory-repository,prisma-repository}.ts`
+(`activateMandate`). New Prisma model: `WebauthnChallenge`. Tested in
+`apps/api/src/webauthn/*.test.ts`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -488,6 +617,9 @@ compiler's posture.
 
 ## OQ-2 — Name collision with Mastercard Agent Pay
 
+**Resolved by D-19: renamed to "Bles."** Left in place, unedited below, so
+the original reasoning survives.
+
 Mastercard Agent Pay is a real product, cited in your own §2. "AgentPay Router"
 is going to be a problem the moment this is public — trademark, SEO, and the
 awkwardness of pitching partners a name they already use. Worth resolving before
@@ -507,6 +639,9 @@ nothing about how a developer logs into the dashboard. Options: build it,
 Clerk, WorkOS, or Auth.js. Needs an answer before Week 5.
 
 ## OQ-5 — WebAuthn RP ID
+
+**Resolved by D-20: `localhost` for the whole sprint.** Left in place,
+unedited below, so the original reasoning survives.
 
 Passkeys are bound to a domain. Registering against `localhost` and later moving
 to a real domain invalidates every credential. Picking the production domain

@@ -399,6 +399,18 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return auth;
   }
 
+  async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
+    const mandate = this.mandates.get(mandateId);
+    if (!mandate) throw new Error(`no such mandate: ${mandateId}`);
+    if (mandate.currentVersion.id !== mandateVersionId) {
+      throw new Error(
+        `mandate ${mandateId}'s current version is ${mandate.currentVersion.id}, not ${mandateVersionId}`,
+      );
+    }
+    mandate.currentVersion.authenticatedAt = now;
+    mandate.status = "ACTIVE";
+  }
+
   // --- Internal --------------------------------------------------------------
 
   private findActiveMandate(

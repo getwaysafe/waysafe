@@ -55,9 +55,36 @@ model Principal {
   mandates       Mandate[]
   credentials    PasskeyCredential[]
   authorizations Authorization[]
+  webauthnChallenges WebauthnChallenge[]
 
   @@index([organizationId])
   @@map("principals")
+}
+
+enum WebauthnChallengePurpose {
+  REGISTRATION
+  AUTHENTICATION
+}
+
+/// Short-lived, single-use. For AUTHENTICATION, `challenge` is exactly
+/// base64url(policyHash) -- not a random nonce -- so a verified signature
+/// proves the principal signed *that* mandate version, not just "logged in
+/// recently". `consumedAt` makes reuse impossible: consumption is one
+/// atomic conditional update (`WHERE consumedAt IS NULL`), not a
+/// check-then-write.
+model WebauthnChallenge {
+  id          String                   @id
+  principalId String
+  challenge   String
+  purpose     WebauthnChallengePurpose
+  consumedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime                 @default(now())
+
+  principal Principal @relation(fields: [principalId], references: [id], onDelete: Cascade)
+
+  @@index([principalId])
+  @@map("webauthn_challenges")
 }
 
 enum AgentStatus {

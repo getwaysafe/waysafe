@@ -146,4 +146,14 @@ export interface AuthorizationRepository {
     outcome: "approved" | "declined" | "expired",
     now: Date,
   ): Promise<StoredAuthorization>;
+
+  /**
+   * Stamps `authenticatedAt` on the mandate version and moves the mandate to
+   * ACTIVE. D-20: the only caller is `webauthn/service.ts`'s
+   * `authenticateMandate()`, and only after `verifyAuthentication()` (a real
+   * signature check) has returned `ok: true` -- there is no code path that
+   * reaches this method without one. This method itself does not verify
+   * anything; it trusts the caller already did.
+   */
+  activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void>;
 }
