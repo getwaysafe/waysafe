@@ -266,6 +266,46 @@ rules" (`mcc_source: "directory"` vs. `mcc_source: "assertion"`).
 
 ---
 
+## D-15 — The row lock gets a second, real-Postgres proof
+
+D-4 requires that two concurrent authorizations against the same mandate
+serialize, so a $450 and a $60 request that each pass alone against a $500
+cap can't both commit when together they'd hit $510.
+`InMemoryAuthorizationRepository`'s lock is a genuine FIFO async mutex (a
+chain of promises, not a flag), and its concurrency tests
+(`apps/api/src/authorization/service.test.ts`) prove the *service's* locking
+logic — the order it reads the spend snapshot and writes the ledger — is
+correct. What it can't prove is that Postgres itself serializes two separate
+connections the same way a single Node process serializes two promises.
+
+`PrismaAuthorizationRepository`
+(`apps/api/src/authorization/prisma-repository.ts`) closes that gap with a
+real `SELECT ... FOR UPDATE` inside a transaction. The subtlety: the caller
+of `withMandateLock` (`authorize()` in `service.ts`) runs `getSpendSnapshot`
+and `saveAuthorization` as nested calls on `this` *inside* the locked
+callback — if those nested calls opened their own connections instead of
+reusing the locked transaction, the lock would be held but do nothing, since
+the read and write it's meant to serialize would happen outside it. So every
+method reads from `this.client`, which resolves to the active transaction
+(stashed in an `AsyncLocalStorage` for the duration of the callback) when
+called from inside a lock, and to the plain `PrismaClient` otherwise.
+
+`prisma-repository.test.ts` re-runs the same two concurrency scenarios from
+`service.test.ts` against `PrismaAuthorizationRepository` and a real
+database, and self-skips (`describe.skipIf`) rather than fails when
+`DATABASE_URL` isn't set or isn't reachable — so `npm test` stays green
+offline, and a real Postgres instance (Neon or otherwise) runs it for real.
+Verified by temporarily replacing the lock body with a bare `fn()` (no
+transaction, no `FOR UPDATE`): the race test failed as expected — both the
+$450 and the $60 request landed `ALLOW`, $510 against a $500 cap — confirming
+the test actually exercises the lock and isn't passing by accident the way
+an under-tested guard did in the D-3 amendment above.
+
+Implemented in `apps/api/src/authorization/prisma-repository.ts`. Tested in
+`apps/api/src/authorization/prisma-repository.test.ts`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

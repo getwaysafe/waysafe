@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@agentpay/core": "*",
+    "@prisma/client": "^6.19.3",
     "fastify": "^5.2.0",
     "zod": "^3.24.1"
   }
