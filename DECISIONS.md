@@ -79,6 +79,33 @@ real Stripe lookups.
 Implemented in `packages/core/src/merchant.ts`, tested in `merchant.test.ts`
 (see the two tests named "THE ATTACK").
 
+### Amendment (Week 2) — the unverified cap is a ceiling, not a replacement
+
+The first engine implementation applied the unverified-merchant rule by
+*short-circuiting* `merchants.unlisted` entirely: if trust wasn't VERIFIED, it
+emitted `STEP_UP_MERCHANT_UNVERIFIED` and never consulted `unlisted` at all.
+That's wrong the moment `unlisted` is `DENY` — an unverified merchant against
+a policy that says "deny anything I haven't named" came back `STEP_UP`, which
+is *more* permissive than the principal asked for. Caught in review; every
+existing test happened to use `unlisted: "ALLOW"`, so nothing exercised the
+DENY/STEP_UP rows.
+
+The rule is now: evaluate `unlisted` unconditionally first, then apply the
+unverified state as a ceiling that can only push the outcome *up* toward
+DENY, never down past what `unlisted` already decided.
+
+| Merchant trust | `unlisted` | Result |
+|---|---|---|
+| unverified | `DENY` | `DENY` |
+| unverified | `STEP_UP` | `STEP_UP` |
+| unverified | `ALLOW` | `STEP_UP` (the D-3 cap — the one row where the cap does something) |
+| VERIFIED | any | whatever `unlisted` says |
+
+Implemented in `packages/core/src/engine/evaluate.ts` (`evaluateMerchant`),
+tested in `engine/evaluate.test.ts` under "D-3 ceiling: unverified trust vs.
+the unlisted disposition" (all four rows, plus the VERIFIED row for each
+disposition).
+
 ---
 
 ## D-4 — Budget accounting is explicit and stamped on every receipt
@@ -208,6 +235,34 @@ nothing. The fixtures still exercise the full validation, coherence-check and
 assumption-surfacing path, offline and deterministically.
 
 Re-record with `npm run compile:record -w @agentpay/api -- <name> "<instruction>"`.
+
+---
+
+## D-14 — `deny_mcc` fires on an agent-claimed MCC, same as a denylist claim
+
+`resolveMerchant` sets `resolved.mcc` to `assertion.mcc` first and only falls
+back to the merchant directory's MCC when the agent didn't supply one
+(`mcc = mcc ?? entry.mcc`). An engine comment once claimed `deny_mcc` was
+checked against an MCC that was "directory- or PSP-sourced, never the agent's
+claim" — that was simply false: an agent-supplied MCC reaches `deny_mcc`
+exactly like a directory-sourced one. Caught in review.
+
+The behavior is kept, not changed: `deny_mcc` treats an agent's MCC claim as
+disqualifying on its own, the same way `matchesDenylist` treats a claimed
+merchant name as disqualifying without verification (D-3) — a bad actor
+claiming a blocked category doesn't get the benefit of the doubt just because
+nothing corroborated the claim.
+
+What changes is provenance. `ResolvedMerchant` gains `mcc_source: "psp" |
+"directory" | "assertion"`, recorded alongside `mcc` in `resolveMerchant`, and
+`evaluateCategory`'s `DENY_CATEGORY_BLOCKED` reason for a `deny_mcc` match
+includes it in `detail`. A receipt can now show whether a blocked MCC was
+corroborated or just claimed by the agent, even though both deny.
+
+Implemented in `packages/core/src/merchant.ts` (`resolveMerchant`,
+`ResolvedMerchant.mcc_source`) and `packages/core/src/engine/evaluate.ts`
+(`evaluateCategory`). Tested in `engine/evaluate.test.ts` under "category
+rules" (`mcc_source: "directory"` vs. `mcc_source: "assertion"`).
 
 ---
 

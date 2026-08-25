@@ -14,6 +14,7 @@
  * that names it — there is no ambient authority.
  */
 
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { MerchantAssertionSchema } from "./merchant.js";
 import { MinorUnitsSchema, CurrencySchema } from "./money.js";
@@ -36,6 +37,29 @@ export const ID_PREFIX = {
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];
+
+// Crockford base32: no I/L/O/U, so an id can't be misread or accidentally spell a slur.
+const BASE32 = "0123456789abcdefghjkmnpqrstvwxyz";
+
+function encodeBase32(value: number, length: number): string {
+  let n = value;
+  let out = "";
+  for (let i = 0; i < length; i += 1) {
+    out = BASE32[n % 32] + out;
+    n = Math.floor(n / 32);
+  }
+  return out;
+}
+
+/**
+ * A prefixed, opaque, time-sortable id: `{prefix}_{10-char timestamp}{16-char random}`.
+ * Lexicographic order matches creation order, like a ULID.
+ */
+export function generateId(prefix: IdPrefix): string {
+  const time = encodeBase32(Date.now(), 10);
+  const random = Array.from(randomBytes(16), (b) => BASE32[b % 32]).join("");
+  return `${prefix}_${time}${random}`;
+}
 
 // --- Lifecycle enums --------------------------------------------------------
 

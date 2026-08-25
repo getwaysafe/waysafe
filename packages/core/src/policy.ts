@@ -73,7 +73,12 @@ export const AccountingSchema = z.object({
 export const TimeWindowSchema = z.object({
   /** 0 = Sunday. Empty/omitted means every day. */
   days_of_week: z.array(z.number().int().min(0).max(6)).max(7).optional(),
-  /** Local time "HH:MM" in the policy timezone. */
+  /**
+   * Local time "HH:MM" in the policy timezone. If both are set and
+   * `start_time > end_time`, the window wraps past midnight (e.g.
+   * "22:00"-"06:00" permits 10pm through 6am); otherwise it's a same-day
+   * range. See engine/evaluate.ts `evaluateTimeWindow`.
+   */
   start_time: z
     .string()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/)

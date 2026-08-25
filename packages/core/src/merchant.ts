@@ -94,6 +94,15 @@ export interface ResolvedMerchant {
   refs: MerchantRef[];
   /** MCC if known, for category rules. */
   mcc?: string;
+  /**
+   * Where `mcc` came from. Unlike merchant *identity*, an MCC is never
+   * upgraded to VERIFIED trust just because it was agent-asserted: `deny_mcc`
+   * fires on an asserted MCC exactly as a merchant denylist fires on an
+   * asserted name (D-14) — a mere claim of a blocked category is
+   * disqualifying — but this field records provenance so a receipt can show
+   * whether the code came from the agent's claim or a corroborated source.
+   */
+  mcc_source?: "psp" | "directory" | "assertion";
   /** Display name for receipts. */
   display_name?: string;
   /** How resolution happened, for the evidence record. */
@@ -135,6 +144,19 @@ export function domainMatches(ref: string, candidate: string): boolean {
   const b = normalizeDomain(candidate);
   if (!a || !b) return false;
   return b === a || b.endsWith(`.${a}`);
+}
+
+/**
+ * Stable string key for a merchant ref, for set membership (e.g. "has this
+ * mandate transacted with this merchant before?"). Domains are normalized so
+ * "staples.com" and "www.staples.com" collide.
+ */
+export function merchantRefKey(ref: MerchantRef): string {
+  const value =
+    ref.scheme === MerchantScheme.DOMAIN
+      ? (normalizeDomain(ref.value) ?? ref.value.toLowerCase())
+      : ref.value.toLowerCase();
+  return `${ref.scheme}:${value}`;
 }
 
 export function merchantRefMatches(
@@ -197,6 +219,7 @@ export function resolveMerchant(
   let trust: MerchantTrust = MerchantTrust.UNKNOWN;
   let source: ResolvedMerchant["resolution_source"] = "none";
   let mcc = assertion.mcc;
+  let mccSource: ResolvedMerchant["mcc_source"] = mcc ? "assertion" : undefined;
 
   if (assertion.psp_account) {
     refs.push({
@@ -223,7 +246,10 @@ export function resolveMerchant(
         trust = MerchantTrust.VERIFIED;
         source = "directory";
       }
-      mcc = mcc ?? entry.mcc;
+      if (!mcc && entry.mcc) {
+        mcc = entry.mcc;
+        mccSource = "directory";
+      }
     } else if (trust === MerchantTrust.UNKNOWN) {
       trust = MerchantTrust.ASSERTED;
       source = "assertion";
@@ -244,6 +270,7 @@ export function resolveMerchant(
     trust,
     refs,
     mcc,
+    mcc_source: mccSource,
     display_name: assertion.name ?? domain ?? undefined,
     resolution_source: source,
   };

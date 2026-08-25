@@ -6,10 +6,10 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "compile": "tsx src/cli.ts",
-    "compile:record": "tsx src/record-fixture.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "start": "node --env-file-if-exists=../../.env dist/index.js",
+    "compile": "tsx --env-file-if-exists=../../.env src/cli.ts",
+    "compile:record": "tsx --env-file-if-exists=../../.env src/record-fixture.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
