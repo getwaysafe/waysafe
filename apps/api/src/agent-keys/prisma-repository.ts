@@ -1,0 +1,70 @@
+/**
+ * Real `AgentKeyRepository`, backed by Postgres via Prisma.
+ *
+ * No row lock here (contrast with authorization/prisma-repository.ts and
+ * evidence/prisma-repository.ts): a key being revoked mid-flight of a
+ * concurrent verification is an ordinary auth-staleness window every
+ * bearer-token system has, not a double-spend risk. There's no cumulative
+ * value being raced.
+ */
+
+import { PrismaClient } from "@prisma/client";
+import { ID_PREFIX, generateId } from "@agentpay/core";
+import { extractKeyPrefix, generateAgentApiKey, hashApiKey } from "./keys.js";
+import type {
+  AgentKeyRepository,
+  AgentKeyVerification,
+  CreatedAgentApiKey,
+  NewAgentApiKey,
+} from "./types.js";
+
+export class PrismaAgentKeyRepository implements AgentKeyRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async createKey(input: NewAgentApiKey, now: Date): Promise<CreatedAgentApiKey> {
+    const generated = generateAgentApiKey();
+    const id = generateId(ID_PREFIX.api_key);
+
+    await this.prisma.apiKey.create({
+      data: {
+        id,
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        prefix: generated.prefix,
+        secretHash: generated.secretHash,
+        name: input.name,
+        createdAt: now,
+      },
+    });
+
+    return { id, fullKey: generated.fullKey, prefix: generated.prefix, createdAt: now };
+  }
+
+  async verifyKey(fullKey: string, now: Date): Promise<AgentKeyVerification> {
+    const prefix = extractKeyPrefix(fullKey);
+    if (!prefix) return { ok: false, reason: "not_found" };
+
+    const row = await this.prisma.apiKey.findUnique({ where: { prefix } });
+    if (!row || row.secretHash !== hashApiKey(fullKey)) {
+      return { ok: false, reason: "not_found" };
+    }
+    if (row.revokedAt) {
+      return { ok: false, reason: "revoked" };
+    }
+    if (!row.agentId) {
+      // Schema allows an org-level key with no bound agent; not a shape
+      // this repository issues, but defend against one existing anyway.
+      return { ok: false, reason: "not_found" };
+    }
+
+    await this.prisma.apiKey.update({ where: { id: row.id }, data: { lastUsedAt: now } });
+    return { ok: true, keyId: row.id, organizationId: row.organizationId, agentId: row.agentId };
+  }
+
+  async revokeKey(keyId: string, now: Date): Promise<void> {
+    await this.prisma.apiKey.updateMany({
+      where: { id: keyId, revokedAt: null },
+      data: { revokedAt: now },
+    });
+  }
+}

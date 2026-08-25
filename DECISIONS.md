@@ -388,6 +388,83 @@ code, and `packages/sdk` types once evidence is exposed there.
 
 ---
 
+## D-18 — Agent API keys: the key is the source of truth for agent identity, and rejection is a decision, not a 401
+
+A key is `ap_live_` + an 8-hex-char lookup prefix + a high-entropy secret
+tail (`apps/api/src/agent-keys/keys.ts`), matching the example already in
+`schema.prisma`'s `ApiKey.prefix` comment. Only the prefix and a SHA-256
+hash of the full key are stored; the full key is generated once, returned to
+the caller, and never persisted or logged. Verification treats "right
+prefix, wrong secret" and "prefix not found" identically (`not_found`) --
+the prefix isn't a secret, but nothing about *why* a key failed should be
+observable beyond that distinction and `revoked`.
+
+**The key, not `request.agent_id`, is what proves which agent is acting.**
+An agent asserting its own `agent_id` in a request body is exactly the kind
+of unverified claim D-3 already teaches us not to trust for merchants --
+the same logic applies to the agent identity itself. So `authorize()`
+verifies the presented key independently, and requires the key's own
+`agentId`/`organizationId` to *agree* with what the request claims; a
+mismatch is rejected even though both pieces individually "exist." The
+request's `agent_id` still has a job -- it's the lookup hint
+`resolveMandateGate` uses to find a candidate mandate to attach a DENY to --
+but it grants no authority on its own.
+
+**The refusal is a recorded authorization decision, not an HTTP-layer
+401.** A missing, forged, or revoked key is checked inside `authorize()`
+itself, before `resolveMandateGate`'s other checks are trusted and before
+`evaluate()` is reachable at all, and it persists an ordinary `DENY` with a
+reason code like any other outcome (once a mandate exists to attach it to;
+with no mandate at all there's nothing to persist, same as any other
+`no_mandate` case). This matters for D-18 as much as it does for I-10
+(modular developer experience): when the HTTP endpoint for this eventually
+gets built, it must forward the caller's presented credential into
+`authorize()`'s `apiKey` parameter rather than authenticating it itself and
+short-circuiting with a bare 401 -- otherwise a rejected agent gets no
+reason code, no EvidenceEvent, and no receipt, and a developer building
+their own approval UI on reason codes (I-10) has a blind spot exactly where
+they'd need one least.
+
+**Reuses existing reason codes rather than adding new ones.** Every
+credential-shaped failure -- missing, forged, revoked, or a key that
+doesn't belong to the claimed agent/organization -- maps to
+`DENY_AGENT_NOT_BOUND`: the request cannot prove it's from the agent it
+claims to be, which is exactly what that code already means.
+`DENY_AGENT_SUSPENDED` stays the mandate gate's existing job, checked
+afterward and unchanged -- an agent's suspended *status* is orthogonal to
+whether the specific key presented is valid.
+
+**No lock.** Unlike the mandate ledger (D-4) and the evidence chain (D-16),
+key verification isn't racing anything cumulative -- a key being revoked
+mid-flight of a concurrent request is an ordinary auth-staleness window
+every bearer-token system has, not a double-spend risk. Deliberately not
+given the `disableLockForTesting`/negative-control treatment those two got,
+because there's no lock to have a negative control for.
+
+**Every key check writes an EvidenceEvent** (success or failure), under the
+organization's chain, regardless of whether a mandate was ultimately found
+-- `type: "agent_key.verified"` or `"agent_key.rejected"`, `subject_type:
+"agent"`, payload carries the key's prefix (never the secret) and the
+specific outcome (`not_found` / `revoked` / `org_mismatch` /
+`agent_mismatch`).
+
+**Tested not-bypassable, not just tested-DENY.** Beyond asserting the DENY
+outcome for a revoked/forged/mismatched key
+(`apps/api/src/authorization/service.test.ts`, "agent API keys (D-18)"),
+one test spies on `@agentpay/core`'s `evaluate` and asserts it is never
+called when the key check fails on an otherwise-fully-valid request --
+paired with a sanity-check test proving the same spy *is* triggered once
+when the key is valid, so the negative result isn't just the spy silently
+failing to attach.
+
+Implemented in `apps/api/src/agent-keys/` (`keys.ts`, `types.ts`,
+`in-memory-repository.ts`, `prisma-repository.ts`) and
+`apps/api/src/authorization/service.ts` (`verifyAgentKey`). Tested in
+`apps/api/src/agent-keys/*.test.ts` and
+`apps/api/src/authorization/service.test.ts`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

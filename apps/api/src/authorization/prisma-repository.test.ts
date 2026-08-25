@@ -37,8 +37,18 @@ import {
   type Policy,
 } from "@agentpay/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
+import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
+import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
 import { PrismaAuthorizationRepository } from "./prisma-repository.js";
-import { authorize } from "./service.js";
+import { authorize, type AuthorizeRepos } from "./service.js";
+
+// This file's focus is the D-4/D-15 mandate row lock against real Postgres;
+// agent-key verification (D-18) is exercised on its own in
+// agent-keys/prisma-repository.test.ts. Using the in-memory fakes for the
+// two repositories here keeps this file's scope narrow -- authorize() only
+// needs *a* valid, unrevoked key for the seeded agent, not a real one.
+const agentKeys = new InMemoryAgentKeyRepository();
+const evidence = new InMemoryEvidenceRepository();
 
 const prisma = new PrismaClient();
 const SUITE_NAME = "PrismaAuthorizationRepository: row lock against real Postgres";
@@ -122,7 +132,20 @@ async function seedMandate(policy: Policy, options: SeedOptions = {}) {
     data: { currentVersionId: mandateVersionId },
   });
 
-  return { organizationId, principalId, agentId, mandateId, mandateVersionId, policyHash };
+  const key = await agentKeys.createKey(
+    { organizationId, agentId, name: "test key" },
+    new Date(),
+  );
+
+  return {
+    organizationId,
+    principalId,
+    agentId,
+    mandateId,
+    mandateVersionId,
+    policyHash,
+    apiKey: key.fullKey,
+  };
 }
 
 function request(organizationId: string, agentId: string, principalId: string, amount: number) {
@@ -163,12 +186,15 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
 
   it("ALLOWs a real authorization end-to-end and persists it in Postgres", async () => {
     const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
-    const { organizationId, agentId, principalId, mandateId } = await seedMandate(policyFrom());
+    const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+    const { organizationId, agentId, principalId, mandateId, apiKey } =
+      await seedMandate(policyFrom());
 
-    const result = await authorize(repo, {
+    const result = await authorize(repos, {
       organizationId,
       request: request(organizationId, agentId, principalId, 83),
       now: NOW,
+      apiKey,
     });
 
     expect(result.kind).toBe("decided");
@@ -186,7 +212,8 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     "serializes on the mandate row lock so only one of two racing authorizations survives the monthly limit",
     async () => {
       const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
-      const { organizationId, agentId, principalId } = await seedMandate(policyFrom());
+      const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+      const { organizationId, agentId, principalId, apiKey } = await seedMandate(policyFrom());
 
       // $450 and $60 each pass alone against a fresh $500 monthly cap, but
       // together they're $510 -- over the limit. Fired concurrently against
@@ -194,15 +221,17 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       // true if `SELECT ... FOR UPDATE` genuinely blocks the second
       // transaction until the first commits its ledger write.
       const [a, b] = await Promise.all([
-        authorize(repo, {
+        authorize(repos, {
           organizationId,
           request: request(organizationId, agentId, principalId, 450),
           now: NOW,
+          apiKey,
         }),
-        authorize(repo, {
+        authorize(repos, {
           organizationId,
           request: request(organizationId, agentId, principalId, 60),
           now: NOW,
+          apiKey,
         }),
       ]);
 
@@ -228,18 +257,21 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY, {
         disableLockForTesting: true,
       });
-      const { organizationId, agentId, principalId } = await seedMandate(policyFrom());
+      const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+      const { organizationId, agentId, principalId, apiKey } = await seedMandate(policyFrom());
 
       const [a, b] = await Promise.all([
-        authorize(repo, {
+        authorize(repos, {
           organizationId,
           request: request(organizationId, agentId, principalId, 450),
           now: NOW,
+          apiKey,
         }),
-        authorize(repo, {
+        authorize(repos, {
           organizationId,
           request: request(organizationId, agentId, principalId, 60),
           now: NOW,
+          apiKey,
         }),
       ]);
 
@@ -256,7 +288,8 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     "never lets ten concurrent step-up reservations exceed the monthly limit together",
     async () => {
       const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
-      const { organizationId, agentId, principalId } = await seedMandate(
+      const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+      const { organizationId, agentId, principalId, apiKey } = await seedMandate(
         policyFrom({ step_up: { above_amount: toMinorUnits(90, "USD"), ttl_seconds: 900 } }),
       );
 
@@ -264,10 +297,11 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       // reserve ($450) before the sixth's projected total ($540) exceeds it.
       const results = await Promise.all(
         Array.from({ length: 10 }, () =>
-          authorize(repo, {
+          authorize(repos, {
             organizationId,
             request: request(organizationId, agentId, principalId, 90),
             now: NOW,
+            apiKey,
           }),
         ),
       );
