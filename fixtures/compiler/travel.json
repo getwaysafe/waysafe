@@ -5,7 +5,7 @@
   "output": {
     "status": "compiled",
     "policy": {
-      "schema_version": "agentpay.policy/v1",
+      "schema_version": "bles.policy/v1",
       "summary": "Book one refundable nonstop flight to Miami for under $800.",
       "currency": "USD",
       "per_transaction_max": 80000,
@@ -57,7 +57,7 @@
       "expires_at": "2026-08-31T12:00:00.000Z",
       "compiler_notes": [
         "No airline was named, so no merchant allowlist was set; any airline requires your approval.",
-        "'Refundable', 'nonstop' and the destination are reported by the agent. AgentPay records the claim on the receipt but cannot independently verify it."
+        "'Refundable', 'nonstop' and the destination are reported by the agent. Bles records the claim on the receipt but cannot independently verify it."
       ]
     },
     "assumptions": [

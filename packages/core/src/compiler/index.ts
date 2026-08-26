@@ -33,12 +33,12 @@ export function createCompileContext(
 /**
  * Select a compiler from the environment.
  *
- * AGENTPAY_COMPILER=anthropic (default) | fixture
+ * BLES_COMPILER=anthropic (default) | fixture
  */
 export function createCompilerFromEnv(
   fixtures: CompilerFixture[] = [],
 ): IntentCompiler {
-  const kind = process.env.AGENTPAY_COMPILER ?? "anthropic";
+  const kind = process.env.BLES_COMPILER ?? "anthropic";
   if (kind === "fixture") return new FixtureIntentCompiler(fixtures);
   return new AnthropicIntentCompiler();
 }

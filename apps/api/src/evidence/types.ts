@@ -1,7 +1,7 @@
 /**
  * The evidence chain's persistence boundary.
  *
- * `computeEventHash`/`verifyEvidenceChain` in `@agentpay/core` are pure --
+ * `computeEventHash`/`verifyEvidenceChain` in `@bles/core` are pure --
  * this interface is the I/O they deliberately don't do: assigning the next
  * `sequence` number and the chain's current tip hash, and doing so under a
  * lock so two concurrent appends to the same organization's chain can't
@@ -13,7 +13,7 @@
  * `PrismaEvidenceRepository` (a real `SELECT ... FOR UPDATE`).
  */
 
-import type { EvidenceEvent } from "@agentpay/core";
+import type { EvidenceEvent } from "@bles/core";
 
 export interface NewEvidenceEvent {
   organizationId: string;

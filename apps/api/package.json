@@ -1,5 +1,5 @@
 {
-  "name": "@agentpay/api",
+  "name": "@bles/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@agentpay/core": "*",
+    "@bles/core": "*",
     "@prisma/client": "^6.19.3",
     "@simplewebauthn/server": "^13.3.2",
     "fastify": "^5.2.0",

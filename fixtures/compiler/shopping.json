@@ -5,7 +5,7 @@
   "output": {
     "status": "compiled",
     "policy": {
-      "schema_version": "agentpay.policy/v1",
+      "schema_version": "bles.policy/v1",
       "summary": "Book a Miami hotel for at most $900 per booking and $1,800 in total, with your approval required at or above $1,250.",
       "currency": "USD",
       "per_transaction_max": 90000,

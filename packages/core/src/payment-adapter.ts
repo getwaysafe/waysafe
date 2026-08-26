@@ -2,7 +2,7 @@
  * The payment-rail abstraction.
  *
  * D-13: this interface *is* the product surface, not an implementation
- * detail. The only reason AgentPay is a router and not a wrapper around one
+ * detail. The only reason Bles is a router and not a wrapper around one
  * provider's API is that two genuinely different rails (a card processor,
  * a stablecoin settlement protocol) can both satisfy it. Nothing in this
  * file names a provider, imports a provider SDK, or assumes a provider's
@@ -22,7 +22,7 @@ export interface RailCapability {
    * separate step a payer can see reversed. A stablecoin transfer settles
    * atomically -- there is no intermediate hold to reserve against on the
    * rail itself. `false` here means `reserve_on_step_up` (D-4) is purely an
-   * AgentPay-side ledger concept for this rail, not something mirrored by
+   * Bles-side ledger concept for this rail, not something mirrored by
    * an actual hold at the provider.
    */
   holdsFundsBeforeCapture: boolean;
@@ -34,12 +34,12 @@ export interface RailCapability {
    */
   reversible: boolean;
   /** When funds actually move, from the payer's perspective -- independent
-   * of when AgentPay records the authorization decision. */
+   * of when Bles records the authorization decision. */
   settlement: "instant" | "delayed";
 }
 
 export interface ExecutionRequest {
-  /** AgentPay's own id for the authorization being executed. The join key
+  /** Bles's own id for the authorization being executed. The join key
    * back to a decision is always this, never a provider reference. */
   authorizationId: string;
   /** Integer minor units (D-2). */
@@ -54,7 +54,7 @@ export interface ExecutionRequest {
   paymentMethodRef: string;
   /**
    * For providers with their own idempotency mechanism. Distinct from
-   * AgentPay's `idempotency_key` on the authorization request -- this one
+   * Bles's `idempotency_key` on the authorization request -- this one
    * is scoped to a single provider call, so retrying a failed `execute()`
    * for the same authorization doesn't double-charge even if the network
    * response was lost, not just the request.
@@ -66,7 +66,7 @@ export type ExecutionResult =
   | {
       ok: true;
       /** The rail's own reference for this payment -- never used as the
-       * join key back into AgentPay's records, only stored alongside it. */
+       * join key back into Bles's records, only stored alongside it. */
       providerReference: string;
       /** Integer minor units, same currency as the request: what the
        * provider actually took. Kept separate from the authorized amount

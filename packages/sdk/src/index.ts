@@ -1,5 +1,5 @@
 /**
- * AgentPay TypeScript SDK.
+ * Bles TypeScript SDK.
  *
  * A thin, typed HTTP client. Every method here is a direct wrapper around one
  * REST call -- nothing here is a framework, a UI, or a required flow. That is
@@ -9,15 +9,15 @@
  * this file assumes Node, a browser, or any particular framework beyond
  * `fetch` and `crypto.randomUUID`, both available in either.
  *
- *   const mandate  = await agentpay.compileMandate({ instruction });
- *   const decision = await agentpay.authorize({ agent_id, principal_id, action });
- *   if (agentpay.asExecutable(decision)) await agentpay.execute(...)
- *   const receipt  = await agentpay.verify(decision.authorization_id);
+ *   const mandate  = await bles.compileMandate({ instruction });
+ *   const decision = await bles.authorize({ agent_id, principal_id, action });
+ *   if (bles.asExecutable(decision)) await bles.execute(...)
+ *   const receipt  = await bles.verify(decision.authorization_id);
  *
  * See examples/quickstart.ts for the full, runnable journey -- compiling a
  * policy, creating and authenticating a mandate, authorizing, handling a
  * step-up, executing, and verifying -- against a real (or locally running)
- * AgentPay API.
+ * Bles API.
  */
 
 import type {
@@ -30,8 +30,8 @@ import type {
   Reason,
   ReasonCode,
   ResolvedMerchant,
-} from "@agentpay/core";
-import type { ChainVerificationResult } from "@agentpay/core";
+} from "@bles/core";
+import type { ChainVerificationResult } from "@bles/core";
 
 // --- Errors -------------------------------------------------------------
 
@@ -41,14 +41,14 @@ import type { ChainVerificationResult } from "@agentpay/core";
  * caller that doesn't care about the specific subclass to still log or
  * report something useful.
  */
-export class AgentPayError extends Error {
+export class BlesError extends Error {
   constructor(
     message: string,
     readonly status?: number,
     readonly body?: unknown,
   ) {
     super(message);
-    this.name = "AgentPayError";
+    this.name = "BlesError";
   }
 }
 
@@ -57,7 +57,7 @@ export class AgentPayError extends Error {
  * built-in retry treats as safe to retry -- an HTTP error means the server
  * *did* receive and decide the request, and retrying that would either be a
  * no-op (idempotency) or wrong. */
-export class NetworkError extends AgentPayError {
+export class NetworkError extends BlesError {
   constructor(message: string, readonly cause: unknown) {
     super(message);
     this.name = "NetworkError";
@@ -65,7 +65,7 @@ export class NetworkError extends AgentPayError {
 }
 
 /** 400 invalid_request: the request body failed schema validation. */
-export class ValidationError extends AgentPayError {
+export class ValidationError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -78,7 +78,7 @@ export class ValidationError extends AgentPayError {
 }
 
 /** 401: the API key is missing, forged, or revoked. */
-export class UnauthorizedError extends AgentPayError {
+export class UnauthorizedError extends BlesError {
   constructor(message: string, status: number, body: unknown) {
     super(message, status, body);
     this.name = "UnauthorizedError";
@@ -86,7 +86,7 @@ export class UnauthorizedError extends AgentPayError {
 }
 
 /** 404: no row with this id exists in your organization. */
-export class NotFoundError extends AgentPayError {
+export class NotFoundError extends BlesError {
   constructor(message: string, status: number, body: unknown) {
     super(message, status, body);
     this.name = "NotFoundError";
@@ -97,7 +97,7 @@ export class NotFoundError extends AgentPayError {
  * combination doesn't resolve to a mandate that could even be evaluated --
  * distinct from a DENY, which is a normal decision this SDK returns, not
  * throws. `reasons` explains why no mandate resolved. */
-export class NoActiveMandateError extends AgentPayError {
+export class NoActiveMandateError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -114,7 +114,7 @@ export class NoActiveMandateError extends AgentPayError {
  * that key is actually bound to. A plain retry of the same call never hits
  * this -- the server recognizes it as a replay and returns the same decision
  * instead (see `AuthorizationDecision.replayed`). */
-export class IdempotencyConflictError extends AgentPayError {
+export class IdempotencyConflictError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -130,7 +130,7 @@ export class IdempotencyConflictError extends AgentPayError {
  * authorization's current status doesn't allow the operation you asked for
  * (already executed, not pending step-up, etc). `authorizationStatus` is the
  * status that blocked it. */
-export class AuthorizationStatusConflictError extends AgentPayError {
+export class AuthorizationStatusConflictError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -145,7 +145,7 @@ export class AuthorizationStatusConflictError extends AgentPayError {
 /** 402 execution_rejected, from `execute()`: the payment rail itself
  * declined the charge (a card decline, an insufficient balance) -- the
  * authorization was valid, the money didn't move. */
-export class ExecutionRejectedError extends AgentPayError {
+export class ExecutionRejectedError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -159,7 +159,7 @@ export class ExecutionRejectedError extends AgentPayError {
 
 /** 400 unknown_rail, from `execute()`: the `rail` you asked for isn't
  * registered on this deployment. */
-export class UnknownRailError extends AgentPayError {
+export class UnknownRailError extends BlesError {
   constructor(
     message: string,
     status: number,
@@ -173,8 +173,8 @@ export class UnknownRailError extends AgentPayError {
 
 // --- Options --------------------------------------------------------------
 
-export interface AgentPayOptions {
-  /** Base URL of the AgentPay API, e.g. https://api.agentpay.dev */
+export interface BlesOptions {
+  /** Base URL of the Bles API, e.g. https://api.bles.dev */
   baseUrl: string;
   /** Agent service credential, or an org credential for account-management
    * calls (createAgent, createMandate, list*, ...). Never a card credential,
@@ -321,7 +321,7 @@ export interface ExecuteParams {
   paymentMethodRef: string;
 }
 
-const EXECUTABLE: unique symbol = Symbol("agentpay.executable");
+const EXECUTABLE: unique symbol = Symbol("bles.executable");
 
 /**
  * Mirrors the server's own `ExecutableAuthorization` brand
@@ -488,8 +488,8 @@ function buildQuery(params: Record<string, string | number | undefined>): string
   return query ? `?${query}` : "";
 }
 
-function mapError(path: string, status: number, body: unknown): AgentPayError {
-  const message = `agentpay ${path} failed with ${status}`;
+function mapError(path: string, status: number, body: unknown): BlesError {
+  const message = `bles ${path} failed with ${status}`;
   const errorCode = isRecord(body) ? body.error : undefined;
 
   switch (errorCode) {
@@ -541,7 +541,7 @@ function mapError(path: string, status: number, body: unknown): AgentPayError {
         isRecord(body) && typeof body.rail === "string" ? body.rail : "unknown",
       );
     default:
-      return new AgentPayError(message, status, body);
+      return new BlesError(message, status, body);
   }
 }
 
@@ -551,12 +551,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // --- Client -----------------------------------------------------------------
 
-export class AgentPay {
+export class Bles {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
 
-  constructor(options: AgentPayOptions) {
+  constructor(options: BlesOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -817,7 +817,7 @@ export class AgentPay {
         ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
       });
     } catch (err) {
-      throw new NetworkError(`agentpay ${path} could not be reached: ${(err as Error).message}`, err);
+      throw new NetworkError(`bles ${path} could not be reached: ${(err as Error).message}`, err);
     }
 
     const body = await response.json().catch(() => undefined);

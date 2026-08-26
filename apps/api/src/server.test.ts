@@ -5,7 +5,7 @@ import {
   Decision,
   FixtureIntentCompiler,
   loadCompilerFixtures,
-} from "@agentpay/core";
+} from "@bles/core";
 import { buildServer, type ServerRepos } from "./server.js";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
@@ -74,7 +74,7 @@ describe("GET /health", () => {
   it("reports the policy schema version, no credential required", async () => {
     const response = await app.inject({ method: "GET", url: "/health" });
     expect(response.statusCode).toBe(200);
-    expect(response.json().policy_schema_version).toBe("agentpay.policy/v1");
+    expect(response.json().policy_schema_version).toBe("bles.policy/v1");
   });
 });
 
@@ -88,7 +88,7 @@ describe("auth gate (Phase 4)", () => {
     const response = await app.inject({
       method: "POST",
       url: "/v1/agents",
-      headers: { authorization: "Bearer ap_live_00000000forgedvalue" },
+      headers: { authorization: "Bearer bls_live_00000000forgedvalue" },
       payload: { name: "bot" },
     });
     expect(response.statusCode).toBe(401);
@@ -125,7 +125,7 @@ describe("POST /v1/mandates/compile", () => {
     expect(response.statusCode).toBe(200);
     const body = response.json();
     expect(body.status).toBe("compiled");
-    expect(body.policy.schema_version).toBe("agentpay.policy/v1");
+    expect(body.policy.schema_version).toBe("bles.policy/v1");
     expect(body.policy_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(body.confirmation.terms.length).toBeGreaterThan(3);
     expect(body.confirmation.assumptions.length).toBeGreaterThan(0);
@@ -181,7 +181,7 @@ describe("POST /v1/policies/validate", () => {
       url: "/v1/policies/validate",
       headers: authed(),
       payload: {
-        schema_version: "agentpay.policy/v1",
+        schema_version: "bles.policy/v1",
         summary: "bad",
         currency: "USD",
         per_transaction_max: 150.5,
@@ -226,7 +226,7 @@ describe("agent and key lifecycle", () => {
     });
     expect(keyResponse.statusCode).toBe(201);
     const apiKey = keyResponse.json().api_key;
-    expect(apiKey).toMatch(/^ap_live_/);
+    expect(apiKey).toMatch(/^bls_live_/);
 
     // The freshly minted key works as a credential for any route.
     const useResponse = await app.inject({
@@ -488,7 +488,7 @@ describe("payment execution and step-up completion (Week 4)", () => {
         principal_id: principalId,
         agent_ids: [agentId],
         policy: {
-          schema_version: "agentpay.policy/v1",
+          schema_version: "bles.policy/v1",
           summary: "test",
           currency: "USD",
           merchants: { allow: [], deny: [], unlisted: "ALLOW" },
@@ -763,7 +763,7 @@ describe("POST /v1/webhooks/stripe", () => {
         principal_id: principalId,
         agent_ids: [agentId],
         policy: {
-          schema_version: "agentpay.policy/v1",
+          schema_version: "bles.policy/v1",
           summary: "test",
           currency: "USD",
           merchants: { allow: [], deny: [], unlisted: "ALLOW" },
@@ -860,7 +860,7 @@ describe("POST /v1/webhooks/stripe", () => {
           id: "ch_test_webhook",
           object: "charge",
           amount_refunded: amountRefunded,
-          metadata: { agentpay_authorization_id: authorizationId },
+          metadata: { bles_authorization_id: authorizationId },
         },
       },
     });
@@ -940,7 +940,7 @@ describe("dashboard reads (Week 5)", () => {
         principal_id: principalId,
         agent_ids: [agentId],
         policy: {
-          schema_version: "agentpay.policy/v1",
+          schema_version: "bles.policy/v1",
           summary: `dashboard test policy for ${organizationId}`,
           currency: "USD",
           merchants: { allow: [], deny: [], unlisted: "ALLOW" },
@@ -981,7 +981,7 @@ describe("dashboard reads (Week 5)", () => {
     expect(body.mandate_id).toBe(mandateId);
     expect(body.intent_text).toBe("dashboard read test");
     expect(body.agent_ids).toEqual([agentId]);
-    expect(body.policy.schema_version).toBe("agentpay.policy/v1");
+    expect(body.policy.schema_version).toBe("bles.policy/v1");
     expect(body.authenticated_at).toBeNull();
   });
 

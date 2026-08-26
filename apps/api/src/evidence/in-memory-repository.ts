@@ -9,7 +9,7 @@
  * connections the same way.
  */
 
-import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@agentpay/core";
+import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@bles/core";
 import { Mutex } from "../util/mutex.js";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 

@@ -1,9 +1,9 @@
-import { requireSessionClient } from "../../../lib/agentpay";
+import { requireSessionClient } from "../../../lib/bles";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function AgentsPage() {
-  const agentpay = await requireSessionClient();
-  const [agents, keys] = await Promise.all([agentpay.listAgents(), agentpay.listKeys()]);
+  const bles = await requireSessionClient();
+  const [agents, keys] = await Promise.all([bles.listAgents(), bles.listKeys()]);
 
   return (
     <>

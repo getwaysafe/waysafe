@@ -66,7 +66,7 @@ export class AnthropicIntentCompiler implements IntentCompiler {
         apiKey: options.apiKey ?? process.env.ANTHROPIC_API_KEY,
       });
     this.model =
-      options.model ?? process.env.AGENTPAY_COMPILER_MODEL ?? DEFAULT_MODEL;
+      options.model ?? process.env.BLES_COMPILER_MODEL ?? DEFAULT_MODEL;
     this.maxRepairAttempts = options.maxRepairAttempts ?? 1;
     this.maxTokens = options.maxTokens ?? 4096;
   }

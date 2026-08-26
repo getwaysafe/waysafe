@@ -10,7 +10,7 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import { ID_PREFIX, generateId } from "@agentpay/core";
+import { ID_PREFIX, generateId } from "@bles/core";
 import type {
   NewChallenge,
   NewPasskeyCredential,

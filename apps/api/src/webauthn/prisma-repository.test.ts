@@ -6,7 +6,7 @@
 
 import { PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ID_PREFIX, generateId } from "@agentpay/core";
+import { ID_PREFIX, generateId } from "@bles/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaWebauthnRepository } from "./prisma-repository.js";
 

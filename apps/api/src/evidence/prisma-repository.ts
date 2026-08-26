@@ -17,7 +17,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@agentpay/core";
+import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@bles/core";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;

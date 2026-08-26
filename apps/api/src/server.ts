@@ -20,7 +20,7 @@ import {
   type EvidenceEvent,
   type IntentCompiler,
   type PaymentAdapter,
-} from "@agentpay/core";
+} from "@bles/core";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
@@ -142,7 +142,7 @@ declare module "fastify" {
 
 /** Routes that work without any credential -- everything else needs an
  * agent API key or an org credential (Phase 4 auth rule). The Stripe
- * webhook route is exempt for a different reason: it isn't an AgentPay
+ * webhook route is exempt for a different reason: it isn't an Bles
  * caller presenting a Bearer credential, it's Stripe presenting an HMAC
  * signature over the raw body, checked inside the route itself. */
 const PUBLIC_ROUTES = new Set(["/health", "/v1/reason-codes", "/v1/webhooks/stripe"]);
@@ -284,8 +284,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   };
 
   const webauthnConfig: WebauthnConfig = options.webauthnConfig ?? {
-    rpId: process.env.AGENTPAY_RP_ID ?? "localhost",
-    origin: process.env.AGENTPAY_RP_ORIGIN ?? "http://localhost:3000",
+    rpId: process.env.BLES_RP_ID ?? "localhost",
+    origin: process.env.BLES_RP_ORIGIN ?? "http://localhost:3000",
   };
 
   const webauthnRepos: WebauthnServiceRepos = {

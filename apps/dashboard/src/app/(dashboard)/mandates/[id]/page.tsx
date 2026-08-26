@@ -1,13 +1,13 @@
 import { notFound } from "next/navigation";
-import { NotFoundError } from "@agentpay/sdk";
-import { requireSessionClient } from "../../../../lib/agentpay";
+import { NotFoundError } from "@bles/sdk";
+import { requireSessionClient } from "../../../../lib/bles";
 import { Badge, formatDate } from "../../../../lib/format";
 
 export default async function MandateDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const agentpay = await requireSessionClient();
+  const bles = await requireSessionClient();
 
-  const mandate = await agentpay.getMandate(id).catch((error) => {
+  const mandate = await bles.getMandate(id).catch((error) => {
     if (error instanceof NotFoundError) return null;
     throw error;
   });

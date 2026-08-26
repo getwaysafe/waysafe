@@ -1,7 +1,7 @@
 /**
  * Compile an instruction from the terminal.
  *
- *   npm run compile -w @agentpay/api -- "You may spend $500 a month on office supplies at Staples."
+ *   npm run compile -w @bles/api -- "You may spend $500 a month on office supplies at Staples."
  *
  * Uses the real Anthropic compiler when ANTHROPIC_API_KEY is set, otherwise
  * falls back to the recorded fixtures.
@@ -13,18 +13,18 @@ import {
   FixtureIntentCompiler,
   hashPolicy,
   loadCompilerFixtures,
-} from "@agentpay/core";
+} from "@bles/core";
 
 const instruction = process.argv.slice(2).join(" ").trim();
 
 if (!instruction) {
-  console.error('usage: npm run compile -w @agentpay/api -- "your instruction"');
+  console.error('usage: npm run compile -w @bles/api -- "your instruction"');
   process.exit(1);
 }
 
 const useLive =
   Boolean(process.env.ANTHROPIC_API_KEY) &&
-  process.env.AGENTPAY_COMPILER !== "fixture";
+  process.env.BLES_COMPILER !== "fixture";
 
 const compiler = useLive
   ? new AnthropicIntentCompiler()

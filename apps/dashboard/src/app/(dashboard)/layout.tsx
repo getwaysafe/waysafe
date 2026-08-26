@@ -13,7 +13,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <div className="shell">
       <nav className="sidebar">
         <Link href="/mandates" className="brand">
-          AgentPay
+          Bles
         </Link>
         <ul>
           {NAV.map((item) => (

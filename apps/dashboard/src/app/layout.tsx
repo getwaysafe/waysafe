@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata = {
-  title: "AgentPay Dashboard",
+  title: "Bles Dashboard",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

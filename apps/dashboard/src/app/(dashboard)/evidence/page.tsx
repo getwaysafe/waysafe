@@ -1,9 +1,9 @@
-import { requireSessionClient } from "../../../lib/agentpay";
+import { requireSessionClient } from "../../../lib/bles";
 import { formatDate, truncateId } from "../../../lib/format";
 
 export default async function EvidencePage() {
-  const agentpay = await requireSessionClient();
-  const [events, chain] = await Promise.all([agentpay.listEvidence(), agentpay.verifyEvidenceChain()]);
+  const bles = await requireSessionClient();
+  const [events, chain] = await Promise.all([bles.listEvidence(), bles.verifyEvidenceChain()]);
 
   return (
     <>

@@ -1,5 +1,5 @@
 /**
- * AgentPay Policy, version 1.
+ * Bles Policy, version 1.
  *
  * A Policy is the machine-enforceable form of a Mandate. It is produced by the
  * intent compiler from natural language, confirmed by the principal, frozen,
@@ -19,7 +19,7 @@ import { z } from "zod";
 import { CurrencySchema, MinorUnitsSchema } from "./money.js";
 import { MerchantRefSchema } from "./merchant.js";
 
-export const POLICY_SCHEMA_VERSION = "agentpay.policy/v1" as const;
+export const POLICY_SCHEMA_VERSION = "bles.policy/v1" as const;
 
 /** What to do with something that is on neither the allowlist nor the denylist. */
 export const UnlistedDisposition = {
@@ -59,7 +59,7 @@ export const AccountingSchema = z.object({
   /** IANA timezone that defines calendar window boundaries. */
   timezone: z.string().min(1).default("America/New_York"),
   /**
-   * `authorization` counts spend when AgentPay authorizes it — conservative,
+   * `authorization` counts spend when Bles authorizes it — conservative,
    * and the right default when agents can fire many actions quickly.
    * `settlement` counts it only once the PSP settles.
    */
@@ -122,7 +122,7 @@ export const StepUpRulesSchema = z.object({
 
 /**
  * Obligations the agent must attest to. These are what §9 of the PRD calls
- * fulfillment — "refundable", "nonstop". AgentPay cannot independently verify
+ * fulfillment — "refundable", "nonstop". Bles cannot independently verify
  * most of them in the MVP, so each is recorded as an *agent attestation* and
  * labeled as such on the receipt. `required: true` means a missing or false
  * attestation is a DENY.

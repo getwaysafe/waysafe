@@ -21,7 +21,7 @@
  * proof: `tsc` fails the build if that line ever stops being a type error.
  */
 
-import type { AuthorizationStatus } from "@agentpay/core";
+import type { AuthorizationStatus } from "@bles/core";
 import type { StoredAuthorization } from "../authorization/types.js";
 
 const EXECUTABLE: unique symbol = Symbol("executable");

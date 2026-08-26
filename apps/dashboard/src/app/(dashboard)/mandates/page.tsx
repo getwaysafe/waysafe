@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { requireSessionClient } from "../../../lib/agentpay";
+import { requireSessionClient } from "../../../lib/bles";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function MandatesPage() {
-  const agentpay = await requireSessionClient();
-  const mandates = await agentpay.listMandates({ limit: 100 });
+  const bles = await requireSessionClient();
+  const mandates = await bles.listMandates({ limit: 100 });
 
   return (
     <>

@@ -14,7 +14,7 @@ import {
   Decision,
   ReasonCode,
   type Policy,
-} from "@agentpay/core";
+} from "@bles/core";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { authorize } from "../authorization/service.js";

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireSessionClient } from "../../../../lib/agentpay";
+import { requireSessionClient } from "../../../../lib/bles";
 
 /**
  * The dashboard's step-up approval UI (Week 6): this is the human-in-the-loop
@@ -11,13 +11,13 @@ import { requireSessionClient } from "../../../../lib/agentpay";
  * special-cased for being first-party.
  */
 export async function approveStepUp(authorizationId: string): Promise<void> {
-  const agentpay = await requireSessionClient();
-  await agentpay.approveStepUp(authorizationId);
+  const bles = await requireSessionClient();
+  await bles.approveStepUp(authorizationId);
   revalidatePath(`/authorizations/${authorizationId}`);
 }
 
 export async function declineStepUp(authorizationId: string): Promise<void> {
-  const agentpay = await requireSessionClient();
-  await agentpay.declineStepUp(authorizationId);
+  const bles = await requireSessionClient();
+  await bles.declineStepUp(authorizationId);
   revalidatePath(`/authorizations/${authorizationId}`);
 }

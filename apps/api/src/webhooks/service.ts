@@ -48,9 +48,9 @@ export async function handleStripeWebhook(
   }
 
   const charge = event.data.object as Stripe.Charge;
-  const authorizationId = charge.metadata?.agentpay_authorization_id;
+  const authorizationId = charge.metadata?.bles_authorization_id;
   if (!authorizationId) {
-    return { kind: "ignored", reason: "charge has no agentpay_authorization_id metadata" };
+    return { kind: "ignored", reason: "charge has no bles_authorization_id metadata" };
   }
 
   const stored = await repos.authorization.getAuthorization(authorizationId);

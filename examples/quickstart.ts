@@ -1,34 +1,34 @@
 #!/usr/bin/env -S npx tsx
 /**
- * The AgentPay quickstart. This is a program, not documentation -- run it:
+ * The Bles quickstart. This is a program, not documentation -- run it:
  *
  *   npx tsx examples/quickstart.ts
  *
- * With no configuration, it starts its own local AgentPay API (in-memory,
+ * With no configuration, it starts its own local Bles API (in-memory,
  * no database, no Anthropic key) and runs against that -- clone the repo and
  * this just works, no setup. That's deliberate: if getting to a first
  * decision takes more than an hour, the SDK is wrong, not these docs.
  *
- * To run it against a real, already-running AgentPay deployment and your
+ * To run it against a real, already-running Bles deployment and your
  * own key instead, set:
  *
- *   AGENTPAY_BASE_URL=https://api.your-agentpay-deployment.example
- *   AGENTPAY_API_KEY=ap_live_...          # an org credential
+ *   BLES_BASE_URL=https://api.your-bles-deployment.example
+ *   BLES_API_KEY=bls_live_...          # an org credential
  *
- * Everything below this point uses only `@agentpay/sdk` -- no raw `fetch`,
+ * Everything below this point uses only `@bles/sdk` -- no raw `fetch`,
  * no hand-built request bodies. If you find yourself wanting to reach past
  * the SDK for something in this file, that's a bug in the SDK, not a gap
  * this script should route around.
  */
 
 import {
-  AgentPay,
-  AgentPayError,
+  Bles,
+  BlesError,
   asExecutable,
   type AuthorizationDecision,
-} from "@agentpay/sdk";
+} from "@bles/sdk";
 
-const SELF_HOSTED = !process.env.AGENTPAY_BASE_URL && !process.env.AGENTPAY_API_KEY;
+const SELF_HOSTED = !process.env.BLES_BASE_URL && !process.env.BLES_API_KEY;
 
 /** Set once `main()` connects, so the top-level runner can shut down the
  * self-hosted server (if any) whether the script finishes or throws --
@@ -41,7 +41,7 @@ const ok = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const warn = (s: string) => `\x1b[33m${s}\x1b[0m`;
 
 /**
- * Only reachable in self-hosted mode. Boots a real AgentPay API in-process
+ * Only reachable in self-hosted mode. Boots a real Bles API in-process
  * (in-memory repositories, the deterministic fixture compiler so this runs
  * with no ANTHROPIC_API_KEY, a small seeded merchant directory so a
  * domain-only assertion for "staples.com" resolves VERIFIED) and mints the
@@ -67,7 +67,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
-  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@agentpay/core");
+  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@bles/core");
 
   const agentKeys = new InMemoryAgentKeyRepository();
   const app = buildServer({
@@ -95,7 +95,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
 
   const org = await agentKeys.createKey({ organizationId: "org_quickstart", name: "quickstart org credential" }, new Date());
 
-  console.log(dim(`  started a local AgentPay API on 127.0.0.1:${address.port} (in-memory, no database)`));
+  console.log(dim(`  started a local Bles API on 127.0.0.1:${address.port} (in-memory, no database)`));
   return { baseUrl: `http://127.0.0.1:${address.port}`, apiKey: org.fullKey, close: () => app.close() };
 }
 
@@ -109,7 +109,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
  * SDK calls either side of that gap identically regardless of what produced
  * the response (I-10: it never depends on a specific WebAuthn library).
  */
-async function authenticateMandateWithASimulatedPasskey(agentpay: AgentPay, mandateId: string): Promise<void> {
+async function authenticateMandateWithASimulatedPasskey(bles: Bles, mandateId: string): Promise<void> {
   const {
     createVirtualAuthenticator,
     buildRegistrationResponse,
@@ -117,8 +117,8 @@ async function authenticateMandateWithASimulatedPasskey(agentpay: AgentPay, mand
   } = await import("../apps/api/src/webauthn/test-support/virtual-authenticator.js");
   const authenticator = createVirtualAuthenticator();
 
-  const registerOptions = await agentpay.getMandateAuthenticationOptions(mandateId);
-  await agentpay.verifyMandateAuthentication(mandateId, {
+  const registerOptions = await bles.getMandateAuthenticationOptions(mandateId);
+  await bles.verifyMandateAuthentication(mandateId, {
     mode: "register",
     challenge: registerOptions.challenge,
     response: buildRegistrationResponse({
@@ -129,8 +129,8 @@ async function authenticateMandateWithASimulatedPasskey(agentpay: AgentPay, mand
     }),
   });
 
-  const authOptions = await agentpay.getMandateAuthenticationOptions(mandateId);
-  const result = await agentpay.verifyMandateAuthentication(mandateId, {
+  const authOptions = await bles.getMandateAuthenticationOptions(mandateId);
+  const result = await bles.verifyMandateAuthentication(mandateId, {
     mode: "authenticate",
     challenge: authOptions.challenge,
     response: buildAuthenticationResponse({
@@ -155,12 +155,12 @@ async function main() {
   const { baseUrl, apiKey, close } = SELF_HOSTED
     ? await startLocalServerAndMintOrgCredential()
     : {
-        baseUrl: process.env.AGENTPAY_BASE_URL!,
-        apiKey: process.env.AGENTPAY_API_KEY!,
+        baseUrl: process.env.BLES_BASE_URL!,
+        apiKey: process.env.BLES_API_KEY!,
         close: async () => {},
       };
   closeServer = close;
-  const org = new AgentPay({ baseUrl, apiKey });
+  const org = new Bles({ baseUrl, apiKey });
   console.log(`  ${ok("connected")} to ${baseUrl}`);
 
   section("2. Compile a natural-language instruction into a policy");
@@ -195,7 +195,7 @@ async function main() {
   console.log(`  ${ok("authenticated")} -- the mandate is now ACTIVE`);
 
   const key = await org.createAgentKey(agent.agent_id, { name: "quickstart demo key" });
-  const agentClient = new AgentPay({ baseUrl, apiKey: key.api_key });
+  const agentClient = new Bles({ baseUrl, apiKey: key.api_key });
   console.log(`  ${dim("agent key minted:")} ${key.prefix}...  ${dim("(shown once -- store it now)")}`);
 
   section("4. Ask permission for a purchase that's clearly within the mandate");
@@ -275,7 +275,7 @@ async function main() {
     // typed error path; a real caller wouldn't get past the type checker here.
     await agentClient.authorize({ agent_id: agent.agent_id, principal_id: principalId, action: { amount: 100 } });
   } catch (error) {
-    if (error instanceof AgentPayError) {
+    if (error instanceof BlesError) {
       console.log(`  ${dim(error.constructor.name + ":")} ${error.message}`);
     } else {
       throw error;
@@ -298,7 +298,7 @@ async function main() {
   section("Done");
   console.log("  You just compiled a policy, created and authenticated a mandate, asked permission");
   console.log("  for four purchases (an ALLOW, a step-up you approved yourself, and a DENY), executed");
-  console.log("  two of them, and read the evidence chain back -- entirely through @agentpay/sdk.");
+  console.log("  two of them, and read the evidence chain back -- entirely through @bles/sdk.");
   console.log("  See apps/dashboard for the same data in a UI.\n");
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PaymentAdapter } from "@agentpay/core";
+import type { PaymentAdapter } from "@bles/core";
 import { X402Adapter } from "./x402-adapter.js";
 
 describe("X402Adapter", () => {

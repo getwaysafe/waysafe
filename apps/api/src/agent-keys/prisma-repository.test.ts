@@ -6,7 +6,7 @@
 
 import { PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ID_PREFIX, generateId } from "@agentpay/core";
+import { ID_PREFIX, generateId } from "@bles/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaAgentKeyRepository } from "./prisma-repository.js";
 
@@ -77,7 +77,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     const repo = new PrismaAgentKeyRepository(prisma);
     await seedOrgAndAgent();
 
-    const result = await repo.verifyKey("ap_live_00000000forgedsecretvalue", NOW);
+    const result = await repo.verifyKey("bls_live_00000000forgedsecretvalue", NOW);
 
     expect(result).toEqual({ ok: false, reason: "not_found" });
   }, 30_000);

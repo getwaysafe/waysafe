@@ -1,21 +1,21 @@
 import { notFound } from "next/navigation";
-import { formatMoney } from "@agentpay/core";
-import { NotFoundError } from "@agentpay/sdk";
-import { requireSessionClient } from "../../../../lib/agentpay";
+import { formatMoney } from "@bles/core";
+import { NotFoundError } from "@bles/sdk";
+import { requireSessionClient } from "../../../../lib/bles";
 import { Badge, formatDate } from "../../../../lib/format";
 import { formatDetail } from "../../../../lib/reasons";
 import { approveStepUp, declineStepUp } from "./actions";
 
 export default async function AuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const agentpay = await requireSessionClient();
+  const bles = await requireSessionClient();
 
   const [receipt, reasonCodes] = await Promise.all([
-    agentpay.verify(id).catch((error) => {
+    bles.verify(id).catch((error) => {
       if (error instanceof NotFoundError) return null;
       throw error;
     }),
-    agentpay.listReasonCodes(),
+    bles.listReasonCodes(),
   ]);
   if (!receipt) notFound();
 

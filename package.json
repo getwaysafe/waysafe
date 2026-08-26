@@ -1,8 +1,8 @@
 {
-  "name": "agentpay-router",
+  "name": "bles",
   "private": true,
   "version": "0.1.0",
-  "description": "The authorization and trust layer between autonomous software and money.",
+  "description": "Bles: the system of record for delegated financial authority.",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -16,10 +16,10 @@
     "typecheck:tests": "tsc -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev:api": "npm run dev -w @agentpay/api",
+    "dev:api": "npm run dev -w @bles/api",
     "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
-    "db:generate": "npm run generate -w @agentpay/db",
-    "db:push": "npm run push -w @agentpay/db"
+    "db:generate": "npm run generate -w @bles/db",
+    "db:push": "npm run push -w @bles/db"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

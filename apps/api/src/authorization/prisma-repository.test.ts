@@ -14,7 +14,7 @@
  *    actually catch a regression -- e.g. someone deleting the `FOR UPDATE`
  *    clause -- rather than passing by accident because the two operations
  *    never happened to overlap.
- *  - `AGENTPAY_REQUIRE_DB=1` turns "database unreachable" into a hard
+ *  - `BLES_REQUIRE_DB=1` turns "database unreachable" into a hard
  *    failure instead of a skip. Without it, a broken `DATABASE_URL` in an
  *    environment that's supposed to have one makes this entire block
  *    disappear silently and the suite stays green -- for the single test
@@ -35,7 +35,7 @@ import {
   type AgentStatus,
   type MandateStatus,
   type Policy,
-} from "@agentpay/core";
+} from "@bles/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";

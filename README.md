@@ -1,17 +1,19 @@
-# AgentPay Router
+# Bles
 
-The authorization and trust layer between autonomous software and money.
+The system of record for delegated financial authority.
 
 One API to decide whether an AI agent may take an economic action:
 
 ```ts
-const decision = await agentpay.authorize({ agent, principal, action });
+const decision = await bles.authorize({ agent, principal, action });
 // => ALLOW | DENY | STEP_UP
 ```
 
-**Status: Week 5 of 6.** Domain model, policy engine, WebAuthn + agent keys,
+**Status: Week 6 of 6.** Domain model, policy engine, WebAuthn + agent keys,
 payment execution, the TypeScript SDK, and the developer dashboard are all in
-place. Hardening and docs land in Week 6.
+place. Week 6 is hardening: the dashboard's step-up approval UI, this rename
+(see `DECISIONS.md` D-19/D-25), a signed and independently verifiable
+evidence chain (D-26/OQ-8), and a scripted end-to-end demo.
 
 ---
 
@@ -22,8 +24,8 @@ npm install
 npx tsx examples/quickstart.ts
 ```
 
-That's it — no `.env`, no database, no API key. It boots a local AgentPay API
-in-memory and walks the full journey through `@agentpay/sdk`: compile a
+That's it — no `.env`, no database, no API key. It boots a local Bles API
+in-memory and walks the full journey through `@bles/sdk`: compile a
 policy, create and authenticate a mandate, authorize a few purchases (an
 ALLOW, a STEP_UP you approve yourself, a DENY), execute one, and read the
 evidence chain back. `examples/quickstart.ts` is a runnable program, not
@@ -33,8 +35,8 @@ in the SDK, not these docs.
 To point the same script at a real, already-running deployment instead:
 
 ```bash
-AGENTPAY_BASE_URL=https://your-deployment.example \
-AGENTPAY_API_KEY=ap_live_... \
+BLES_BASE_URL=https://your-deployment.example \
+BLES_API_KEY=bls_live_... \
 npx tsx examples/quickstart.ts
 ```
 
@@ -42,8 +44,8 @@ Run the dashboard (needs the API running separately, `npm run dev:api`):
 
 ```bash
 cp apps/dashboard/.env.example apps/dashboard/.env.local
-# set AGENTPAY_DASHBOARD_SESSION_SECRET -- see the file for how
-npm run dev -w @agentpay/dashboard
+# set BLES_DASHBOARD_SESSION_SECRET -- see the file for how
+npm run dev -w @bles/dashboard
 ```
 
 ---
@@ -54,7 +56,7 @@ A person tells an agent something fuzzy:
 
 > "Get me a good hotel in Miami. Nothing ridiculous."
 
-Financial infrastructure cannot enforce that. AgentPay compiles it into a
+Financial infrastructure cannot enforce that. Bles compiles it into a
 policy that can be enforced:
 
 ```
@@ -139,5 +141,5 @@ in plain language, for the principal to check before they authenticate. (`D-6`)
 - A model interprets intent. A model never authorizes a transaction.
 - Every mandate and policy change is versioned; nothing is edited in place.
 - Every execution cites the exact policy hash that authorized it.
-- Passkeys prove authorization without AgentPay storing biometric data.
+- Passkeys prove authorization without Bles storing biometric data.
 - The system is designed to stay out of PCI scope, not to manage it.

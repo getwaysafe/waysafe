@@ -6,7 +6,7 @@ import {
   toMinorUnits,
   Decision,
   type Policy,
-} from "@agentpay/core";
+} from "@bles/core";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { authorize, resolveStepUp } from "../authorization/service.js";

@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { formatMoney } from "@agentpay/core";
-import { requireSessionClient } from "../../../lib/agentpay";
+import { formatMoney } from "@bles/core";
+import { requireSessionClient } from "../../../lib/bles";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function AuthorizationsPage() {
-  const agentpay = await requireSessionClient();
-  const authorizations = await agentpay.listAuthorizations({ limit: 200 });
+  const bles = await requireSessionClient();
+  const authorizations = await bles.listAuthorizations({ limit: 200 });
 
   return (
     <>

@@ -1,4 +1,4 @@
-// AgentPay Router — Postgres schema
+// Bles — Postgres schema
 //
 // Tenancy: Organization is the boundary. Every row carries organizationId and
 // nothing is queried without it.
@@ -114,7 +114,7 @@ model ApiKey {
   id             String    @id
   organizationId String
   agentId        String?
-  /// Non-secret lookup prefix, e.g. "ap_live_7f2c".
+  /// Non-secret lookup prefix, e.g. "bls_live_7f2c".
   prefix         String    @unique
   /// SHA-256 of the full secret.
   secretHash     String
@@ -192,7 +192,7 @@ model MandateVersion {
   /// The principal's original words, verbatim.
   intentText String
 
-  /// Compiled policy, agentpay.policy/v1.
+  /// Compiled policy, bles.policy/v1.
   policy Json
 
   /// SHA-256 over the canonical policy bytes. What the principal signs.

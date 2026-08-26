@@ -993,6 +993,105 @@ for the dashboard, since there's still no page-level automated suite.
 
 ---
 
+## D-25 — Week 6: the rename, implemented (D-19)
+
+D-19 named the rename and its timing but explicitly wasn't the rename
+itself ("Not implemented yet"). This is that follow-through, done exactly
+where D-19 said it should happen -- Week 6, before anything is public.
+
+**What changed, mechanically:**
+
+- Package scope: `@agentpay/*` → `@bles/*` (`packages/core`, `packages/db`,
+  `packages/sdk`, `apps/api`, `apps/dashboard`, and every import
+  referencing them). Root `package.json` name: `agentpay-router` → `bles`.
+- Env vars: every `AGENTPAY_*` → `BLES_*` (`BLES_COMPILER`,
+  `BLES_COMPILER_MODEL`, `BLES_RP_ID`, `BLES_RP_ORIGIN`,
+  `BLES_EVIDENCE_SIGNING_KEY`, `BLES_DASHBOARD_SESSION_SECRET`,
+  `BLES_API_BASE_URL`, plus the test-only `BLES_REQUIRE_DB`/
+  `BLES_REQUIRE_STRIPE` gates) -- `.env`, `.env.example`, and
+  `apps/dashboard/.env.example` all updated so local dev doesn't silently
+  break.
+- The SDK's exported names: `AgentPay` → `Bles`, `AgentPayError` →
+  `BlesError`, `AgentPayOptions` → `BlesOptions`.
+- The agent API key marker: `ap_live_` → `bls_live_` (`apps/api/src/
+  agent-keys/keys.ts`) -- a branded, visible string (shown in the
+  dashboard's Agents & Keys table, in every `createAgentKey` response),
+  not an internal implementation detail, so D-19's "any other
+  AgentPay-branded string" catches it too.
+- The Stripe metadata key adapters write to correlate a webhook back to an
+  authorization: `agentpay_authorization_id` → `bles_authorization_id`
+  (`stripe-adapter.ts`, `webhooks/service.ts`, and their tests) -- an
+  external-facing string stored on real PaymentIntents, same reasoning.
+- `README.md`, `docs/CODE-REVIEW-BRIEF.md`'s title, the dashboard's brand
+  text (page title, login page, sidebar), and every doc comment describing
+  the product by name in currently-live code.
+
+**What deliberately didn't change:** this file's own historical entries
+(D-1 through D-24) and OQ-2's discussion of "Mastercard Agent Pay" --
+same reasoning D-19 itself already established ("left in place, unedited
+below, so the original reasoning survives"). D-19's own text still says
+"AgentPay Router" throughout, on purpose: it's the record of what was
+being renamed *from*. Retroactively editing either would misrepresent
+what was actually decided, and when. The one place old-name references
+were touched despite being technically "historical" is anywhere they'd
+otherwise leave the codebase *inaccurate* about its own current
+mechanics -- an env var name in a still-live code comment, a package name
+in a still-run npm script -- which is a correctness fix, not a rewrite of
+the narrative.
+
+**The directory this repo lives in was not renamed.** D-19's "repo name"
+item is read here as the version-controlled root `package.json` name
+(now `bles`) -- moving the actual folder on disk is a filesystem
+operation outside anything a commit can capture, and this repo has no
+git remote to rename either. Left for whoever owns the checkout to do by
+hand if they want it, whenever is convenient.
+
+**The policy schema id -- the one item D-19 flagged as having a real
+compatibility cost, not just a search-and-replace: bumped cleanly to
+`bles.policy/v1`, no alias for the old id.** `POLICY_SCHEMA_VERSION`
+(`packages/core/src/policy.ts`) is matched by `z.literal`, so this is a
+hard break: a document with `schema_version: "agentpay.policy/v1"` no
+longer parses, and (per D-5) its `policy_hash` no longer matches anything
+computed fresh, because the hash is over canonical bytes that include the
+schema id. Chose a clean bump over indefinitely aliasing the old id
+because the cost D-19 was warning about -- *someone else's code now
+depends on the old value* -- doesn't exist yet: no external developer has
+integrated, and the dev database this sprint uses (`.env`'s
+`DATABASE_URL`) had zero rows in every table that could hold a policy
+document at the time of the bump (checked directly before touching the
+schema). D-19's own framing already named the trade a clean bump makes
+sense under: "Week 6 is the window between 'nothing to break' and
+'something to break.'" Recorded fixtures (`fixtures/compiler/*.json`)
+embed a `schema_version` too -- their own field, not derived at replay
+time -- so all five were updated in the same pass; otherwise every test
+that runs a compiled fixture through `parsePolicy`/`createMandate` would
+have started failing the moment `POLICY_SCHEMA_VERSION` changed underneath
+them, which is exactly what actually happened first, caught immediately
+by `npm run typecheck` and `npm test` both staying green afterward -- the
+"tests first where behavior changes" the sprint has run on this whole
+time doubling as the check that this particular break was total, not
+partial.
+
+**Verification, not just search-and-replace by feel:** after the pass,
+grepped the entire tree (excluding `node_modules`/`dist`/`.next`/
+`package-lock.json`) case-insensitively for `agentpay` and confirmed zero
+matches outside D-1 through D-24's preserved historical text and OQ-2's
+preserved discussion of Mastercard's product. `package-lock.json` was not
+hand-edited -- regenerated via `npm install` after every `package.json`
+name changed, which is also what re-links each workspace package under
+its new scope in `node_modules/@bles/*` (the stale `node_modules/
+@agentpay/*` symlinks are gone, not just shadowed). `npm run typecheck`,
+the full `npm test` (Postgres-backed suites included -- `DATABASE_URL` was
+reachable), `npm run build` (all four packages plus the dashboard's `next
+build`), and `examples/quickstart.ts` end-to-end were all run clean after
+the rename, in that order.
+
+Implemented across the entire tree; see the commit for the full file
+list. No behavior changed anywhere except the literal identifiers named
+above -- this is D-19's mechanical pass, executed.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1049,6 +1148,16 @@ unedited below, so the original reasoning survives.
 Passkeys are bound to a domain. Registering against `localhost` and later moving
 to a real domain invalidates every credential. Picking the production domain
 early — even before it is live — avoids a re-registration migration in Week 3.
+
+**Still open at the end of Week 6: which real domain.** D-20 only ever
+resolved *what to use meanwhile*, not the underlying question this entry
+is named for -- the actual production RP ID is still undecided, and stays
+that way deliberately. It depends on "Bles" (D-19) clearing trademark
+search, which has not happened as of this sprint's end. Picking a
+production domain -- and registering passkeys against it -- before that
+clears risks the exact re-registration migration this entry originally
+existed to avoid, just for a name that might not survive to launch.
+Revisit once trademark clearance lands.
 
 ## OQ-6 — Runtime target
 

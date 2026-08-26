@@ -1,6 +1,6 @@
 /** In-process fake `AgentKeyRepository`. */
 
-import { ID_PREFIX, generateId } from "@agentpay/core";
+import { ID_PREFIX, generateId } from "@bles/core";
 import { extractKeyPrefix, generateAgentApiKey, hashApiKey } from "./keys.js";
 import type {
   AgentKeyRecord,

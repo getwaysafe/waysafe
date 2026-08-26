@@ -7,7 +7,7 @@
  * exactly one claim (the credential itself), so a signed-and-encrypted blob
  * needs no separate claims schema, expiry field, or library.
  *
- * `AGENTPAY_DASHBOARD_SESSION_SECRET` must be a base64-encoded 32-byte key.
+ * `BLES_DASHBOARD_SESSION_SECRET` must be a base64-encoded 32-byte key.
  * Generate one with:
  *
  *   openssl rand -base64 32
@@ -17,23 +17,23 @@
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-export const SESSION_COOKIE_NAME = "agentpay_dashboard_session";
+export const SESSION_COOKIE_NAME = "bles_dashboard_session";
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 12;
 
 function loadKey(): Buffer {
-  const encoded = process.env.AGENTPAY_DASHBOARD_SESSION_SECRET;
+  const encoded = process.env.BLES_DASHBOARD_SESSION_SECRET;
   if (!encoded) {
     throw new Error(
-      "AGENTPAY_DASHBOARD_SESSION_SECRET is not set. Generate one with " +
+      "BLES_DASHBOARD_SESSION_SECRET is not set. Generate one with " +
         "`openssl rand -base64 32` and set it in the dashboard's environment.",
     );
   }
   const key = Buffer.from(encoded, "base64");
   if (key.length !== 32) {
     throw new Error(
-      `AGENTPAY_DASHBOARD_SESSION_SECRET must decode to 32 bytes (got ${key.length}). ` +
+      `BLES_DASHBOARD_SESSION_SECRET must decode to 32 bytes (got ${key.length}). ` +
         "Generate one with `openssl rand -base64 32`.",
     );
   }

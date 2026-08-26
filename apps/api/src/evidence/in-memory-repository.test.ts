@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { verifyEvidenceChain } from "@agentpay/core";
+import { verifyEvidenceChain } from "@bles/core";
 import { InMemoryEvidenceRepository } from "./in-memory-repository.js";
 
 const ORG = "org_test";

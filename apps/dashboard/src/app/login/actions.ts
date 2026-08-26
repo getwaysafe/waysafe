@@ -2,8 +2,8 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { AgentPay, UnauthorizedError } from "@agentpay/sdk";
-import { AGENTPAY_API_BASE_URL } from "../../lib/agentpay";
+import { Bles, UnauthorizedError } from "@bles/sdk";
+import { BLES_API_BASE_URL } from "../../lib/bles";
 import { encryptSession, SESSION_COOKIE_NAME } from "../../lib/session";
 
 export interface LoginState {
@@ -12,7 +12,7 @@ export interface LoginState {
 
 /**
  * The only "auth" check the dashboard does: the submitted key must
- * authenticate a real, unrevoked credential against the AgentPay API
+ * authenticate a real, unrevoked credential against the Bles API
  * itself (D-18 already enforces everything about who it belongs to and
  * what it can do -- the dashboard doesn't re-implement that). `listAgents`
  * is a lightweight, harmless org-scoped read used purely to confirm the
@@ -24,7 +24,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
     return { error: "Enter an API key." };
   }
 
-  const client = new AgentPay({ baseUrl: AGENTPAY_API_BASE_URL, apiKey });
+  const client = new Bles({ baseUrl: BLES_API_BASE_URL, apiKey });
   try {
     await client.listAgents();
   } catch (error) {
@@ -32,7 +32,7 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
       return { error: "That key was rejected -- it may be revoked or mistyped." };
     }
     return {
-      error: `Could not reach the AgentPay API at ${AGENTPAY_API_BASE_URL}: ${
+      error: `Could not reach the Bles API at ${BLES_API_BASE_URL}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     };

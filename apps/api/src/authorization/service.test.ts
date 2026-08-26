@@ -8,7 +8,7 @@ import {
   createStaticDirectory,
   type Policy,
   type AuthorizationRequest,
-} from "@agentpay/core";
+} from "@bles/core";
 import { InMemoryAuthorizationRepository } from "./in-memory-repository.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
@@ -301,7 +301,7 @@ describe("agent API keys (D-18)", () => {
       organizationId: ORG,
       request: request(),
       now: NOW,
-      apiKey: "ap_live_00000000forgedsecretvaluenotreal",
+      apiKey: "bls_live_00000000forgedsecretvaluenotreal",
     });
 
     if (result.kind !== "decided") throw new Error("unreachable");
@@ -364,7 +364,7 @@ describe("agent API keys (D-18)", () => {
       organizationId: ORG,
       request: request(),
       now: NOW,
-      apiKey: "ap_live_00000000forgedsecretvaluenotreal",
+      apiKey: "bls_live_00000000forgedsecretvaluenotreal",
     });
 
     const events = await evidence.listForOrganization(ORG);
@@ -373,7 +373,7 @@ describe("agent API keys (D-18)", () => {
   });
 
   it("THE ATTACK: the check is not bypassable by calling the service directly -- evaluate() is never reached for a rejected key", async () => {
-    const core = await import("@agentpay/core");
+    const core = await import("@bles/core");
     const evaluateSpy = vi.spyOn(core, "evaluate");
 
     const { repos } = await repoWithMandate(policyFrom({}));
@@ -384,7 +384,7 @@ describe("agent API keys (D-18)", () => {
       organizationId: ORG,
       request: request(),
       now: NOW,
-      apiKey: "ap_live_00000000forgedsecretvaluenotreal",
+      apiKey: "bls_live_00000000forgedsecretvaluenotreal",
     });
 
     expect(evaluateSpy).not.toHaveBeenCalled();
@@ -392,7 +392,7 @@ describe("agent API keys (D-18)", () => {
   });
 
   it("sanity check for the spy above: evaluate() IS reached once the key is valid", async () => {
-    const core = await import("@agentpay/core");
+    const core = await import("@bles/core");
     const evaluateSpy = vi.spyOn(core, "evaluate");
 
     const { repos, apiKey } = await repoWithMandate(policyFrom({}));

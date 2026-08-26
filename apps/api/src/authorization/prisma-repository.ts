@@ -34,7 +34,7 @@ import {
   type ReasonCode,
   type ResolvedMerchant,
   type SpendSnapshot,
-} from "@agentpay/core";
+} from "@bles/core";
 import type {
   AgentListItem,
   AuthorizationRepository,
