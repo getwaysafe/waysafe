@@ -949,6 +949,50 @@ verified by hand against a running server, not with an automated suite.
 
 ---
 
+## D-24 — Week 6: the dashboard's step-up approval UI
+
+**The gap D-23 left open.** The SDK could drive a step-up
+(`approveStepUp`/`declineStepUp`, Week 5) but the dashboard itself
+couldn't -- the one first-party surface in this build had no way to do the
+thing the whole product exists to let a human do. Built on
+`/authorizations/[id]`, the existing receipt page, rather than a new route:
+a pending step-up is a state that page already renders, not a separate
+concept.
+
+**Shows the same three things any approval UI needs, no more:** what the
+agent asked for (amount, merchant, category, and the free-text
+`description` if the agent gave one), which policy term it tripped
+(`reason.policy_path` and `reason.detail` -- the exact threshold and the
+value that crossed it, e.g. `amount: 8700, threshold: 15000`, not just the
+reason code), and Approve/Decline. `reason.detail` was already populated by
+`evaluate()` for nearly every reason code (Week 2) and already flowed
+through the SDK's `AuthorizationDecision.reasons` (Week 5); nothing needed
+to change below the dashboard to surface it -- it just wasn't rendered
+anywhere before now. Extended the receipt's own "Reasons" section with the
+same `policy_path`/`detail` rendering, not just the approval card, since
+knowing *why* applies equally to an already-decided ALLOW or DENY.
+
+**Two Server Actions, not a client-side fetch to some dashboard-specific
+endpoint.** `authorizations/[id]/actions.ts` calls
+`requireSessionClient()` then `agentpay.approveStepUp(id)` /
+`.declineStepUp(id)` -- the exact same two SDK calls a developer's own
+approval UI would make (I-10: nothing here is special-cased for being
+first-party). `revalidatePath` refreshes the page after either action;
+approving or declining moves the receipt out of `PENDING_STEP_UP`, so the
+approval card simply stops rendering on the next paint -- there's no
+separate "resolved" state to reconcile by hand.
+
+Implemented in `apps/dashboard/src/app/(dashboard)/authorizations/[id]/`
+(`page.tsx`, `actions.ts`) and `apps/dashboard/src/lib/reasons.ts`. Tested
+in `apps/dashboard/src/lib/reasons.test.ts` (the one new piece of pure
+logic, `formatDetail`); the approve and decline flows themselves were
+verified by hand against a running server -- a pending step-up approved
+end to end (status moves to `STEP_UP_APPROVED`, the card disappears) and a
+second one declined the same way -- same "tested lightly" scope D-23 set
+for the dashboard, since there's still no page-level automated suite.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

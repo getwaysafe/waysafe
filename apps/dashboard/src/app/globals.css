@@ -157,6 +157,36 @@ pre {
   margin-bottom: 16px;
 }
 
+.card.approval {
+  border-color: var(--step-up);
+  background: #fffbeb;
+}
+
+.card.approval h2 {
+  margin: 0 0 8px;
+}
+
+button.approve, button.decline {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.approve {
+  background: var(--allow);
+  color: white;
+}
+button.decline {
+  background: white;
+  color: var(--deny);
+  border: 1px solid var(--deny);
+}
+button.approve:hover, button.decline:hover {
+  opacity: 0.85;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: 160px 1fr;
