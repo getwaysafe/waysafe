@@ -367,6 +367,11 @@ of a security-relevant test mechanism drift apart.
 
 ## D-17 — Evidence is "tamper-evident," never "tamper-proof" or "verifiable," until OQ-8 lands
 
+**OQ-8 landed in Week 6 (D-26): the chain is signed, and it is now accurate
+to call it "verifiable" -- by a third party, not just tamper-evident to an
+operator.** Left in place, unedited below, so the original reasoning
+survives; this restriction genuinely held for Weeks 3 through 5.
+
 A hash chain proves a *record was mutated after the fact to someone who
 already has an independent copy of it, or who trusts the person recomputing
 the chain*. It does not prove anything to a third party who has to trust the
@@ -1092,6 +1097,131 @@ above -- this is D-19's mechanical pass, executed.
 
 ---
 
+## D-26 — Week 6: signing the evidence chain, resolves OQ-8 and D-17
+
+**Signs every event, not a periodic tip signature.** OQ-8 posed this as an
+open question; resolved in favor of per-event signing because the
+alternative has a real gap a demo (and a real principal) would hit
+immediately: a receipt shown right after a purchase -- the moment anyone
+actually looks at one -- would have no signature at all until the next
+periodic sweep ran, since there's no background-job infrastructure in this
+build to run one. Ed25519 signing is microseconds; there's no performance
+case for batching it, and per-event signing means "verifiable" is true
+the instant an event is written, not eventually. The chain's structure is
+otherwise unchanged (OQ-8's own framing already anticipated this: "the
+chain structure doesn't change... only a signature gets attached") --
+`signature` is a new column alongside `hash`, computed over `hash` itself
+(SHA-256 already commits to the full event; signing the fixed-size digest
+is equivalent to signing the content and cheaper), not a change to
+`computeEventHash`'s inputs.
+
+**The private key never touches Postgres; the public key is published,
+unauthenticated, at `GET /v1/evidence/public-key`.** That split is the
+entire mechanism: reproducing a valid signature for a row an attacker
+edited directly in the database requires the private key, which by
+construction isn't stored anywhere the database's own compromise could
+reach. The public key route is deliberately unauthenticated (added to
+`PUBLIC_ROUTES`) -- the third party this whole feature is *for* by
+definition has no Bles credential, so gating the key that lets them verify
+independently behind one would defeat the point. One signing key per
+deployment, not one per organization: operationally simpler (one key to
+generate, rotate, and publish) and there's no tenancy reason for it to
+differ, since verification is a math check against public data, not a
+capability that needs scoping the way D-1's tenancy boundary does.
+
+**Two ways to verify, deliberately, matching I-10.** `GET
+/v1/evidence/verify` (existing route, now actually checks signatures) and
+the SDK's `verifyEvidenceChain()` are a convenience: ask this server
+whether its own database checks out. That's useful, but it still trusts
+the server to answer honestly -- which is exactly the trust OQ-8 exists to
+not require. `@bles/sdk` also exports `verifyEvidenceIndependently(events,
+publicKeyBase64)`, a pure function with no network call: feed it
+`listEvidence()`'s events and `getEvidencePublicKey()`'s key and it runs
+the identical check -- hash consistency plus every signature -- in the
+caller's own process, using nothing this server said about itself. That
+second path is the actual "verifiable by a third party" claim; the first
+is a convenience that happens to use the same math. Required exposing
+`organization_id` on the evidence wire JSON (`toEvidenceJSON`,
+`EvidenceRecord`) that wasn't there before -- `computeEventHash`'s content
+includes it, so independent verification is impossible without it on the
+wire. A small, deliberate widening of what the API returns, not an
+oversight caught after the fact.
+
+**Key management: `BLES_EVIDENCE_SIGNING_KEY` (base64 PKCS8) when set;
+generated fresh per-process when it isn't, matching D-15/D-16's precedent
+for `npm run dev` with no `DATABASE_URL`.** An ephemeral key means
+`examples/quickstart.ts` and a bare `npm run dev:api` sign and verify
+correctly with zero configuration -- the same "nothing to break" bar the
+rest of this build holds itself to -- at the honest cost that signatures
+don't survive a restart under an ephemeral key, which is exactly correct:
+there is no way to distinguish "the key rotated legitimately" from "an
+attacker rebuilt the database" without a public key kept somewhere outside
+that database, and an ephemeral key by definition isn't kept anywhere.
+`npm run keygen -w @bles/api` (new script, `apps/api/src/keygen.ts`)
+generates a real one and prints both halves -- the private key to add to
+`.env`, the public key for reference (it's also always available live at
+`GET /v1/evidence/public-key`, so nothing needs to copy it around by
+hand). `EvidenceEvent.signature` is a required, non-nullable column
+(`packages/db/prisma/schema.prisma`) -- confirmed the dev database had
+zero rows in every table that could hold one before adding it, same
+verification D-25's policy-schema-id bump did, for the same reason: a
+required column with no migration story is only safe when there's nothing
+yet to migrate.
+
+**Tested at every layer, not just the crypto primitives.** `@bles/core`:
+`evidence-signing.test.ts` (sign/verify round-trips, wrong key, wrong hash,
+a single flipped signature byte, key export/import) and an extended
+`evidence.test.ts` -- including the test that actually justifies this
+decision: a *full* chain rewrite (forge one event, then recompute
+`hash`/`previous_hash` consistently through every event after it, exactly
+what a patient database-only attacker would do) passes hash-only
+`verifyEvidenceChain` -- proving D-17's gap is real, not theoretical --
+and fails signature verification, because the attacker was never able to
+re-sign what they forged. Both `InMemoryEvidenceRepository` and
+`PrismaEvidenceRepository` (real Postgres) get equivalent round-trip and
+cross-key-rejection tests -- no repository gets a "test mode" that skips
+signing, on the same principle `virtual-authenticator.ts` established in
+Week 3: a fake would only prove this codebase's orchestration, never that
+the signature check does anything. `server.test.ts` proves the HTTP
+surface: `GET /v1/evidence/public-key` needs no credential and round-trips
+to a real Ed25519 key, and a dedicated attack test corrupts a stored
+signature through the same in-memory repository instance the running
+server reads from (not a mock) and confirms `GET /v1/evidence/verify`
+catches it. `packages/sdk`: unit tests for `getEvidencePublicKey` and
+`verifyEvidenceIndependently` (including cross-key and tampered-payload
+attacks) against a fake `fetch`, plus two `integration.test.ts` cases
+against a real listening server -- one proving the full
+`listEvidence()`/`getEvidencePublicKey()`/`verifyEvidenceIndependently()`
+path works end to end, one proving it actually catches a tampered event
+fetched from the real API.
+
+**D-17's restriction is lifted, precisely where it now no longer applies.**
+"Verifiable" is accurate to say once a `publicKey` is supplied to
+`verifyEvidenceChain` (or its SDK/HTTP equivalents actually check
+signatures, which they now do) -- `packages/core/src/evidence.ts`'s module
+doc comment, the dashboard's evidence page copy, and this file's D-17/OQ-8
+entries were all updated to say so. The restriction still holds for the
+*pure* hash-chain-only case (no public key supplied) -- that path still
+only proves what D-17 always said it proves, and both `verifyEvidenceChain`
+and `ChainVerificationResult` document the difference explicitly (`signed`
+is present and `true` only when the stronger check actually ran).
+
+Implemented in `packages/core/src/evidence-signing.ts` (new),
+`packages/core/src/evidence.ts`, `packages/core/src/domain.ts`
+(`EvidenceEvent.signature`), `apps/api/src/evidence/` (`in-memory-
+repository.ts`, `prisma-repository.ts`, `types.ts`, new `signing-key.ts`),
+`apps/api/src/keygen.ts` (new), `apps/api/src/server.ts` (`GET
+/v1/evidence/public-key`, updated `GET /v1/evidence/verify`),
+`apps/api/src/index.ts`, `apps/dashboard/src/app/(dashboard)/evidence/
+page.tsx`, and `packages/sdk/src/index.ts`
+(`getEvidencePublicKey`, `verifyEvidenceIndependently`,
+`EvidencePublicKey`). `packages/db/prisma/schema.prisma`'s new
+`EvidenceEvent.signature` column, pushed to the dev database. Tested as
+described above; full suite (`npm test`, Postgres-backed included) and
+`npm run typecheck` both green afterward.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1191,6 +1321,11 @@ as one transaction. **Does the policy schema need per-unit limits, or should the
 example's numbers just be corrected?**
 
 ## OQ-8 — The evidence chain is tamper-evident, not tamper-proof, until it's signed
+
+**Resolved by D-26: every event is signed with an Ed25519 key, verifiable
+independently of trusting the database (or this server's own judgment) --
+see `verifyEvidenceIndependently` in `@bles/sdk`.** Left in place, unedited
+below, so the original reasoning survives.
 
 Hash-chaining (D-16) makes the evidence log tamper-*evident*: mutate a
 historical row and recomputing the chain shows exactly where it breaks. It

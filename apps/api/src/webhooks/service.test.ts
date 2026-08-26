@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type Stripe from "stripe";
 import {
   createStaticDirectory,
+  generateEvidenceSigningKeyPair,
   parsePolicy,
   POLICY_SCHEMA_VERSION,
   toMinorUnits,
@@ -42,7 +43,7 @@ function policyFrom(): Policy {
 async function setupExecutedAuthorization() {
   const authorization = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository();
+  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
   const providerEvents = new InMemoryProviderEventRepository();
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,

@@ -23,6 +23,7 @@ import {
   createStaticDirectory,
   toMinorUnits,
   FixtureIntentCompiler,
+  generateEvidenceSigningKeyPair,
   loadCompilerFixtures,
 } from "@bles/core";
 import { buildServer, type ServerRepos } from "../../../apps/api/src/server.js";
@@ -37,7 +38,7 @@ import {
   createVirtualAuthenticator,
 } from "../../../apps/api/src/webauthn/test-support/virtual-authenticator.js";
 import { FakeAdapter } from "../../../apps/api/src/execution/test-support/fake-adapter.js";
-import { Bles, asExecutable, NoActiveMandateError } from "./index.js";
+import { Bles, asExecutable, NoActiveMandateError, verifyEvidenceIndependently } from "./index.js";
 
 let app: ReturnType<typeof buildServer>;
 let repos: ServerRepos;
@@ -54,7 +55,7 @@ beforeAll(async () => {
       createStaticDirectory([{ domain: "staples.com", display_name: "Staples" }]),
     ),
     agentKeys: new InMemoryAgentKeyRepository(),
-    evidence: new InMemoryEvidenceRepository(),
+    evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
   };
@@ -311,11 +312,49 @@ describe("the full journey through the SDK against a real server", () => {
     // (subject_type "mandate_version"), not the mandate itself.
     const evidence = await orgClient.listEvidence({ subject: mandate.mandate_version_id });
     expect(evidence.some((e) => e.type === "mandate.authenticated")).toBe(true);
+    expect(evidence.every((e) => typeof e.signature === "string" && e.signature.length > 0)).toBe(true);
 
     const chain = await orgClient.verifyEvidenceChain();
-    expect(chain.ok).toBe(true);
+    expect(chain).toEqual({ ok: true, signed: true });
 
     const reasonCodes = await orgClient.listReasonCodes();
     expect(reasonCodes.some((r) => r.code === "ALLOW_WITHIN_MANDATE")).toBe(true);
+  });
+
+  it("D-26/OQ-8: the full chain verifies independently, using nothing but listEvidence() + getEvidencePublicKey() -- no trust in this server's own /v1/evidence/verify judgment", async () => {
+    await setUpAuthenticatedMandate();
+
+    const [allEvidence, publicKey] = await Promise.all([
+      orgClient.listEvidence(),
+      orgClient.getEvidencePublicKey(),
+    ]);
+    expect(allEvidence.length).toBeGreaterThan(0);
+    expect(publicKey.algorithm).toBe("Ed25519");
+
+    const result = verifyEvidenceIndependently(allEvidence, publicKey.public_key);
+    expect(result).toEqual({ ok: true, signed: true });
+  });
+
+  it("THE ATTACK: verifyEvidenceIndependently catches a tampered payload fetched from the real API, entirely locally", async () => {
+    await setUpAuthenticatedMandate();
+    const [events, publicKey] = await Promise.all([
+      orgClient.listEvidence(),
+      orgClient.getEvidencePublicKey(),
+    ]);
+    expect(events.length).toBeGreaterThan(0);
+
+    // A real event, actually fetched over HTTP -- then tampered with after
+    // the fact, the way a compromised database (not this SDK) would produce
+    // one. The hash isn't recomputed, same as evidence.test.ts's simplest
+    // tamper case; the "full chain rewrite" that recomputes hashes
+    // consistently is proven once, thoroughly, in
+    // @bles/core's evidence.test.ts -- this test's job is only to prove the
+    // SDK's local verification wires up correctly against real server data.
+    const tampered = events.map((e) => ({ ...e }));
+    tampered[0]!.payload = { tampered: true };
+
+    const result = verifyEvidenceIndependently(tampered, publicKey.public_key);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("hash_mismatch");
   });
 });

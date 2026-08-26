@@ -7,15 +7,34 @@
  * back-to-back, in FIFO order. That proves the *locking logic* is correct;
  * `prisma-repository.test.ts` proves Postgres itself serializes two
  * connections the same way.
+ *
+ * Signs every event with a real Ed25519 key (D-26/OQ-8), the same as
+ * `PrismaEvidenceRepository` -- there is no "test mode" that skips signing,
+ * because a chain this repository produces but doesn't sign would prove
+ * nothing about whether signing actually works when exercised through
+ * `server.test.ts` and friends.
  */
 
-import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@bles/core";
+import {
+  exportPublicKeyBase64,
+  ID_PREFIX,
+  computeEventHash,
+  generateId,
+  signEventHash,
+  type EvidenceEvent,
+} from "@bles/core";
+import type { KeyObject } from "node:crypto";
 import { Mutex } from "../util/mutex.js";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 
 export class InMemoryEvidenceRepository implements EvidenceRepository {
   private readonly eventsByOrg = new Map<string, EvidenceEvent[]>();
   private readonly locks = new Map<string, Mutex>();
+  private readonly publicKeyBase64: string;
+
+  constructor(private readonly signingKey: KeyObject) {
+    this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
+  }
 
   async withOrganizationLock<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
     let mutex = this.locks.get(organizationId);
@@ -53,6 +72,7 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
       payload: input.payload,
       previous_hash: previousHash,
       hash,
+      signature: signEventHash(this.signingKey, hash),
       created_at: input.now,
     };
 
@@ -63,5 +83,9 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
 
   async listForOrganization(organizationId: string): Promise<EvidenceEvent[]> {
     return [...(this.eventsByOrg.get(organizationId) ?? [])];
+  }
+
+  getPublicKey(): string {
+    return this.publicKeyBase64;
   }
 }

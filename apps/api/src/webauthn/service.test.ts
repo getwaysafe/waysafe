@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createStaticDirectory,
+  generateEvidenceSigningKeyPair,
   parsePolicy,
   POLICY_SCHEMA_VERSION,
   toMinorUnits,
@@ -44,7 +45,7 @@ function repos(): WebauthnServiceRepos & { authorization: InMemoryAuthorizationR
   return {
     webauthn: new InMemoryWebauthnRepository(),
     authorization: new InMemoryAuthorizationRepository(createStaticDirectory([])),
-    evidence: new InMemoryEvidenceRepository(),
+    evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
   };
 }
 

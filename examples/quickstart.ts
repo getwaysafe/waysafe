@@ -25,6 +25,7 @@ import {
   Bles,
   BlesError,
   asExecutable,
+  verifyEvidenceIndependently,
   type AuthorizationDecision,
 } from "@bles/sdk";
 
@@ -67,7 +68,8 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
-  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@bles/core");
+  const { createStaticDirectory, FixtureIntentCompiler, generateEvidenceSigningKeyPair, loadCompilerFixtures } =
+    await import("@bles/core");
 
   const agentKeys = new InMemoryAgentKeyRepository();
   const app = buildServer({
@@ -82,7 +84,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
         ]),
       ),
       agentKeys,
-      evidence: new InMemoryEvidenceRepository(),
+      evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
     },
@@ -293,13 +295,23 @@ async function main() {
   ]);
   console.log(`  ${dim("mandates:")} ${mandates.length}  ${dim("authorizations:")} ${authorizations.length}`);
   console.log(`  ${dim("agents:")} ${agents.length}  ${dim("keys:")} ${keys.length}`);
-  console.log(`  ${dim("evidence events:")} ${evidence.length}  ${dim("chain verifies:")} ${chain.ok}`);
+  console.log(`  ${dim("evidence events:")} ${evidence.length}  ${dim("chain verifies:")} ${chain.ok} (signed: ${chain.signed ?? false})`);
+
+  section("10. Verify the evidence chain yourself -- no trust in this server's own judgment required");
+  // This is the point of signing (D-26/OQ-8): a third party -- an auditor,
+  // the principal, anyone -- can check every event's signature themselves,
+  // in their own process, using only the published public key. They never
+  // have to take this server's "ok: true" on faith.
+  const publicKey = await org.getEvidencePublicKey();
+  const independentResult = verifyEvidenceIndependently(evidence, publicKey.public_key);
+  console.log(`  ${dim("public key:")} ${publicKey.public_key}`);
+  console.log(`  ${dim("verified independently, locally, no server trust:")} ${JSON.stringify(independentResult)}`);
 
   section("Done");
   console.log("  You just compiled a policy, created and authenticated a mandate, asked permission");
   console.log("  for four purchases (an ALLOW, a step-up you approved yourself, and a DENY), executed");
-  console.log("  two of them, and read the evidence chain back -- entirely through @bles/sdk.");
-  console.log("  See apps/dashboard for the same data in a UI.\n");
+  console.log("  two of them, and read back and independently verified the signed evidence chain --");
+  console.log("  entirely through @bles/sdk. See apps/dashboard for the same data in a UI.\n");
 }
 
 main()

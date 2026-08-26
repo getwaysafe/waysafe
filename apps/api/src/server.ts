@@ -13,6 +13,7 @@ import {
   createCompilerFromEnv,
   hashPolicy,
   loadCompilerFixtures,
+  loadEvidencePublicKey,
   parsePolicy,
   verifyEvidenceChain,
   POLICY_SCHEMA_VERSION,
@@ -34,6 +35,7 @@ import type {
 } from "./authorization/types.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import type { EvidenceRepository } from "./evidence/types.js";
+import { loadOrGenerateEvidenceSigningKey } from "./evidence/signing-key.js";
 import { asExecutable } from "./execution/executable.js";
 import { executePayment } from "./execution/service.js";
 import { StripeAdapter } from "./payments/stripe-adapter.js";
@@ -142,10 +144,19 @@ declare module "fastify" {
 
 /** Routes that work without any credential -- everything else needs an
  * agent API key or an org credential (Phase 4 auth rule). The Stripe
- * webhook route is exempt for a different reason: it isn't an Bles
+ * webhook route is exempt for a different reason: it isn't a Bles
  * caller presenting a Bearer credential, it's Stripe presenting an HMAC
- * signature over the raw body, checked inside the route itself. */
-const PUBLIC_ROUTES = new Set(["/health", "/v1/reason-codes", "/v1/webhooks/stripe"]);
+ * signature over the raw body, checked inside the route itself. The evidence
+ * public key is exempt because the whole point of D-26/OQ-8 is that a third
+ * party -- who by definition has no Bles credential -- can verify a chain
+ * independently; gating the key that makes that possible behind a Bles
+ * credential would defeat it. */
+const PUBLIC_ROUTES = new Set([
+  "/health",
+  "/v1/reason-codes",
+  "/v1/webhooks/stripe",
+  "/v1/evidence/public-key",
+]);
 
 function zodIssues(error: z.ZodError) {
   return error.issues.map((i) => ({ path: `/${i.path.join("/")}`, message: i.message }));
@@ -175,6 +186,7 @@ function toReceiptJSON(auth: StoredAuthorization) {
 function toEvidenceJSON(event: EvidenceEvent) {
   return {
     id: event.id,
+    organization_id: event.organization_id,
     sequence: event.sequence,
     type: event.type,
     subject_type: event.subject_type,
@@ -182,6 +194,7 @@ function toEvidenceJSON(event: EvidenceEvent) {
     payload: event.payload,
     previous_hash: event.previous_hash,
     hash: event.hash,
+    signature: event.signature,
     created_at: event.created_at.toISOString(),
   };
 }
@@ -278,7 +291,9 @@ export function buildServer(options: BuildServerOptions = {}) {
   const repos: ServerRepos = options.repos ?? {
     authorization: new InMemoryAuthorizationRepository(EMPTY_DIRECTORY),
     agentKeys: new InMemoryAgentKeyRepository(),
-    evidence: new InMemoryEvidenceRepository(),
+    evidence: new InMemoryEvidenceRepository(
+      loadOrGenerateEvidenceSigningKey((msg) => app.log.warn(msg)),
+    ),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
   };
@@ -838,12 +853,32 @@ export function buildServer(options: BuildServerOptions = {}) {
     return reply.send({ events: filtered.map(toEvidenceJSON) });
   });
 
-  /** Tamper-evident, not tamper-proof (D-17): recomputes the chain from
-   * stored rows and reports exactly where it stops matching, if anywhere. */
+  /**
+   * Verifiable by a third party, not just tamper-evident (D-26, resolves
+   * OQ-8): recomputes the chain from stored rows, same as before, and now
+   * also checks every event's signature against the published public key --
+   * see /v1/evidence/public-key. `result.signed` is `true` only when that
+   * check ran and passed; `result.ok` alone doesn't distinguish "verified
+   * against a signature" from "internally consistent," so a caller checking
+   * only `ok` gets the weaker, still-accurate claim either way.
+   */
   app.get("/v1/evidence/verify", async (request, reply) => {
     const events = await repos.evidence.listForOrganization(request.auth!.organizationId);
-    const result = verifyEvidenceChain(events);
+    const publicKey = loadEvidencePublicKey(repos.evidence.getPublicKey());
+    const result = verifyEvidenceChain(events, publicKey);
     return reply.send(result);
+  });
+
+  /**
+   * The Ed25519 public key every evidence event's `signature` is checked
+   * against (D-26/OQ-8). Deliberately public (see PUBLIC_ROUTES) and
+   * deliberately not org-scoped: one signing key covers every
+   * organization's chain on this deployment, so there's one key to publish,
+   * not one per tenant. Base64 SPKI -- see @bles/core's
+   * `loadEvidencePublicKey` to reconstruct a usable key from it.
+   */
+  app.get("/v1/evidence/public-key", async (_request, reply) => {
+    return reply.send({ algorithm: "Ed25519", public_key: repos.evidence.getPublicKey() });
   });
 
   return app;

@@ -9,6 +9,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthorizationStatus, Decision } from "@bles/core";
 import {
+  computeEventHash,
+  exportPublicKeyBase64,
+  generateEvidenceSigningKeyPair,
+  signEventHash,
+} from "@bles/core";
+import {
   Bles,
   BlesError,
   AuthorizationStatusConflictError,
@@ -21,7 +27,9 @@ import {
   UnknownRailError,
   ValidationError,
   asExecutable,
+  verifyEvidenceIndependently,
   type AuthorizationDecision,
+  type EvidenceRecord,
   type ExecutableDecision,
 } from "./index.js";
 
@@ -450,12 +458,88 @@ describe("dashboard reads: query strings and wire mapping", () => {
     expect(list.map((d) => d.authorization_id)).toEqual(["auth_test", "auth_2"]);
   });
 
-  it("verifyEvidenceChain passes the ok/brokenAtSequence shape straight through", async () => {
+  it("verifyEvidenceChain passes the ok/brokenAtSequence/signed shape straight through", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(200, { ok: false, brokenAtSequence: 4, reason: "hash_mismatch" }));
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
     const result = await client.verifyEvidenceChain();
     expect(result).toEqual({ ok: false, brokenAtSequence: 4, reason: "hash_mismatch" });
+  });
+
+  it("getEvidencePublicKey requires no credential path and passes the key straight through", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (url: string | URL) => {
+      calls.push(url.toString());
+      return jsonResponse(200, { algorithm: "Ed25519", public_key: "deadbeef" });
+    });
+    const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
+
+    const result = await client.getEvidencePublicKey();
+    expect(calls[0]).toBe("https://api.example.test/v1/evidence/public-key");
+    expect(result).toEqual({ algorithm: "Ed25519", public_key: "deadbeef" });
+  });
+});
+
+describe("verifyEvidenceIndependently (D-26/OQ-8): local verification, no server trust required", () => {
+  const KEY_PAIR = generateEvidenceSigningKeyPair();
+  const PUBLIC_KEY_BASE64 = exportPublicKeyBase64(KEY_PAIR.publicKey);
+
+  function signedChain(length: number): EvidenceRecord[] {
+    const events: EvidenceRecord[] = [];
+    let previousHash: string | null = null;
+
+    for (let i = 0; i < length; i++) {
+      const sequence = i + 1;
+      const createdAt = new Date(2026, 0, 1, 0, 0, sequence).toISOString();
+      const payload = { note: `event ${sequence}` };
+      const hash = computeEventHash({
+        organization_id: "org_test",
+        sequence,
+        type: "test.event",
+        subject_type: "test",
+        subject_id: `subject_${sequence}`,
+        payload,
+        previous_hash: previousHash,
+        created_at: createdAt,
+      });
+      events.push({
+        id: `ev_${sequence}`,
+        organization_id: "org_test",
+        sequence,
+        type: "test.event",
+        subject_type: "test",
+        subject_id: `subject_${sequence}`,
+        payload,
+        previous_hash: previousHash,
+        hash,
+        signature: signEventHash(KEY_PAIR.privateKey, hash),
+        created_at: createdAt,
+      });
+      previousHash = hash;
+    }
+    return events;
+  }
+
+  it("verifies a genuinely signed chain fetched as wire JSON (string dates, no Date objects)", () => {
+    const events = signedChain(4);
+    expect(verifyEvidenceIndependently(events, PUBLIC_KEY_BASE64)).toEqual({ ok: true, signed: true });
+  });
+
+  it("THE ATTACK: a chain signed under a different key fails, even though every hash and link is self-consistent", () => {
+    const events = signedChain(3);
+    const otherKey = exportPublicKeyBase64(generateEvidenceSigningKeyPair().publicKey);
+    const result = verifyEvidenceIndependently(events, otherKey);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("THE ATTACK: a tampered payload with a stale signature is caught without ever calling this server again", () => {
+    const events = signedChain(3);
+    events[1]!.payload = { note: "forged after the fact" };
+    const result = verifyEvidenceIndependently(events, PUBLIC_KEY_BASE64);
+    expect(result.ok).toBe(false);
+    expect(result.brokenAtSequence).toBe(2);
+    expect(result.reason).toBe("hash_mismatch");
   });
 });
 

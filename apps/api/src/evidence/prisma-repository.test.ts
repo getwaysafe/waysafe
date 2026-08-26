@@ -9,13 +9,21 @@
 
 import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ID_PREFIX, generateId, verifyEvidenceChain, type EvidenceEvent } from "@bles/core";
+import {
+  ID_PREFIX,
+  generateEvidenceSigningKeyPair,
+  generateId,
+  loadEvidencePublicKey,
+  verifyEvidenceChain,
+  type EvidenceEvent,
+} from "@bles/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaEvidenceRepository } from "./prisma-repository.js";
 
 const prisma = new PrismaClient();
 const SUITE_NAME = "PrismaEvidenceRepository: organization lock against real Postgres";
 const reachable = await probeDatabase(prisma);
+const SIGNING_KEY = generateEvidenceSigningKeyPair().privateKey;
 
 requireDbOrExplainSkip(SUITE_NAME, reachable);
 
@@ -42,7 +50,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
   });
 
   it("appends events with increasing sequence and hash linkage, persisted in Postgres", async () => {
-    const repo = new PrismaEvidenceRepository(prisma);
+    const repo = new PrismaEvidenceRepository(prisma, SIGNING_KEY);
     const organizationId = await seedOrg();
 
     const first = await repo.withOrganizationLock(organizationId, () =>
@@ -72,12 +80,15 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
 
     const events = await repo.listForOrganization(organizationId);
     expect(verifyEvidenceChain(events)).toEqual({ ok: true });
+
+    const publicKey = loadEvidencePublicKey(repo.getPublicKey());
+    expect(verifyEvidenceChain(events, publicKey)).toEqual({ ok: true, signed: true });
   }, 30_000);
 
   it(
     "serializes ten concurrent appends into a single valid chain, no gaps or duplicate sequences",
     async () => {
-      const repo = new PrismaEvidenceRepository(prisma);
+      const repo = new PrismaEvidenceRepository(prisma, SIGNING_KEY);
       const organizationId = await seedOrg();
       const COUNT = 10;
 
@@ -118,7 +129,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       // unrelated concurrent appends throws a unique-constraint error
       // instead of being cleanly assigned the next sequence number. That's
       // exactly what the lock exists to turn into "just works."
-      const repo = new PrismaEvidenceRepository(prisma, { disableLockForTesting: true });
+      const repo = new PrismaEvidenceRepository(prisma, SIGNING_KEY, { disableLockForTesting: true });
       const organizationId = await seedOrg();
 
       const results = await Promise.allSettled([

@@ -13,11 +13,25 @@
  * Lock ordering convention (see D-16): when a single transaction needs both
  * this lock and `PrismaAuthorizationRepository`'s mandate lock, acquire the
  * organization lock first.
+ *
+ * Signs every event with the Ed25519 key it's constructed with (D-26/OQ-8).
+ * The private key never touches Postgres -- only `hash` and the resulting
+ * `signature` are stored -- which is exactly what makes the signature prove
+ * something to a party who doesn't trust this database: reproducing a valid
+ * one for a forged row needs the key, not write access here.
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
-import { ID_PREFIX, computeEventHash, generateId, type EvidenceEvent } from "@bles/core";
+import {
+  exportPublicKeyBase64,
+  ID_PREFIX,
+  computeEventHash,
+  generateId,
+  signEventHash,
+  type EvidenceEvent,
+} from "@bles/core";
+import type { KeyObject } from "node:crypto";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -40,12 +54,15 @@ export interface PrismaEvidenceRepositoryOptions {
 
 export class PrismaEvidenceRepository implements EvidenceRepository {
   private readonly disableLockForTesting: boolean;
+  private readonly publicKeyBase64: string;
 
   constructor(
     private readonly prisma: PrismaClient,
+    private readonly signingKey: KeyObject,
     options: PrismaEvidenceRepositoryOptions = {},
   ) {
     this.disableLockForTesting = options.disableLockForTesting ?? false;
+    this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
   }
 
   private get client(): Db {
@@ -93,6 +110,7 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
         payload: input.payload as unknown as Prisma.InputJsonValue,
         previousHash,
         hash,
+        signature: signEventHash(this.signingKey, hash),
         createdAt: input.now,
       },
     });
@@ -107,6 +125,10 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
     });
     return rows.map(toEvidenceEvent);
   }
+
+  getPublicKey(): string {
+    return this.publicKeyBase64;
+  }
 }
 
 interface EvidenceEventRow {
@@ -119,6 +141,7 @@ interface EvidenceEventRow {
   payload: Prisma.JsonValue;
   previousHash: string | null;
   hash: string;
+  signature: string;
   createdAt: Date;
 }
 
@@ -133,6 +156,7 @@ function toEvidenceEvent(row: EvidenceEventRow): EvidenceEvent {
     payload: row.payload as Record<string, unknown>,
     previous_hash: row.previousHash,
     hash: row.hash,
+    signature: row.signature,
     created_at: row.createdAt,
   };
 }

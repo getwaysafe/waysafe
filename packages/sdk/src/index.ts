@@ -31,7 +31,11 @@ import type {
   ReasonCode,
   ResolvedMerchant,
 } from "@bles/core";
-import type { ChainVerificationResult } from "@bles/core";
+import type { ChainVerificationResult, EvidenceEvent } from "@bles/core";
+import {
+  loadEvidencePublicKey,
+  verifyEvidenceChain as verifyEvidenceChainLocally,
+} from "@bles/core";
 
 // --- Errors -------------------------------------------------------------
 
@@ -414,6 +418,7 @@ export interface MandateDetail extends MandateListItem {
 
 export interface EvidenceRecord {
   id: string;
+  organization_id: string;
   sequence: number;
   type: string;
   subject_type: string;
@@ -421,7 +426,51 @@ export interface EvidenceRecord {
   payload: Record<string, unknown>;
   previous_hash: string | null;
   hash: string;
+  /** Base64 Ed25519 signature over `hash` (D-26/OQ-8). Verify it yourself
+   * with `verifyEvidenceIndependently` and the key from
+   * `getEvidencePublicKey()` -- don't just trust this server's own
+   * `verifyEvidenceChain()` judgment; that's the whole point of signing. */
+  signature: string;
   created_at: string;
+}
+
+export interface EvidencePublicKey {
+  algorithm: "Ed25519";
+  /** Base64 SPKI. Feed straight into `verifyEvidenceIndependently`. */
+  public_key: string;
+}
+
+/**
+ * Verifies a chain the same way the server's own `GET /v1/evidence/verify`
+ * does -- hash consistency plus every signature -- but locally, in your own
+ * process, using nothing but `listEvidence()`'s events and
+ * `getEvidencePublicKey()`'s key. This is the actual "verifiable by a third
+ * party" guarantee D-26/OQ-8 exists for: `verifyEvidenceChain()` (the class
+ * method) asks this server whether its own database checks out, which is
+ * useful but still trusts this server to answer honestly. This function
+ * trusts nothing but the Ed25519 math and a public key you've pinned
+ * yourself -- pure, no network call, works from a completely different
+ * process than the one that fetched the data.
+ */
+export function verifyEvidenceIndependently(
+  events: EvidenceRecord[],
+  publicKeyBase64: string,
+): ChainVerificationResult {
+  const publicKey = loadEvidencePublicKey(publicKeyBase64);
+  const asEvidenceEvents: EvidenceEvent[] = events.map((e) => ({
+    id: e.id,
+    organization_id: e.organization_id,
+    sequence: e.sequence,
+    type: e.type,
+    subject_type: e.subject_type,
+    subject_id: e.subject_id,
+    payload: e.payload,
+    previous_hash: e.previous_hash,
+    hash: e.hash,
+    signature: e.signature,
+    created_at: new Date(e.created_at),
+  }));
+  return verifyEvidenceChainLocally(asEvidenceEvents, publicKey);
 }
 
 // --- Wire shapes (private) ---------------------------------------------------
@@ -788,10 +837,27 @@ export class Bles {
     return events;
   }
 
-  /** Tamper-evident, not tamper-proof (D-17): recomputes the chain from
-   * stored rows and reports exactly where it stops matching, if anywhere. */
+  /**
+   * Verifiable by a third party, not just tamper-evident (D-26, resolves
+   * OQ-8): the server recomputes the chain from stored rows and checks
+   * every event's signature against its own published public key.
+   * `result.signed` is `true` only when that signature check ran and
+   * passed. This is a convenience call that trusts the server's own
+   * judgment about its own database -- for the stronger claim (verify
+   * without trusting this server at all), use `listEvidence()` +
+   * `getEvidencePublicKey()` with `verifyEvidenceIndependently`, which runs
+   * the same check yourself, locally.
+   */
   async verifyEvidenceChain(): Promise<ChainVerificationResult> {
     return this.get<ChainVerificationResult>("/v1/evidence/verify");
+  }
+
+  /** The Ed25519 public key every evidence event's `signature` is checked
+   * against (D-26/OQ-8). No credential required -- a third party auditing a
+   * receipt has none. Pin this value once verified out-of-band; a server
+   * that could change it at will could sign anything. */
+  async getEvidencePublicKey(): Promise<EvidencePublicKey> {
+    return this.get<EvidencePublicKey>("/v1/evidence/public-key");
   }
 
   // --- Internal ----------------------------------------------------------------

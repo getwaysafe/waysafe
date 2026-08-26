@@ -5,6 +5,7 @@ export * from "./policy.js";
 export * from "./domain.js";
 export * from "./time.js";
 export * from "./evidence.js";
+export * from "./evidence-signing.js";
 export * from "./payment-adapter.js";
 export * from "./engine/index.js";
 export * from "./compiler/index.js";

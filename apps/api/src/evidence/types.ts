@@ -37,4 +37,12 @@ export interface EvidenceRepository {
 
   /** In ascending sequence order -- the order `verifyEvidenceChain` requires. */
   listForOrganization(organizationId: string): Promise<EvidenceEvent[]>;
+
+  /** Base64 SPKI Ed25519 public key every event's `signature` is checked
+   * against (D-26/OQ-8). Derived from whatever signing key this instance
+   * was constructed with -- the single source of truth server.ts's
+   * /v1/evidence/verify and /v1/evidence/public-key routes both read from,
+   * so there is no second place a key could get out of sync with the one
+   * events are actually signed under. */
+  getPublicKey(): string;
 }

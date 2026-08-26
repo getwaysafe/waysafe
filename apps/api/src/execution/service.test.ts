@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createStaticDirectory,
+  generateEvidenceSigningKeyPair,
   parsePolicy,
   POLICY_SCHEMA_VERSION,
   toMinorUnits,
@@ -46,7 +47,7 @@ function policyFrom(overrides: Record<string, unknown> = {}): Policy {
 async function setup(policyOverrides: Record<string, unknown> = {}) {
   const authorization = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository();
+  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
     principalId: PRINCIPAL,

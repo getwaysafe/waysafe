@@ -28,6 +28,7 @@ import {
   Decision,
   ID_PREFIX,
   createStaticDirectory,
+  generateEvidenceSigningKeyPair,
   generateId,
   parsePolicy,
   POLICY_SCHEMA_VERSION,
@@ -48,7 +49,7 @@ import { authorize, type AuthorizeRepos } from "./service.js";
 // two repositories here keeps this file's scope narrow -- authorize() only
 // needs *a* valid, unrevoked key for the seeded agent, not a real one.
 const agentKeys = new InMemoryAgentKeyRepository();
-const evidence = new InMemoryEvidenceRepository();
+const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
 
 const prisma = new PrismaClient();
 const SUITE_NAME = "PrismaAuthorizationRepository: row lock against real Postgres";

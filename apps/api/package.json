@@ -10,6 +10,7 @@
     "start": "node --env-file-if-exists=../../.env dist/index.js",
     "compile": "tsx --env-file-if-exists=../../.env src/cli.ts",
     "compile:record": "tsx --env-file-if-exists=../../.env src/record-fixture.ts",
+    "keygen": "tsx src/keygen.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

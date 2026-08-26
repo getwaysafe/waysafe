@@ -4,6 +4,7 @@ import { buildServer, type ServerRepos } from "./server.js";
 import { PrismaAgentKeyRepository } from "./agent-keys/prisma-repository.js";
 import { PrismaAuthorizationRepository } from "./authorization/prisma-repository.js";
 import { PrismaEvidenceRepository } from "./evidence/prisma-repository.js";
+import { loadOrGenerateEvidenceSigningKey } from "./evidence/signing-key.js";
 import { PrismaWebauthnRepository } from "./webauthn/prisma-repository.js";
 import { PrismaProviderEventRepository } from "./webhooks/prisma-repository.js";
 
@@ -22,7 +23,7 @@ const repos: ServerRepos | undefined = process.env.DATABASE_URL
       return {
         authorization: new PrismaAuthorizationRepository(prisma, EMPTY_DIRECTORY),
         agentKeys: new PrismaAgentKeyRepository(prisma),
-        evidence: new PrismaEvidenceRepository(prisma),
+        evidence: new PrismaEvidenceRepository(prisma, loadOrGenerateEvidenceSigningKey()),
         webauthn: new PrismaWebauthnRepository(prisma),
         providerEvents: new PrismaProviderEventRepository(prisma),
       };

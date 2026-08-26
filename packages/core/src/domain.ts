@@ -251,8 +251,11 @@ export interface TransactionRecord {
 }
 
 /**
- * Append-only, hash-chained event log. `previous_hash` links each event to the
- * one before it within an organization, so tampering is detectable.
+ * Append-only, hash-chained, signed event log. `previous_hash` links each
+ * event to the one before it within an organization, so tampering is
+ * detectable; `signature` (base64, Ed25519 over `hash`) is what makes it
+ * verifiable by a third party who doesn't have to trust the database it
+ * came from -- see DECISIONS.md D-26 / OQ-8.
  */
 export interface EvidenceEvent {
   id: string;
@@ -264,5 +267,6 @@ export interface EvidenceEvent {
   payload: Record<string, unknown>;
   previous_hash: string | null;
   hash: string;
+  signature: string;
   created_at: Date;
 }

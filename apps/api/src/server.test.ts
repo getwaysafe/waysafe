@@ -4,7 +4,9 @@ import {
   toMinorUnits,
   Decision,
   FixtureIntentCompiler,
+  generateEvidenceSigningKeyPair,
   loadCompilerFixtures,
+  loadEvidencePublicKey,
 } from "@bles/core";
 import { buildServer, type ServerRepos } from "./server.js";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
@@ -40,7 +42,7 @@ beforeAll(async () => {
       ]),
     ),
     agentKeys: new InMemoryAgentKeyRepository(),
-    evidence: new InMemoryEvidenceRepository(),
+    evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
   };
@@ -448,14 +450,16 @@ describe("the full PRD demo, over HTTP, no internal function calls", () => {
       expect(receipt.json().decision).toBe(created.json().decision);
     }
 
-    // 9. The evidence chain accumulated by everything above verifies clean.
+    // 9. The evidence chain accumulated by everything above verifies clean --
+    // and signed (D-26/OQ-8): a third party checking this against the
+    // published public key, not just an operator trusting their own recompute.
     const verifyResponse = await app.inject({
       method: "GET",
       url: "/v1/evidence/verify",
       headers: authed(),
     });
     expect(verifyResponse.statusCode).toBe(200);
-    expect(verifyResponse.json()).toEqual({ ok: true });
+    expect(verifyResponse.json()).toEqual({ ok: true, signed: true });
 
     const evidenceResponse = await app.inject({
       method: "GET",
@@ -1128,5 +1132,79 @@ describe("dashboard reads (Week 5)", () => {
         expect(key.organization_id).toBe(ORG);
       }
     });
+  });
+});
+
+describe("evidence chain signing (Week 6, D-26/OQ-8)", () => {
+  it("GET /v1/evidence/public-key requires no credential and returns an Ed25519 SPKI key", async () => {
+    const response = await app.inject({ method: "GET", url: "/v1/evidence/public-key" });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.algorithm).toBe("Ed25519");
+    expect(typeof body.public_key).toBe("string");
+
+    const publicKey = loadEvidencePublicKey(body.public_key);
+    // Round-trips to a usable key: proves the published string is really
+    // this server's own signing key's public half, not a placeholder.
+    expect(publicKey.asymmetricKeyType).toBe("ed25519");
+  });
+
+  it("published public key matches what repos.evidence itself reports", async () => {
+    const response = await app.inject({ method: "GET", url: "/v1/evidence/public-key" });
+    expect(response.json().public_key).toBe(repos.evidence.getPublicKey());
+  });
+
+  it("GET /v1/evidence/verify reports signed:true for an org with at least one real event", async () => {
+    const agentResponse = await app.inject({
+      method: "POST",
+      url: "/v1/agents",
+      headers: authed(),
+      payload: { name: "signing test bot" },
+    });
+    expect(agentResponse.statusCode).toBe(201);
+
+    const response = await app.inject({ method: "GET", url: "/v1/evidence/verify", headers: authed() });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, signed: true });
+  });
+
+  it("THE ATTACK: a chain with one event's signature corrupted fails GET /v1/evidence/verify, even though the hash chain itself is untouched", async () => {
+    const created = await repos.agentKeys.createKey(
+      { organizationId: "org_signature_attack", name: "org admin" },
+      new Date(),
+    );
+    const victimHeaders = { authorization: `Bearer ${created.fullKey}` };
+
+    // An org credential presented to POST /v1/authorizations always fails
+    // the agent-key check (D-18) -- and per D-18, every key check writes an
+    // agent_key.verified/rejected EvidenceEvent unconditionally, before
+    // mandate resolution even runs. Simplest way to get a real event on the
+    // chain without a full mandate setup.
+    const authResponse = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: victimHeaders,
+      payload: {
+        agent_id: "agt_does_not_matter",
+        principal_id: "prin_does_not_matter",
+        action: { amount: 100, currency: "USD", merchant: { name: "Test" }, attestations: {} },
+      },
+    });
+    expect(authResponse.statusCode).toBe(404); // no_active_mandate -- expected, not the point of this test
+
+    // Simulates an attacker who controls the database directly (not through
+    // this API) and corrupts a stored signature without touching the hash --
+    // the scenario D-26 exists to catch. Real access, not a mock: this repo
+    // is the same InMemoryEvidenceRepository instance the running server
+    // reads from.
+    const events = await repos.evidence.listForOrganization("org_signature_attack");
+    expect(events.length).toBeGreaterThan(0);
+    events[0]!.signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+
+    const response = await app.inject({ method: "GET", url: "/v1/evidence/verify", headers: victimHeaders });
+    expect(response.statusCode).toBe(200);
+    const result = response.json();
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
   });
 });

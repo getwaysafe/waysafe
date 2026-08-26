@@ -6,6 +6,7 @@ import {
   Decision,
   ReasonCode,
   createStaticDirectory,
+  generateEvidenceSigningKeyPair,
   type Policy,
   type AuthorizationRequest,
 } from "@bles/core";
@@ -58,7 +59,7 @@ const NOW = new Date("2026-08-24T12:00:00.000Z");
 async function repoWithMandate(policy: Policy, overrides: Record<string, unknown> = {}) {
   const repo = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository();
+  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
   const seeded = repo.seedMandate({
     organizationId: ORG,
     principalId: PRINCIPAL,
@@ -179,7 +180,7 @@ describe("the actor-state gate (outside the pure engine)", () => {
   it("denies when no mandate matches and does not persist anything", async () => {
     const repo = new InMemoryAuthorizationRepository(DIRECTORY);
     const agentKeys = new InMemoryAgentKeyRepository();
-    const evidence = new InMemoryEvidenceRepository();
+    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
     const created = await agentKeys.createKey(
       { organizationId: ORG, agentId: AGENT, name: "test key" },
       NOW,

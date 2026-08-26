@@ -1,5 +1,6 @@
 /**
- * The evidence chain: append-only, hash-chained per organization.
+ * The evidence chain: append-only, hash-chained, and (as of D-26) signed,
+ * per organization.
  *
  * This module is pure -- no database, no clock, no I/O -- exactly like
  * `evaluate()`. Everything here operates on `EvidenceEvent` rows already
@@ -9,21 +10,28 @@
  * recomputes that chain from a list of stored events and reports exactly
  * where it stops matching.
  *
- * What this proves and what it doesn't (see DECISIONS.md D-17, OQ-8): a
- * mutated historical row breaks the hash chain, so this is *tamper-evident*
- * to anyone who can recompute it -- a bug, an outside attacker, or an
- * operator checking their own data. It is not *tamper-proof* or
- * independently *verifiable*: whoever controls the database that stores
- * these rows can mutate one and recompute every hash after it, and the
- * chain will look intact end to end. Proving integrity to someone who does
- * not have to trust that database needs a signature, which this module
- * deliberately does not add (OQ-8). Never describe what this module does as
- * "tamper-proof" or "verifiable" outside that narrow, trusted-recomputer
- * sense -- "tamper-evident" is the accurate word.
+ * What hash-chaining alone proves and what it doesn't (see DECISIONS.md
+ * D-17, resolved by D-26/OQ-8): a mutated historical row breaks the hash
+ * chain, so it's *tamper-evident* to anyone who can recompute it -- a bug,
+ * an outside attacker, or an operator checking their own data. What it
+ * cannot do alone is prove anything to someone who does not have to trust
+ * the database the rows came from: whoever controls that database can
+ * mutate a row *and* rewrite every hash after it, all the way to the tip,
+ * and the chain looks internally consistent throughout (see
+ * `evidence.test.ts`'s "full chain rewrite" case). Passing a `publicKey` to
+ * `verifyEvidenceChain` closes that gap -- each event's `signature` is
+ * checked against it too, and reproducing a valid one for a forged hash
+ * needs the private key (`evidence-signing.ts`), not just write access to
+ * Postgres. With a `publicKey` supplied, "tamper-evident" becomes accurate
+ * to call "verifiable" -- by a third party, not just an operator trusting
+ * their own recomputation. Without one (the parameter is optional, for
+ * internal consistency checks that don't need the stronger claim), this
+ * function still only proves what hash-chaining alone can.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, type KeyObject } from "node:crypto";
 import type { EvidenceEvent } from "./domain.js";
+import { verifyEventSignature } from "./evidence-signing.js";
 
 /** The fields that determine an event's hash. Excludes `id` (an internal
  * identifier, not chain content) and `hash` itself. */
@@ -50,13 +58,22 @@ export interface ChainVerificationResult {
   ok: boolean;
   /** The sequence number of the first event that fails to verify. */
   brokenAtSequence?: number;
-  reason?: "hash_mismatch" | "previous_hash_mismatch" | "sequence_gap";
+  reason?: "hash_mismatch" | "previous_hash_mismatch" | "sequence_gap" | "signature_invalid";
+  /** True only when a `publicKey` was supplied and every event's signature
+   * checked out -- the "verifiable by a third party" claim, not just
+   * "internally consistent." Absent (not `false`) when no `publicKey` was
+   * passed, so a caller can't mistake "we didn't check" for "we checked and
+   * it's unsigned." */
+  signed?: boolean;
 }
 
 /**
  * Verifies internal consistency of `events`: each event's stored hash must
  * match its recomputed content, each event's `previous_hash` must match the
  * prior event's `hash`, and sequence numbers must increase by exactly 1.
+ * When `publicKey` is supplied, also verifies each event's `signature`
+ * against it (D-26/OQ-8) -- this is what turns "tamper-evident" into
+ * "verifiable by a third party," see this file's module doc comment.
  *
  * `events` must already be in ascending sequence order -- this function does
  * not sort them, so a caller passing an unordered list gets a meaningless
@@ -66,7 +83,10 @@ export interface ChainVerificationResult {
  * display. An event physically deleted from the middle of a range shows up
  * as a `sequence_gap` at the event immediately after the gap.
  */
-export function verifyEvidenceChain(events: EvidenceEvent[]): ChainVerificationResult {
+export function verifyEvidenceChain(
+  events: EvidenceEvent[],
+  publicKey?: KeyObject,
+): ChainVerificationResult {
   const [head] = events;
   let previousHash: string | null = head ? head.previous_hash : null;
   let expectedSequence = head ? head.sequence : 0;
@@ -93,11 +113,15 @@ export function verifyEvidenceChain(events: EvidenceEvent[]): ChainVerificationR
       return { ok: false, brokenAtSequence: event.sequence, reason: "hash_mismatch" };
     }
 
+    if (publicKey && !verifyEventSignature(publicKey, event.hash, event.signature)) {
+      return { ok: false, brokenAtSequence: event.sequence, reason: "signature_invalid" };
+    }
+
     previousHash = event.hash;
     expectedSequence += 1;
   }
 
-  return { ok: true };
+  return publicKey ? { ok: true, signed: true } : { ok: true };
 }
 
 function sortKeysDeep(value: unknown): unknown {

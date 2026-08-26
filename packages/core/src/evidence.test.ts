@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { computeEventHash, verifyEvidenceChain } from "./evidence.js";
+import { generateEvidenceSigningKeyPair, signEventHash } from "./evidence-signing.js";
 import type { EvidenceEvent } from "./domain.js";
 
 const ORG = "org_test";
+const KEY_PAIR = generateEvidenceSigningKeyPair();
 
 function makeChain(length: number): EvidenceEvent[] {
   const events: EvidenceEvent[] = [];
@@ -32,6 +34,7 @@ function makeChain(length: number): EvidenceEvent[] {
       payload,
       previous_hash: previousHash,
       hash,
+      signature: signEventHash(KEY_PAIR.privateKey, hash),
       created_at: createdAt,
     });
     previousHash = hash;
@@ -120,4 +123,81 @@ describe("verifyEvidenceChain: tampering is detected", () => {
     expect(result.brokenAtSequence).toBe(1);
     expect(result.reason).toBe("hash_mismatch");
   });
+});
+
+describe("verifyEvidenceChain: signature verification (D-26/OQ-8)", () => {
+  it("verifies (and reports signed:true) when every signature checks out against the public key", () => {
+    const events = makeChain(4);
+    expect(verifyEvidenceChain(events, KEY_PAIR.publicKey)).toEqual({ ok: true, signed: true });
+  });
+
+  it("omitting publicKey never reports signed:true, even for a genuinely signed chain", () => {
+    const events = makeChain(4);
+    const result = verifyEvidenceChain(events);
+    expect(result.ok).toBe(true);
+    expect(result.signed).toBeUndefined();
+  });
+
+  it("THE ATTACK: a signature that doesn't verify under the given public key fails, even though hashes and links are all internally consistent", () => {
+    const events = makeChain(3);
+    events[1] = { ...events[1]!, signature: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" };
+
+    const result = verifyEvidenceChain(events, KEY_PAIR.publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.brokenAtSequence).toBe(2);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("THE ATTACK: a chain signed under a different key entirely fails verification against this public key", () => {
+    const events = makeChain(3);
+    const otherKeyPair = generateEvidenceSigningKeyPair();
+    const result = verifyEvidenceChain(events, otherKeyPair.publicKey);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it(
+    "THE ATTACK, the whole point of D-26: a full chain rewrite -- forging one event and cascading " +
+      "self-consistent hash/previous_hash edits all the way to the tip -- passes hash-only verification " +
+      "(the exact gap D-17 named) but fails signature verification, because the attacker never had the " +
+      "private key to re-sign what they forged",
+    () => {
+      const events = makeChain(5);
+      // Forge event 2's payload, then patiently rewrite every event after it
+      // so the hash chain stays perfectly self-consistent end to end -- a
+      // database-only attacker's best-case attempt, not a lazy one.
+      const forged = events.map((e) => ({ ...e }));
+      forged[1]!.payload = { note: "forged, and everything downstream rewritten to match" };
+      let previousHash = forged[0]!.hash;
+      for (let i = 1; i < forged.length; i++) {
+        const event = forged[i]!;
+        event.previous_hash = previousHash;
+        event.hash = computeEventHash({
+          organization_id: event.organization_id,
+          sequence: event.sequence,
+          type: event.type,
+          subject_type: event.subject_type,
+          subject_id: event.subject_id,
+          payload: event.payload,
+          previous_hash: event.previous_hash,
+          created_at: event.created_at.toISOString(),
+        });
+        // Deliberately NOT re-signing -- the attacker controls the database,
+        // not the private key that lives outside it.
+        previousHash = event.hash;
+      }
+
+      // The gap D-17 described: recomputing hashes alone, this looks like a
+      // perfectly intact chain.
+      expect(verifyEvidenceChain(forged)).toEqual({ ok: true });
+
+      // Checked against the public key, it isn't: every event from the
+      // forgery onward carries a signature over a hash that no longer
+      // matches what's signed.
+      const signedResult = verifyEvidenceChain(forged, KEY_PAIR.publicKey);
+      expect(signedResult.ok).toBe(false);
+      expect(signedResult.brokenAtSequence).toBe(2);
+      expect(signedResult.reason).toBe("signature_invalid");
+    },
+  );
 });

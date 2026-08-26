@@ -143,3 +143,6 @@ in plain language, for the principal to check before they authenticate. (`D-6`)
 - Every execution cites the exact policy hash that authorized it.
 - Passkeys prove authorization without Bles storing biometric data.
 - The system is designed to stay out of PCI scope, not to manage it.
+- Every evidence event is Ed25519-signed and independently verifiable --
+  `verifyEvidenceIndependently` in `@bles/sdk` checks a receipt without
+  trusting this server's own database or its judgment about it. (`D-26`)
