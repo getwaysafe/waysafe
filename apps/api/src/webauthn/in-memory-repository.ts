@@ -74,4 +74,11 @@ export class InMemoryWebauthnRepository implements WebauthnRepository {
     const row = this.credentialsById.get(credentialId);
     if (row) row.counter = counter;
   }
+
+  async hasCredentialForPrincipal(principalId: string): Promise<boolean> {
+    for (const row of this.credentialsById.values()) {
+      if (row.principalId === principalId) return true;
+    }
+    return false;
+  }
 }

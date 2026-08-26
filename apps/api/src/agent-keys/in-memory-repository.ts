@@ -25,7 +25,7 @@ export class InMemoryAgentKeyRepository implements AgentKeyRepository {
     const row: KeyRow = {
       id,
       organizationId: input.organizationId,
-      agentId: input.agentId,
+      agentId: input.agentId ?? null,
       prefix: generated.prefix,
       secretHash: generated.secretHash,
       name: input.name,
@@ -59,9 +59,11 @@ export class InMemoryAgentKeyRepository implements AgentKeyRepository {
     return { ok: true, keyId: row.id, organizationId: row.organizationId, agentId: row.agentId };
   }
 
-  async revokeKey(keyId: string, now: Date): Promise<void> {
+  async revokeKey(keyId: string, organizationId: string, now: Date): Promise<boolean> {
     const row = this.byId.get(keyId);
-    if (row && !row.revokedAt) row.revokedAt = now;
+    if (!row || row.organizationId !== organizationId || row.revokedAt) return false;
+    row.revokedAt = now;
+    return true;
   }
 
   /** Test/debug only -- not part of AgentKeyRepository. */

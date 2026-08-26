@@ -66,4 +66,8 @@ export interface WebauthnRepository {
   getCredentialByCredentialId(credentialId: string): Promise<StoredPasskeyCredential | null>;
 
   updateCredentialCounter(credentialId: string, counter: number, now: Date): Promise<void>;
+
+  /** For the authenticate/options endpoint: register a first passkey, or
+   * sign with one already registered? */
+  hasCredentialForPrincipal(principalId: string): Promise<boolean>;
 }

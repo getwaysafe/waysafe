@@ -278,7 +278,7 @@ describe("agent API keys (D-18)", () => {
       { organizationId: ORG, agentId: AGENT, name: "revocable key" },
       NOW,
     );
-    await agentKeys.revokeKey(revocable.id, NOW);
+    await agentKeys.revokeKey(revocable.id, ORG, NOW);
 
     const result = await authorize(repos, {
       organizationId: ORG,

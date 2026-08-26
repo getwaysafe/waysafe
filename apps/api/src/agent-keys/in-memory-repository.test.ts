@@ -39,10 +39,21 @@ describe("InMemoryAgentKeyRepository", () => {
     const repo = new InMemoryAgentKeyRepository();
     const created = await repo.createKey({ organizationId: ORG, agentId: AGENT, name: "bot" }, NOW);
 
-    await repo.revokeKey(created.id, NOW);
+    await repo.revokeKey(created.id, ORG, NOW);
     const result = await repo.verifyKey(created.fullKey, NOW);
 
     expect(result).toEqual({ ok: false, reason: "revoked" });
+  });
+
+  it("THE ATTACK: revoking with the wrong organizationId does nothing -- the key stays valid", async () => {
+    const repo = new InMemoryAgentKeyRepository();
+    const created = await repo.createKey({ organizationId: ORG, agentId: AGENT, name: "bot" }, NOW);
+
+    const revoked = await repo.revokeKey(created.id, OTHER_ORG, NOW);
+    expect(revoked).toBe(false);
+
+    const result = await repo.verifyKey(created.fullKey, NOW);
+    expect(result).toEqual({ ok: true, keyId: created.id, organizationId: ORG, agentId: AGENT });
   });
 
   it("keeps keys scoped to the organization and agent they were created for", async () => {

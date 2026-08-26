@@ -292,7 +292,11 @@ async function verifyAgentKey(
       organizationId: input.organizationId,
       type: outcome === "verified" ? "agent_key.verified" : "agent_key.rejected",
       subjectType: "agent",
-      subjectId: verification.ok ? verification.agentId : input.claimedAgentId,
+      // Null agentId means the presented credential was an org credential,
+      // not an agent key -- it can never equal claimedAgentId (D-18), so
+      // this only differs from input.claimedAgentId when verification
+      // actually resolved to the claimed agent.
+      subjectId: verification.ok && verification.agentId ? verification.agentId : input.claimedAgentId,
       payload: { key_prefix: extractKeyPrefix(input.apiKey), outcome },
       now: input.now,
     }),

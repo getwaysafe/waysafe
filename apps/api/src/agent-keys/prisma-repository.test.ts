@@ -55,10 +55,22 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     const { organizationId, agentId } = await seedOrgAndAgent();
 
     const created = await repo.createKey({ organizationId, agentId, name: "bot" }, NOW);
-    await repo.revokeKey(created.id, NOW);
+    await repo.revokeKey(created.id, organizationId, NOW);
     const result = await repo.verifyKey(created.fullKey, NOW);
 
     expect(result).toEqual({ ok: false, reason: "revoked" });
+  }, 30_000);
+
+  it("THE ATTACK: revoking with the wrong organizationId does nothing -- the key stays valid", async () => {
+    const repo = new PrismaAgentKeyRepository(prisma);
+    const { organizationId, agentId } = await seedOrgAndAgent();
+    const created = await repo.createKey({ organizationId, agentId, name: "bot" }, NOW);
+
+    const revoked = await repo.revokeKey(created.id, "org_some_other_tenant", NOW);
+    expect(revoked).toBe(false);
+
+    const result = await repo.verifyKey(created.fullKey, NOW);
+    expect(result).toEqual({ ok: true, keyId: created.id, organizationId, agentId });
   }, 30_000);
 
   it("THE ATTACK: rejects an unknown key without touching any real row", async () => {

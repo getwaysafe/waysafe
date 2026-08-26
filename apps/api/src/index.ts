@@ -1,9 +1,45 @@
-import { buildServer } from "./server.js";
+import { PrismaClient } from "@prisma/client";
+import { EMPTY_DIRECTORY } from "@agentpay/core";
+import { buildServer, type ServerRepos } from "./server.js";
+import { PrismaAgentKeyRepository } from "./agent-keys/prisma-repository.js";
+import { PrismaAuthorizationRepository } from "./authorization/prisma-repository.js";
+import { PrismaEvidenceRepository } from "./evidence/prisma-repository.js";
+import { PrismaWebauthnRepository } from "./webauthn/prisma-repository.js";
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
 
-const app = buildServer();
+/**
+ * Real persistence when DATABASE_URL is configured; otherwise the in-memory
+ * fakes buildServer() defaults to. A developer running `npm run dev` with no
+ * database gets a working (if non-persistent) server rather than a crash --
+ * D-15/D-16's in-memory repositories exist for exactly this, not just tests.
+ */
+const repos: ServerRepos | undefined = process.env.DATABASE_URL
+  ? (() => {
+      const prisma = new PrismaClient();
+      return {
+        authorization: new PrismaAuthorizationRepository(prisma, EMPTY_DIRECTORY),
+        agentKeys: new PrismaAgentKeyRepository(prisma),
+        evidence: new PrismaEvidenceRepository(prisma),
+        webauthn: new PrismaWebauthnRepository(prisma),
+      };
+    })()
+  : undefined;
+
+const app = buildServer({
+  repos,
+  webauthnConfig: {
+    rpId: process.env.AGENTPAY_RP_ID ?? "localhost",
+    origin: process.env.AGENTPAY_RP_ORIGIN ?? "http://localhost:3000",
+  },
+});
+
+if (!repos) {
+  app.log.warn(
+    "DATABASE_URL not set -- running on in-memory repositories. Nothing persists across restarts.",
+  );
+}
 
 app
   .listen({ port, host })

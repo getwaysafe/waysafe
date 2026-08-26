@@ -85,6 +85,11 @@ export class PrismaWebauthnRepository implements WebauthnRepository {
       data: { counter: BigInt(counter), lastUsedAt: now },
     });
   }
+
+  async hasCredentialForPrincipal(principalId: string): Promise<boolean> {
+    const count = await this.prisma.passkeyCredential.count({ where: { principalId } });
+    return count > 0;
+  }
 }
 
 interface ChallengeRow {

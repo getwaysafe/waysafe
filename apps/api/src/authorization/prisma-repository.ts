@@ -37,7 +37,12 @@ import {
 } from "@agentpay/core";
 import type {
   AuthorizationRepository,
+  CreatedAgent,
+  CreatedMandate,
   MandateGateResult,
+  MandateSummary,
+  NewAgent,
+  NewMandate,
   ResolveMandateInput,
   SaveAuthorizationInput,
   StoredAuthorization,
@@ -369,6 +374,81 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       throw new Error(`mandate version ${mandateVersionId} does not belong to mandate ${mandateId}`);
     }
     await client.mandate.update({ where: { id: mandateId }, data: { status: "ACTIVE" } });
+  }
+
+  async createMandate(input: NewMandate, now: Date): Promise<CreatedMandate> {
+    const mandateId = generateId(ID_PREFIX.mandate);
+    const mandateVersionId = generateId(ID_PREFIX.mandate_version);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.mandate.create({
+        data: {
+          id: mandateId,
+          organizationId: input.organizationId,
+          principalId: input.principalId,
+          status: "PENDING_AUTHENTICATION",
+          createdAt: now,
+        },
+      });
+      await tx.mandateVersion.create({
+        data: {
+          id: mandateVersionId,
+          mandateId,
+          version: 1,
+          intentText: input.intentText,
+          policy: input.policy as unknown as Prisma.InputJsonValue,
+          policyHash: input.policyHash,
+          compilerName: input.compilerName,
+          compilerModel: input.compilerModel,
+          assumptions: input.assumptions,
+          authenticatedAt: null,
+          createdAt: now,
+          agents: { create: input.agentIds.map((agentId) => ({ agentId })) },
+        },
+      });
+      await tx.mandate.update({
+        where: { id: mandateId },
+        data: { currentVersionId: mandateVersionId },
+      });
+    });
+
+    return { mandateId, mandateVersionId, policyHash: input.policyHash };
+  }
+
+  async getMandateSummary(mandateId: string): Promise<MandateSummary | null> {
+    const mandate = await this.client.mandate.findUnique({
+      where: { id: mandateId },
+      include: { currentVersion: true },
+    });
+    if (!mandate || !mandate.currentVersion) return null;
+    return {
+      mandateId: mandate.id,
+      mandateVersionId: mandate.currentVersion.id,
+      organizationId: mandate.organizationId,
+      principalId: mandate.principalId,
+      policyHash: mandate.currentVersion.policyHash,
+      status: mandate.status,
+    };
+  }
+
+  async getAuthorization(id: string): Promise<StoredAuthorization | null> {
+    const row = await this.client.authorization.findUnique({ where: { id } });
+    return row ? toStoredAuthorization(row) : null;
+  }
+
+  async createAgent(input: NewAgent, now: Date): Promise<CreatedAgent> {
+    const agentId = generateId(ID_PREFIX.agent);
+    await this.client.agent.create({
+      data: {
+        id: agentId,
+        organizationId: input.organizationId,
+        name: input.name,
+        description: input.description ?? null,
+        status: "ACTIVE",
+        createdAt: now,
+      },
+    });
+    return { agentId, organizationId: input.organizationId, name: input.name, status: "ACTIVE" };
   }
 
   // --- Internal --------------------------------------------------------------

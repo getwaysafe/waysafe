@@ -29,8 +29,13 @@ import {
 } from "@agentpay/core";
 import type {
   AuthorizationRepository,
+  CreatedAgent,
+  CreatedMandate,
   LedgerEntryType,
   MandateGateResult,
+  MandateSummary,
+  NewAgent,
+  NewMandate,
   ResolveMandateInput,
   SaveAuthorizationInput,
   StoredAuthorization,
@@ -409,6 +414,59 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     }
     mandate.currentVersion.authenticatedAt = now;
     mandate.status = "ACTIVE";
+  }
+
+  async createMandate(input: NewMandate, now: Date): Promise<CreatedMandate> {
+    void now;
+    for (const agentId of input.agentIds) {
+      const agent = this.agents.get(agentId);
+      if (!agent || agent.organizationId !== input.organizationId) {
+        throw new Error(`no such agent in this organization: ${agentId}`);
+      }
+    }
+
+    const mandateId = generateId(ID_PREFIX.mandate);
+    const mandateVersionId = generateId(ID_PREFIX.mandate_version);
+
+    this.mandates.set(mandateId, {
+      id: mandateId,
+      organizationId: input.organizationId,
+      principalId: input.principalId,
+      status: "PENDING_AUTHENTICATION",
+      currentVersion: {
+        id: mandateVersionId,
+        policy: input.policy,
+        policyHash: input.policyHash,
+        authenticatedAt: null,
+        agentIds: input.agentIds,
+      },
+    });
+
+    return { mandateId, mandateVersionId, policyHash: input.policyHash };
+  }
+
+  async getMandateSummary(mandateId: string): Promise<MandateSummary | null> {
+    const mandate = this.mandates.get(mandateId);
+    if (!mandate) return null;
+    return {
+      mandateId: mandate.id,
+      mandateVersionId: mandate.currentVersion.id,
+      organizationId: mandate.organizationId,
+      principalId: mandate.principalId,
+      policyHash: mandate.currentVersion.policyHash,
+      status: mandate.status,
+    };
+  }
+
+  async getAuthorization(id: string): Promise<StoredAuthorization | null> {
+    return this.authorizations.get(id) ?? null;
+  }
+
+  async createAgent(input: NewAgent, now: Date): Promise<CreatedAgent> {
+    void now;
+    const agentId = generateId(ID_PREFIX.agent);
+    this.agents.set(agentId, { id: agentId, organizationId: input.organizationId, status: "ACTIVE" });
+    return { agentId, organizationId: input.organizationId, name: input.name, status: "ACTIVE" };
   }
 
   // --- Internal --------------------------------------------------------------

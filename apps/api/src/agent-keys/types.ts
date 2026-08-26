@@ -1,5 +1,16 @@
 /**
- * Agent API key persistence boundary.
+ * API key persistence boundary -- both agent keys and org credentials.
+ *
+ * Same table, same hashing, same verification: `agentId: null` is an org
+ * credential (a developer/principal-side credential for account-management
+ * routes -- create a mandate, register an agent, view evidence), `agentId:
+ * string` is an agent key (D-18: the source of truth for which agent is
+ * acting on POST /v1/authorizations). A route that requires an agent key
+ * specifically rejects a `null` agentId itself -- see
+ * `authorization/service.ts`'s `verifyAgentKey`, where an org credential
+ * presented there simply fails to match any claimed `agent_id` and falls
+ * through to the same `DENY_AGENT_NOT_BOUND` path any other mismatched key
+ * would.
  *
  * `keys.ts` is pure (generation, hashing, prefix extraction) -- this
  * interface is the I/O it doesn't do. Verification doesn't need a lock
@@ -10,7 +21,8 @@
 
 export interface NewAgentApiKey {
   organizationId: string;
-  agentId: string;
+  /** Omit (or null) to mint an org credential instead of an agent key. */
+  agentId?: string | null;
   /** Display label, e.g. "production bot". Never used for matching. */
   name: string;
 }
@@ -26,7 +38,7 @@ export interface CreatedAgentApiKey {
 export interface AgentKeyRecord {
   id: string;
   organizationId: string;
-  agentId: string;
+  agentId: string | null;
   prefix: string;
   name: string;
   lastUsedAt: Date | null;
@@ -35,7 +47,7 @@ export interface AgentKeyRecord {
 }
 
 export type AgentKeyVerification =
-  | { ok: true; keyId: string; organizationId: string; agentId: string }
+  | { ok: true; keyId: string; organizationId: string; agentId: string | null }
   | { ok: false; reason: "not_found" | "revoked" };
 
 export interface AgentKeyRepository {
@@ -46,5 +58,9 @@ export interface AgentKeyRepository {
    * expected outcome the caller decides how to handle. */
   verifyKey(fullKey: string, now: Date): Promise<AgentKeyVerification>;
 
-  revokeKey(keyId: string, now: Date): Promise<void>;
+  /** Scoped to `organizationId` (D-1: nothing is queried without it) --
+   * revoking a key by id alone would let any authenticated credential
+   * revoke any other organization's key. Returns whether a matching,
+   * not-already-revoked key in that organization was found. */
+  revokeKey(keyId: string, organizationId: string, now: Date): Promise<boolean>;
 }

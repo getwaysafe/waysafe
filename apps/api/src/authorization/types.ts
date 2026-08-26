@@ -17,9 +17,12 @@
 
 import type {
   Accounting,
+  AgentStatus,
   AuthorizationStatus,
   Decision,
+  MandateStatus,
   MerchantDirectory,
+  Policy,
   ProposedAction,
   Reason,
   ResolvedMerchant,
@@ -65,7 +68,7 @@ export interface MandateGateOk {
   ok: true;
   mandateId: string;
   mandateVersionId: string;
-  policy: import("@agentpay/core").Policy;
+  policy: Policy;
   policyHash: string;
 }
 
@@ -99,6 +102,49 @@ export interface SaveAuthorizationInput {
   now: Date;
   /** Written atomically with the authorization row, inside the same mandate lock. */
   ledgerEntries: NewLedgerEntry[];
+}
+
+export interface NewMandate {
+  organizationId: string;
+  principalId: string;
+  /** Agents this mandate version delegates to. No ambient authority (D-1). */
+  agentIds: string[];
+  policy: Policy;
+  policyHash: string;
+  /** The principal's original words, verbatim (D-5). */
+  intentText: string;
+  compilerName: string;
+  compilerModel?: string;
+  /** Choices the compiler made that the principal did not state (D-6). */
+  assumptions: string[];
+}
+
+export interface CreatedMandate {
+  mandateId: string;
+  mandateVersionId: string;
+  policyHash: string;
+}
+
+export interface MandateSummary {
+  mandateId: string;
+  mandateVersionId: string;
+  organizationId: string;
+  principalId: string;
+  policyHash: string;
+  status: MandateStatus;
+}
+
+export interface NewAgent {
+  organizationId: string;
+  name: string;
+  description?: string | null;
+}
+
+export interface CreatedAgent {
+  agentId: string;
+  organizationId: string;
+  name: string;
+  status: AgentStatus;
 }
 
 export interface AuthorizationRepository {
@@ -156,4 +202,29 @@ export interface AuthorizationRepository {
    * anything; it trusts the caller already did.
    */
   activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void>;
+
+  /**
+   * Creates a Mandate (status PENDING_AUTHENTICATION) and its first
+   * MandateVersion (authenticatedAt null). Closes the D-7 gap: compiling a
+   * policy is a proposal (`POST /v1/mandates/compile`), never persisted;
+   * this is the step that turns a confirmed proposal into something that
+   * can be authenticated and, eventually, authorized against.
+   */
+  createMandate(input: NewMandate, now: Date): Promise<CreatedMandate>;
+
+  /** For the authenticate/options and /verify endpoints, which need to know
+   * who a mandate belongs to and its current policy_hash before any
+   * particular agent is in the picture. Null if no such mandate exists. */
+  getMandateSummary(mandateId: string): Promise<MandateSummary | null>;
+
+  /** The receipt endpoint. Null if no such authorization exists. */
+  getAuthorization(id: string): Promise<StoredAuthorization | null>;
+
+  /**
+   * Creates an Agent row. Kept on this interface rather than a separate
+   * one: agent existence and status are already read here (resolveMandateGate),
+   * and a standalone in-memory agent store would silently desync from the
+   * one the gate checks actually consult.
+   */
+  createAgent(input: NewAgent, now: Date): Promise<CreatedAgent>;
 }

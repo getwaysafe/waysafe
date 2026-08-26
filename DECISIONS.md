@@ -594,6 +594,94 @@ Implemented in `apps/api/src/webauthn/` (`webauthn.ts`, `types.ts`,
 
 ---
 
+## D-21 — Phase 4: the HTTP surface, and a generic auth gate that doesn't second-guess D-18
+
+Everything built in Weeks 2-3 was real but unreachable -- `apps/api/src/server.ts`
+still only exposed the four Week 1 routes. This closes the loop: eleven new
+routes, an auth model, and one end-to-end test that drives the whole PRD
+demo over `app.inject()` with no direct calls into `authorize()` or any
+repository -- compile, create a mandate, register and authenticate a real
+(virtual) passkey, mint an agent key, four authorization attempts, fetch
+each receipt, verify the evidence chain.
+
+**One credential table, two shapes, one gate.** `agent-keys` (D-18) already
+had everything a generic bearer-credential system needs -- prefix lookup,
+hashing, revocation. Broadening `agentId` to nullable turns the same table
+into org credentials too (account-management routes: create a mandate,
+register an agent, view evidence) without a second implementation to keep
+in sync. One `preHandler` hook covers every route except `/health` and
+`/v1/reason-codes`: no credential is a 401, full stop, before any handler
+runs.
+
+**The gate does not enforce which credential *shape* a route wants.** POST
+`/v1/authorizations` is documented as needing an agent key specifically, but
+the hook accepts either kind and lets the route find out the hard way: an
+org credential presented there has `agentId: null`, which can never equal
+`request.agent_id`, so `authorize()`'s own key check (D-18) rejects it as a
+mismatch -- an ordinary recorded `DENY_AGENT_NOT_BOUND`, not a special
+`403`. This was a deliberate choice over adding a second, route-specific
+gate: D-18 exists precisely so that "wrong credential for this agent" is
+always a decision with a reason code, never a bare error a caller has to
+special-case. Encoding "org credential can't authorize" as a second
+enforcement point would have created two different failure shapes for what
+is, underneath, the same fact -- the presented credential doesn't prove
+you're the agent you're claiming to be.
+
+**`POST /v1/mandates`, closing D-7's gap.** `policy_hash` is recomputed
+server-side from the submitted policy (`hashPolicy`), never trusted from the
+caller -- the whole point of the hash is that it's the thing a signature
+later commits to, so accepting a client-supplied one would let a caller
+submit a policy and a hash that don't correspond and never notice.
+
+**`/authenticate/options` picks the ceremony, not the caller.** One
+endpoint pair, two modes: if the mandate's principal has never registered a
+passkey, `options` returns a registration challenge (random); once they
+have, it returns an authentication challenge (`base64url(policy_hash)`,
+D-20). `/verify` dispatches on the `mode` the caller echoes back. A
+principal's first mandate therefore takes two options/verify round trips
+(register, then authenticate) and every mandate after that takes one --
+registering doesn't itself activate anything; only a real signature over
+that specific `policy_hash` does.
+
+**A real tenancy gap, found and fixed while wiring `DELETE
+/v1/agents/:id/keys/:keyId`.** `AgentKeyRepository.revokeKey` took only a
+key id -- any authenticated credential from *any* organization could revoke
+any key anywhere, since nothing scoped the lookup. D-1 says nothing is
+queried without `organizationId`; this one was. Fixed by adding
+`organizationId` to `revokeKey`'s signature and scoping the underlying
+query/update to it, returning whether a matching row was actually found and
+revoked (so the route can 404 instead of silently no-op). Both
+implementations and all three existing call sites were updated, and a
+negative test (`revoking with the wrong organizationId does nothing -- the
+key stays valid`) was added to both the in-memory and Prisma suites --
+exactly the kind of gap D-4's standard exists to catch, just found a phase
+late instead of at write time.
+
+**Deliberately minimal, stated rather than silently skipped:**
+- `POST /v1/agents/:id/keys` doesn't check the named agent exists in the
+  caller's organization before minting a key for it. In-memory, this
+  creates a key for a phantom agent id; against Prisma, the `agentId`
+  foreign key constraint fails and the request 500s rather than 404s. Worth
+  a proper existence check before this is public.
+- `GET /v1/evidence?subject=` matches exact `subject_id` only, not a
+  `subject_type:subject_id` pair or a prefix. Fine for the demo's scale;
+  will not stay fine once one organization has many subject types sharing
+  id-shaped values.
+- No rate limiting, no request size limits beyond Fastify's defaults, no
+  pagination on `GET /v1/evidence` for an organization with a long chain.
+
+Implemented in `apps/api/src/server.ts`. New
+`AuthorizationRepository` methods: `createMandate`, `getMandateSummary`,
+`getAuthorization`, `createAgent` (kept on this interface rather than a
+separate one -- a standalone in-memory agent store would desync from the
+one `resolveMandateGate` already reads). `apps/api/src/index.ts` now
+constructs Prisma-backed repositories when `DATABASE_URL` is set, in-memory
+otherwise, so a developer running the server without a database gets a
+working (non-persistent) server instead of a crash. Tested in
+`apps/api/src/server.test.ts`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

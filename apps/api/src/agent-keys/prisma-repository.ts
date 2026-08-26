@@ -29,7 +29,7 @@ export class PrismaAgentKeyRepository implements AgentKeyRepository {
       data: {
         id,
         organizationId: input.organizationId,
-        agentId: input.agentId,
+        agentId: input.agentId ?? null,
         prefix: generated.prefix,
         secretHash: generated.secretHash,
         name: input.name,
@@ -51,20 +51,16 @@ export class PrismaAgentKeyRepository implements AgentKeyRepository {
     if (row.revokedAt) {
       return { ok: false, reason: "revoked" };
     }
-    if (!row.agentId) {
-      // Schema allows an org-level key with no bound agent; not a shape
-      // this repository issues, but defend against one existing anyway.
-      return { ok: false, reason: "not_found" };
-    }
 
     await this.prisma.apiKey.update({ where: { id: row.id }, data: { lastUsedAt: now } });
     return { ok: true, keyId: row.id, organizationId: row.organizationId, agentId: row.agentId };
   }
 
-  async revokeKey(keyId: string, now: Date): Promise<void> {
-    await this.prisma.apiKey.updateMany({
-      where: { id: keyId, revokedAt: null },
+  async revokeKey(keyId: string, organizationId: string, now: Date): Promise<boolean> {
+    const result = await this.prisma.apiKey.updateMany({
+      where: { id: keyId, organizationId, revokedAt: null },
       data: { revokedAt: now },
     });
+    return result.count > 0;
   }
 }
