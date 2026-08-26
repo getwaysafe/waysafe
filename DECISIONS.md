@@ -1222,9 +1222,100 @@ described above; full suite (`npm test`, Postgres-backed included) and
 
 ---
 
+## D-27 — Week 6: the demo, and resolving OQ-1
+
+**Runs against real Postgres when `DATABASE_URL` is set, the same
+zero-config in-memory bootstrap `examples/quickstart.ts` uses when it
+isn't -- either way, one command.** "Make it runnable with one command
+against a fresh database" reads as two separate promises, not one: it
+must always run with nothing configured (quickstart's own bar), and it
+must be meaningful to run against a *real* database, not just a
+simulation of one, when there's a database to run it against. Every run
+mints a freshly-suffixed organization id (`org_demo_<timestamp>_<random>`)
+regardless of which branch runs, so repeating the demo against a
+Postgres instance that already has prior runs in it -- the realistic
+case for a database that's meant to stay around -- never collides with
+them. Running the real-database branch for the first time is what
+surfaced OQ-9 (no API route creates a `Principal`); worked around there
+by seeding one directly with Prisma, the same way the Prisma test suites
+already do, with a comment pointing at the open question rather than a
+silent fix.
+
+**The two step-up moments block on a real keypress, not a timer.** "A
+real human approval" is read literally: `askYesNo` uses Node's
+`readline/promises` against `process.stdin` and genuinely waits. Without
+a TTY attached (CI, a pipe, this being invoked non-interactively) it
+auto-decides after saying so out loud, rather than hanging -- a demo
+script that can silently stall a CI run or an automated smoke test would
+be a worse failure mode than a documented default. Both branches of both
+prompts were exercised end to end during development this way (approve
+verified-but-unlisted → executes; decline the spoofing attempt → stays
+declined), and separately confirmed against a live TTY is out of scope
+for what could be automated here -- see the testing note below.
+
+**The merchant-spoofing scenario asserts a name with no domain --
+literally D-3's own canonical example ("if the agent just types
+'Staples'").** Chose this over a lookalike domain (`staples-rewards.example`
+or similar) because it's the one case the codebase's own documentation
+already uses to explain D-3, so the demo's fourth attempt teaches exactly
+the invariant the README and D-3 already claim, rather than a different,
+untested edge of the same idea. It resolves to the same reason code as
+attempt 3's legitimate step-up (`STEP_UP_MERCHANT_NOT_ALLOWLISTED` --
+`evaluateMerchant` in `packages/core/src/engine/evaluate.ts` only reaches
+the more specific `STEP_UP_MERCHANT_UNVERIFIED` when an assertion
+*matches* an allow entry's scheme without being verified, and a bare
+`name` ref never matches a `domain`-scheme allow entry at all); the
+demo's own narration is what actually distinguishes them for a human
+deciding -- it prints `merchant.trust` and `merchant.refs` for both
+(`VERIFIED` with a real domain vs. `ASSERTED` with only a name) and says
+so explicitly, which is precisely the information the dashboard's own
+approval card (D-24) already surfaces for exactly this reason.
+
+**Resolves OQ-1: the demo uses the strict reading.** "Never spend more
+than $150" produces `DENY` at $203, not `STEP_UP` -- the PRD's original
+example was simply wrong about what its own instruction meant (D-11's
+semantics were never in question; OQ-1 was about which of two *already
+correct* fixtures to feature). `STEP_UP` is demonstrated separately, by
+the same instruction's other clause ("ask me before buying from another
+merchant") -- so the demo's four attempts map cleanly onto the two
+distinct clauses in one instruction, rather than needing a different
+instruction to show each decision.
+
+**No live-model compilation.** Uses `FixtureIntentCompiler`, the same
+deterministic replay `examples/quickstart.ts` uses, not
+`AnthropicIntentCompiler` even when `ANTHROPIC_API_KEY` is configured
+(unlike `apps/api/src/cli.ts`, which prefers live compilation when
+available). A script called "the demo" that's meant to tell the same
+four-beat story reliably, on request, can't have its downstream amounts
+implicitly depend on whatever numbers a live model happens to pick this
+time -- determinism here is a feature of a rehearsed presentation piece,
+not a limitation. Live compilation is still one command away
+(`npm run compile -w @bles/api -- "..."`) for anyone who wants to see
+that half of the story instead.
+
+**Tested by running it, not by an automated suite -- same bar
+`examples/quickstart.ts` was held to.** Run to completion, non-interactively
+(both step-up prompts hitting the no-TTY fallback, both directions),
+against the in-memory bootstrap and separately against real Postgres
+(twice in a row, against the same already-populated database, to prove
+the "fresh database on every run" claim rather than just asserting it);
+`npm run typecheck` clean. No automated test wraps the script itself --
+its value is a human watching it, which isn't something a unit test
+observes, and quickstart.ts set the precedent that this class of file is
+verified by execution, not assertions.
+
+Implemented in `examples/demo.ts` (new), plus a new `demo` script in the
+root `package.json`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
+
+**Resolved by D-27: the strict reading ("Never spend more than $150" →
+DENY at $203) is the one `examples/demo.ts` uses.** Left in place,
+unedited below, so the original reasoning survives.
 
 PRD §11 gives the instruction as:
 
@@ -1355,3 +1446,30 @@ describe the evidence log as "verifiable" or "tamper-proof" in the
 third-party sense. **Targeted for Week 6 hardening — does the signing scheme
 sign every event, or just periodically sign the chain's tip, and who holds
 the verification public key?**
+
+## OQ-9 — There is no API route that creates a Principal
+
+Found building `examples/demo.ts` (D-27): running it against real Postgres
+for the first time (every prior real-database test seeds a `Principal` row
+by calling Prisma directly, never through the API) hit `mandates_
+principalId_fkey` -- `POST /v1/mandates` requires a `principalId` that
+already exists as a row, and there is no route anywhere in `server.ts` that
+creates one. The in-memory repository never enforces this, so nothing
+earlier in the sprint that ran only against `InMemoryAuthorizationRepository`
+(which is most of `apps/api/src/*.test.ts`) could have surfaced it, and
+`@bles/sdk` has no `createPrincipal` either -- there was never anywhere
+across five weeks of work that this gap would show up other than actually
+running the full journey against a real database, which is exactly what
+D-27 did for the first time. Worked around in the demo by seeding the
+`Principal` row with Prisma directly on the real-database branch (mirroring
+what `authorization/prisma-repository.test.ts`'s `seedMandate` helper has
+done since Week 2) -- not a fix, a documented stopgap so the demo runs. A
+real fix needs a product answer this file shouldn't guess at alone: does a
+principal get created implicitly the first time a mandate names one (like
+`git commit --author` creating a person nobody registered first), or does
+onboarding a principal need to be its own explicit step with its own
+identity and consent story -- given a principal is the person whose money
+is actually at stake, the latter seems more likely right, but that's a
+call for whoever owns the product surface, not a schema detail to default
+silently. **Blocking for any integration that runs against real
+persistence, not just the demo.**

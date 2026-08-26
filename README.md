@@ -9,11 +9,13 @@ const decision = await bles.authorize({ agent, principal, action });
 // => ALLOW | DENY | STEP_UP
 ```
 
-**Status: Week 6 of 6.** Domain model, policy engine, WebAuthn + agent keys,
-payment execution, the TypeScript SDK, and the developer dashboard are all in
-place. Week 6 is hardening: the dashboard's step-up approval UI, this rename
-(see `DECISIONS.md` D-19/D-25), a signed and independently verifiable
-evidence chain (D-26/OQ-8), and a scripted end-to-end demo.
+**Status: Week 6 of 6, complete.** ✅ Domain model, policy engine, WebAuthn +
+agent keys, payment execution, the TypeScript SDK, and the developer
+dashboard are all in place. Week 6 shipped the dashboard's step-up approval
+UI, this rename (`DECISIONS.md` D-19/D-25), a signed and independently
+verifiable evidence chain (D-26/OQ-8), and a scripted end-to-end demo
+(`npm run demo`, D-27). One open item remains before a real launch: OQ-9 --
+there is no way to create a `Principal` through the API yet.
 
 ---
 
@@ -47,6 +49,18 @@ cp apps/dashboard/.env.example apps/dashboard/.env.local
 # set BLES_DASHBOARD_SESSION_SECRET -- see the file for how
 npm run dev -w @bles/dashboard
 ```
+
+Or watch the whole story end to end -- an instruction, a passkey, four
+agent attempts (including a merchant-spoofing attempt a human refuses live),
+and a signed receipt verified independently:
+
+```bash
+npm run demo
+```
+
+Also one command with nothing configured; runs against real Postgres
+instead of in-memory if `DATABASE_URL` is set, minting a fresh organization
+every time so re-running it never collides with a prior run.
 
 ---
 
@@ -84,7 +98,7 @@ packages/db       Prisma schema (Postgres)
 packages/sdk      TypeScript SDK — the developer contract
 apps/api          REST API
 apps/dashboard    developer dashboard (Next.js, read-mostly)
-examples/         runnable quickstart -- clone and run, not prose
+examples/         runnable quickstart and demo -- clone and run, not prose
 fixtures/compiler recorded compiler output, replayed in tests
 DECISIONS.md      every default taken, and the open questions
 ```
@@ -131,7 +145,7 @@ in plain language, for the principal to check before they authenticate. (`D-6`)
 | 3 ✅ | WebAuthn, agent API keys, hash-chained audit log | Every decision tied to an authenticated mandate version |
 | 4 ✅ | Payment adapter + Stripe test mode + x402 stub | ALLOW executes, DENY cannot, STEP_UP waits |
 | 5 ✅ | TypeScript SDK + developer dashboard | A new developer integrates without raw REST |
-| 6 | Demo, hardening, docs | Full lifecycle, instruction to verifiable receipt |
+| 6 ✅ | Demo, hardening, docs | Full lifecycle, instruction to verifiable receipt |
 
 ---
 

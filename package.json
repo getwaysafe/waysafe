@@ -18,6 +18,7 @@
     "test:watch": "vitest",
     "dev:api": "npm run dev -w @bles/api",
     "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
+    "demo": "tsx --env-file-if-exists=.env examples/demo.ts",
     "db:generate": "npm run generate -w @bles/db",
     "db:push": "npm run push -w @bles/db"
   },
