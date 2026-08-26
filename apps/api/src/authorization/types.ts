@@ -35,6 +35,11 @@ export interface NewLedgerEntry {
   type: LedgerEntryType;
   /** Signed minor units: RESERVATION/CAPTURE positive, RELEASE/CREDIT negative. */
   amount: number;
+  /** Set only on CAPTURE entries (D-13): which rail executed, and what it
+   * took in minor units. A receipt that can't show this can't prove the
+   * router stayed neutral across rails. */
+  provider?: string;
+  providerFee?: number;
 }
 
 export interface StoredAuthorization {
@@ -147,6 +152,22 @@ export interface CreatedAgent {
   status: AgentStatus;
 }
 
+export interface RecordExecutionInput {
+  authorizationId: string;
+  provider: string;
+  providerReference: string;
+  /** Integer minor units. */
+  providerFee: number;
+}
+
+export interface RecordRefundInput {
+  authorizationId: string;
+  /** Positive integer minor units -- stored as a negative CREDIT entry. */
+  amount: number;
+  provider: string;
+  providerReference: string;
+}
+
 export interface AuthorizationRepository {
   /**
    * Look up the mandate this request should be evaluated against and check
@@ -227,4 +248,29 @@ export interface AuthorizationRepository {
    * one the gate checks actually consult.
    */
   createAgent(input: NewAgent, now: Date): Promise<CreatedAgent>;
+
+  /**
+   * Releases the authorization's existing RESERVATION and replaces it with
+   * a CAPTURE for the same amount, tagged with which rail executed and
+   * what it took (D-13) -- net zero change to cumulative spend, since the
+   * reservation already counted against it at decision time (D-4) -- then
+   * flips the authorization to EXECUTED. Throws if the authorization isn't
+   * currently AUTHORIZED or STEP_UP_APPROVED: defense in depth, not the
+   * primary guard -- the primary guard is that callers can only reach this
+   * with an `ExecutableAuthorization` (`execution/executable.ts`), which
+   * cannot be constructed for any other status. Must be called from inside
+   * `withMandateLock` for the authorization's mandate.
+   */
+  recordExecution(input: RecordExecutionInput, now: Date): Promise<StoredAuthorization>;
+
+  /**
+   * A CREDIT ledger entry for a refund on an already-EXECUTED authorization.
+   * Whether this affects cumulative spend is decided at read time by
+   * `getSpendSnapshot` (the policy's own `refunds_credit_budget`, D-4), not
+   * here -- this always records the fact of the refund. Does not change
+   * the authorization's status; a refund doesn't un-execute a payment.
+   * Must be called from inside `withMandateLock` for the authorization's
+   * mandate.
+   */
+  recordRefund(input: RecordRefundInput, now: Date): Promise<void>;
 }

@@ -5,6 +5,7 @@ import { PrismaAgentKeyRepository } from "./agent-keys/prisma-repository.js";
 import { PrismaAuthorizationRepository } from "./authorization/prisma-repository.js";
 import { PrismaEvidenceRepository } from "./evidence/prisma-repository.js";
 import { PrismaWebauthnRepository } from "./webauthn/prisma-repository.js";
+import { PrismaProviderEventRepository } from "./webhooks/prisma-repository.js";
 
 const port = Number(process.env.PORT ?? 3001);
 const host = process.env.HOST ?? "0.0.0.0";
@@ -23,6 +24,7 @@ const repos: ServerRepos | undefined = process.env.DATABASE_URL
         agentKeys: new PrismaAgentKeyRepository(prisma),
         evidence: new PrismaEvidenceRepository(prisma),
         webauthn: new PrismaWebauthnRepository(prisma),
+        providerEvents: new PrismaProviderEventRepository(prisma),
       };
     })()
   : undefined;

@@ -11,11 +11,15 @@ import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
+import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
 import {
   buildAuthenticationResponse,
   buildRegistrationResponse,
   createVirtualAuthenticator,
 } from "./webauthn/test-support/virtual-authenticator.js";
+import { FakeAdapter } from "./execution/test-support/fake-adapter.js";
+import { X402Adapter } from "./payments/x402-adapter.js";
+import Stripe from "stripe";
 
 let app: ReturnType<typeof buildServer>;
 let repos: ServerRepos;
@@ -23,6 +27,8 @@ let orgKey: string;
 
 const ORG = "org_test";
 const WEBAUTHN_CONFIG = { rpId: "localhost", origin: "http://localhost:3000" };
+const WEBHOOK_SECRET = "whsec_test_secret_for_server_tests";
+const fakeAdapter = new FakeAdapter({ providerFee: 199 });
 
 beforeAll(async () => {
   repos = {
@@ -36,6 +42,7 @@ beforeAll(async () => {
     agentKeys: new InMemoryAgentKeyRepository(),
     evidence: new InMemoryEvidenceRepository(),
     webauthn: new InMemoryWebauthnRepository(),
+    providerEvents: new InMemoryProviderEventRepository(),
   };
 
   app = buildServer({
@@ -43,6 +50,8 @@ beforeAll(async () => {
     logger: false,
     repos,
     webauthnConfig: WEBAUTHN_CONFIG,
+    adapters: { x402: new X402Adapter(), fake: fakeAdapter },
+    stripeWebhookSecret: WEBHOOK_SECRET,
   });
   await app.ready();
 
@@ -457,5 +466,457 @@ describe("the full PRD demo, over HTTP, no internal function calls", () => {
     expect(types).toContain("passkey.registered");
     expect(types).toContain("mandate.authenticated");
     expect(types).toContain("agent_key.verified");
+  });
+});
+
+describe("payment execution and step-up completion (Week 4)", () => {
+  async function createActiveMandate(overrides: Record<string, unknown> = {}) {
+    const agentResponse = await app.inject({
+      method: "POST",
+      url: "/v1/agents",
+      headers: authed(),
+      payload: { name: "execution test bot" },
+    });
+    const agentId = agentResponse.json().agent_id;
+    const principalId = `prin_exec_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    const mandateResponse = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: authed(),
+      payload: {
+        principal_id: principalId,
+        agent_ids: [agentId],
+        policy: {
+          schema_version: "agentpay.policy/v1",
+          summary: "test",
+          currency: "USD",
+          merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+          categories: { allow: [], deny: [], deny_mcc: [], unlisted: "ALLOW" },
+          cumulative_limits: [],
+          step_up: { ttl_seconds: 900 },
+          accounting: {},
+          expires_at: "2026-09-23T12:00:00.000Z",
+          ...overrides,
+        },
+        intent_text: "test policy for execution",
+        compiler_name: "manual",
+      },
+    });
+    const mandateId = mandateResponse.json().mandate_id;
+
+    const authenticator = createVirtualAuthenticator();
+    const registerOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: registerChallenge, rp_id: rpId, origin } = registerOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "register",
+        challenge: registerChallenge,
+        response: buildRegistrationResponse({ authenticator, rpId, origin, challenge: registerChallenge }),
+      },
+    });
+
+    const authOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: authChallenge } = authOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "authenticate",
+        challenge: authChallenge,
+        response: buildAuthenticationResponse({ authenticator, rpId, origin, challenge: authChallenge }),
+      },
+    });
+
+    const keyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${agentId}/keys`,
+      headers: authed(),
+      payload: { name: "exec key" },
+    });
+    const agentApiKey = keyResponse.json().api_key;
+
+    return { agentId, principalId, mandateId, agentApiKey };
+  }
+
+  function authorizeRequest(mandateId: string, agentId: string, principalId: string, amount: number) {
+    return {
+      agent_id: agentId,
+      principal_id: principalId,
+      mandate_id: mandateId,
+      action: {
+        amount: toMinorUnits(amount, "USD"),
+        currency: "USD",
+        // A directory-verified domain (D-3): unlisted + VERIFIED under
+        // unlisted:"ALLOW" is a genuine ALLOW. A name-only assertion would
+        // cap at STEP_UP regardless -- the ceiling these tests aren't
+        // trying to exercise.
+        merchant: { domain: "staples.com" },
+        attestations: {},
+      },
+      context: {},
+    };
+  }
+
+  it("executes an ALLOWed authorization against the fake rail: status EXECUTED, receipt shows the rail and fee", async () => {
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate();
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 42),
+    });
+    expect(decided.json().decision).toBe(Decision.ALLOW);
+    const id = decided.json().id;
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(executed.statusCode).toBe(200);
+    expect(executed.json().status).toBe("EXECUTED");
+
+    const receipt = await app.inject({ method: "GET", url: `/v1/authorizations/${id}`, headers: authed() });
+    expect(receipt.json().status).toBe("EXECUTED");
+  });
+
+  it("THE ATTACK: a DENIED authorization cannot be executed -- 409, adapter never called", async () => {
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate({
+      categories: { allow: [], deny: ["gambling"], deny_mcc: [], unlisted: "ALLOW" },
+    });
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: {
+        agent_id: agentId,
+        principal_id: principalId,
+        mandate_id: mandateId,
+        action: {
+          amount: toMinorUnits(50, "USD"),
+          currency: "USD",
+          merchant: { name: "Casino" },
+          category: "gambling",
+          attestations: {},
+        },
+        context: {},
+      },
+    });
+    expect(decided.json().decision).toBe(Decision.DENY);
+    const id = decided.json().id;
+    const callsBefore = fakeAdapter.calls.length;
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+
+    expect(executed.statusCode).toBe(409);
+    expect(fakeAdapter.calls.length).toBe(callsBefore);
+  });
+
+  it("THE ATTACK: a double-execute attempt is rejected on the second call", async () => {
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate();
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 10),
+    });
+    const id = decided.json().id;
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(second.statusCode).toBe(409);
+  });
+
+  it("step-up: approve makes it executable; decline releases the reservation and blocks execution", async () => {
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate({
+      step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 900 },
+    });
+
+    const stepUpDecision = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 20),
+    });
+    expect(stepUpDecision.json().decision).toBe(Decision.STEP_UP);
+    const stepUpId = stepUpDecision.json().id;
+
+    const declined = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${stepUpId}/step-up`,
+      headers: authed(),
+      payload: { outcome: "declined" },
+    });
+    expect(declined.json().status).toBe("STEP_UP_DECLINED");
+
+    const rejectedExecute = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${stepUpId}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(rejectedExecute.statusCode).toBe(409);
+
+    const secondDecision = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 25),
+    });
+    const secondId = secondDecision.json().id;
+
+    const approved = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${secondId}/step-up`,
+      headers: authed(),
+      payload: { outcome: "approved" },
+    });
+    expect(approved.json().status).toBe("STEP_UP_APPROVED");
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${secondId}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(executed.statusCode).toBe(200);
+    expect(executed.json().status).toBe("EXECUTED");
+  });
+
+  it("THE ATTACK: a pending step-up past its TTL cannot be executed, even without an explicit decline", async () => {
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate({
+      step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 1 },
+    });
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 20),
+    });
+    expect(decided.json().decision).toBe(Decision.STEP_UP);
+    const id = decided.json().id;
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const receipt = await app.inject({ method: "GET", url: `/v1/authorizations/${id}`, headers: authed() });
+    expect(receipt.json().status).toBe("EXPIRED");
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+    expect(executed.statusCode).toBe(409);
+  });
+});
+
+describe("POST /v1/webhooks/stripe", () => {
+  const stripeForSigning = new Stripe("sk_test_unused_for_signing");
+
+  async function createExecutedAuthorization() {
+    const agentResponse = await app.inject({
+      method: "POST",
+      url: "/v1/agents",
+      headers: authed(),
+      payload: { name: "webhook test bot" },
+    });
+    const agentId = agentResponse.json().agent_id;
+    const principalId = `prin_webhook_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    const mandateResponse = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: authed(),
+      payload: {
+        principal_id: principalId,
+        agent_ids: [agentId],
+        policy: {
+          schema_version: "agentpay.policy/v1",
+          summary: "test",
+          currency: "USD",
+          merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+          categories: { allow: [], deny: [], deny_mcc: [], unlisted: "ALLOW" },
+          cumulative_limits: [],
+          step_up: { ttl_seconds: 900 },
+          accounting: {},
+          expires_at: "2026-09-23T12:00:00.000Z",
+        },
+        intent_text: "test policy for webhook",
+        compiler_name: "manual",
+      },
+    });
+    const mandateId = mandateResponse.json().mandate_id;
+
+    const authenticator = createVirtualAuthenticator();
+    const registerOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: registerChallenge, rp_id: rpId, origin } = registerOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "register",
+        challenge: registerChallenge,
+        response: buildRegistrationResponse({ authenticator, rpId, origin, challenge: registerChallenge }),
+      },
+    });
+    const authOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: authChallenge } = authOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "authenticate",
+        challenge: authChallenge,
+        response: buildAuthenticationResponse({ authenticator, rpId, origin, challenge: authChallenge }),
+      },
+    });
+
+    const keyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${agentId}/keys`,
+      headers: authed(),
+      payload: { name: "webhook exec key" },
+    });
+    const agentApiKey = keyResponse.json().api_key;
+
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: {
+        agent_id: agentId,
+        principal_id: principalId,
+        mandate_id: mandateId,
+        action: {
+          amount: toMinorUnits(60, "USD"),
+          currency: "USD",
+          merchant: { domain: "staples.com" },
+          attestations: {},
+        },
+        context: {},
+      },
+    });
+    const authorizationId = decided.json().id;
+
+    await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${authorizationId}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
+
+    return authorizationId;
+  }
+
+  function refundPayload(eventId: string, authorizationId: string, amountRefunded: number): string {
+    return JSON.stringify({
+      id: eventId,
+      object: "event",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_test_webhook",
+          object: "charge",
+          amount_refunded: amountRefunded,
+          metadata: { agentpay_authorization_id: authorizationId },
+        },
+      },
+    });
+  }
+
+  it("applies a genuinely signed refund event, and redelivery is idempotent -- one ledger effect", async () => {
+    const authorizationId = await createExecutedAuthorization();
+    const payload = refundPayload(`evt_${Date.now()}`, authorizationId, toMinorUnits(60, "USD"));
+    const signature = stripeForSigning.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload,
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().kind).toBe("applied");
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().kind).toBe("duplicate");
+
+    const events = await repos.evidence.listForOrganization(ORG);
+    expect(events.filter((e) => e.type === "refund.applied" && e.subject_id === authorizationId)).toHaveLength(1);
+  });
+
+  it("THE ATTACK: a forged signature is rejected outright", async () => {
+    const payload = refundPayload(`evt_forged_${Date.now()}`, "auth_does_not_matter", 1000);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": "t=1,v1=0000000000forgedvalue" },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("does not require a Bearer credential -- Stripe authenticates via signature, not a bearer token", async () => {
+    const authorizationId = await createExecutedAuthorization();
+    const payload = refundPayload(`evt_nocred_${Date.now()}`, authorizationId, toMinorUnits(60, "USD"));
+    const signature = stripeForSigning.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
   });
 });

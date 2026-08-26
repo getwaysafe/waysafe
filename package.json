@@ -12,7 +12,8 @@
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && npm run typecheck:tests",
+    "typecheck:tests": "tsc -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "npm run dev -w @agentpay/api",

@@ -60,7 +60,7 @@ describe("verifyEvidenceChain: tampering is detected", () => {
     // Tamper event 2 (index 1) -- change what happened, leave the stored
     // hash as it was. The simplest, laziest tamper: edit the row, don't
     // touch the hash column.
-    events[1] = { ...events[1], payload: { note: "forged" } };
+    events[1] = { ...events[1]!, payload: { note: "forged" } };
 
     const result = verifyEvidenceChain(events);
     expect(result.ok).toBe(false);
@@ -77,7 +77,7 @@ describe("verifyEvidenceChain: tampering is detected", () => {
     // written after -- and the attacker would need to also rewrite every
     // event after the one they forged, cascading all the way to the tip.
     const events = makeChain(4);
-    const original = events[1];
+    const original = events[1]!;
     const forgedPayload = { note: "forged, self-consistent" };
     const forgedHash = computeEventHash({
       organization_id: original.organization_id,
@@ -113,7 +113,7 @@ describe("verifyEvidenceChain: tampering is detected", () => {
     const events = makeChain(3);
     // Same trap as the payload case: edit createdAt, forget the hash covers
     // it too.
-    events[0] = { ...events[0], created_at: new Date(2099, 0, 1) };
+    events[0] = { ...events[0]!, created_at: new Date(2099, 0, 1) };
 
     const result = verifyEvidenceChain(events);
     expect(result.ok).toBe(false);

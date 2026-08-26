@@ -336,6 +336,12 @@ model LedgerEntry {
   dayKey         String
   weekKey        String
   monthKey       String
+  /// Which rail executed -- set only on CAPTURE entries (D-13: a receipt
+  /// that can't say which rail moved the money isn't provable as neutral).
+  provider       String?
+  /// Integer minor units, set only on CAPTURE entries. What the provider
+  /// took, kept separate from `amount` (what was authorized).
+  providerFee    Int?
   createdAt      DateTime        @default(now())
 
   organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)

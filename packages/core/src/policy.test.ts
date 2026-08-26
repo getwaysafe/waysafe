@@ -58,7 +58,7 @@ describe("policy schema", () => {
 
   it("requires an explicit disposition for unlisted merchants", () => {
     const input = basePolicy() as Record<string, Record<string, unknown>>;
-    delete input.merchants.unlisted;
+    delete input.merchants!.unlisted;
     const result = parsePolicy(input);
     expect(result.ok).toBe(false);
     expect(result.issues.some((i) => i.path.includes("unlisted"))).toBe(true);

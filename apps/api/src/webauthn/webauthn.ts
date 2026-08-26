@@ -44,7 +44,7 @@ export type VerifyOutcome<T> = { ok: true; value: T } | { ok: false; reason: str
 
 export interface VerifiedRegistration {
   credentialId: string;
-  publicKey: Uint8Array;
+  publicKey: Uint8Array<ArrayBuffer>;
   counter: number;
 }
 

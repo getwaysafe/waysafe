@@ -43,6 +43,8 @@ import type {
   MandateSummary,
   NewAgent,
   NewMandate,
+  RecordExecutionInput,
+  RecordRefundInput,
   ResolveMandateInput,
   SaveAuthorizationInput,
   StoredAuthorization,
@@ -449,6 +451,90 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       },
     });
     return { agentId, organizationId: input.organizationId, name: input.name, status: "ACTIVE" };
+  }
+
+  async recordExecution(input: RecordExecutionInput, now: Date): Promise<StoredAuthorization> {
+    const client = this.client;
+    const auth = await client.authorization.findUnique({ where: { id: input.authorizationId } });
+    if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+    if (auth.status !== "AUTHORIZED" && auth.status !== "STEP_UP_APPROVED") {
+      throw new Error(
+        `authorization ${input.authorizationId} is not executable (status=${auth.status})`,
+      );
+    }
+
+    const timezone = await this.timezoneFor(auth.mandateId);
+    const keys = windowKeys(now, timezone);
+
+    const reservation = await client.ledgerEntry.findFirst({
+      where: { authorizationId: input.authorizationId, type: "RESERVATION" },
+    });
+    if (reservation) {
+      await client.ledgerEntry.create({
+        data: {
+          id: generateId(ID_PREFIX.evidence),
+          organizationId: auth.organizationId,
+          mandateId: auth.mandateId,
+          authorizationId: input.authorizationId,
+          type: "RELEASE",
+          amount: -reservation.amount,
+          currency: auth.currency,
+          dayKey: keys.day,
+          weekKey: keys.week,
+          monthKey: keys.month,
+          createdAt: now,
+        },
+      });
+    }
+    await client.ledgerEntry.create({
+      data: {
+        id: generateId(ID_PREFIX.evidence),
+        organizationId: auth.organizationId,
+        mandateId: auth.mandateId,
+        authorizationId: input.authorizationId,
+        type: "CAPTURE",
+        amount: auth.amount,
+        currency: auth.currency,
+        provider: input.provider,
+        providerFee: input.providerFee,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      },
+    });
+
+    const updated = await client.authorization.update({
+      where: { id: input.authorizationId },
+      data: { status: "EXECUTED" },
+    });
+    return toStoredAuthorization(updated);
+  }
+
+  async recordRefund(input: RecordRefundInput, now: Date): Promise<void> {
+    const client = this.client;
+    const auth = await client.authorization.findUnique({ where: { id: input.authorizationId } });
+    if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+
+    const timezone = await this.timezoneFor(auth.mandateId);
+    const keys = windowKeys(now, timezone);
+
+    await client.ledgerEntry.create({
+      data: {
+        id: generateId(ID_PREFIX.evidence),
+        organizationId: auth.organizationId,
+        mandateId: auth.mandateId,
+        authorizationId: input.authorizationId,
+        type: "CREDIT",
+        amount: -input.amount,
+        currency: auth.currency,
+        provider: input.provider,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      },
+    });
   }
 
   // --- Internal --------------------------------------------------------------

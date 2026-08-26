@@ -36,6 +36,8 @@ import type {
   MandateSummary,
   NewAgent,
   NewMandate,
+  RecordExecutionInput,
+  RecordRefundInput,
   ResolveMandateInput,
   SaveAuthorizationInput,
   StoredAuthorization,
@@ -73,6 +75,8 @@ interface LedgerEntryRow {
   dayKey: string;
   weekKey: string;
   monthKey: string;
+  provider?: string;
+  providerFee?: number;
   createdAt: Date;
 }
 
@@ -467,6 +471,79 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     const agentId = generateId(ID_PREFIX.agent);
     this.agents.set(agentId, { id: agentId, organizationId: input.organizationId, status: "ACTIVE" });
     return { agentId, organizationId: input.organizationId, name: input.name, status: "ACTIVE" };
+  }
+
+  async recordExecution(input: RecordExecutionInput, now: Date): Promise<StoredAuthorization> {
+    const auth = this.authorizations.get(input.authorizationId);
+    if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+    if (auth.status !== "AUTHORIZED" && auth.status !== "STEP_UP_APPROVED") {
+      throw new Error(
+        `authorization ${input.authorizationId} is not executable (status=${auth.status})`,
+      );
+    }
+
+    const mandate = this.mandates.get(auth.mandate_id);
+    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
+    const keys = windowKeys(now, timezone);
+
+    const entries = this.ledgerByMandate.get(auth.mandate_id) ?? [];
+    const reservation = entries.find(
+      (e) => e.authorizationId === input.authorizationId && e.type === "RESERVATION",
+    );
+    if (reservation) {
+      entries.push({
+        id: generateId(ID_PREFIX.evidence),
+        mandateId: auth.mandate_id,
+        authorizationId: input.authorizationId,
+        type: "RELEASE",
+        amount: -reservation.amount,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      });
+    }
+    entries.push({
+      id: generateId(ID_PREFIX.evidence),
+      mandateId: auth.mandate_id,
+      authorizationId: input.authorizationId,
+      type: "CAPTURE",
+      amount: auth.action.amount,
+      provider: input.provider,
+      providerFee: input.providerFee,
+      dayKey: keys.day,
+      weekKey: keys.week,
+      monthKey: keys.month,
+      createdAt: now,
+    });
+    this.ledgerByMandate.set(auth.mandate_id, entries);
+
+    auth.status = "EXECUTED";
+    return auth;
+  }
+
+  async recordRefund(input: RecordRefundInput, now: Date): Promise<void> {
+    const auth = this.authorizations.get(input.authorizationId);
+    if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+
+    const mandate = this.mandates.get(auth.mandate_id);
+    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
+    const keys = windowKeys(now, timezone);
+
+    const entries = this.ledgerByMandate.get(auth.mandate_id) ?? [];
+    entries.push({
+      id: generateId(ID_PREFIX.evidence),
+      mandateId: auth.mandate_id,
+      authorizationId: input.authorizationId,
+      type: "CREDIT",
+      amount: -input.amount,
+      provider: input.provider,
+      dayKey: keys.day,
+      weekKey: keys.week,
+      monthKey: keys.month,
+      createdAt: now,
+    });
+    this.ledgerByMandate.set(auth.mandate_id, entries);
   }
 
   // --- Internal --------------------------------------------------------------

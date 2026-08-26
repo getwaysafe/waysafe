@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import { z } from "zod";
+import Stripe from "stripe";
 import type {
   AuthenticationResponseJSON,
   RegistrationResponseJSON,
@@ -18,14 +19,23 @@ import {
   REASON_CODE_DESCRIPTIONS,
   type EvidenceEvent,
   type IntentCompiler,
+  type PaymentAdapter,
 } from "@agentpay/core";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import type { AgentKeyRepository } from "./agent-keys/types.js";
-import { authorize } from "./authorization/service.js";
+import { authorize, resolveStepUp } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import type { AuthorizationRepository, StoredAuthorization } from "./authorization/types.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import type { EvidenceRepository } from "./evidence/types.js";
+import { asExecutable } from "./execution/executable.js";
+import { executePayment } from "./execution/service.js";
+import { StripeAdapter } from "./payments/stripe-adapter.js";
+import { X402Adapter } from "./payments/x402-adapter.js";
+import { probeStripeKey } from "./payments/test-support/stripe-gate.js";
+import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
+import type { ProviderEventRepository } from "./webhooks/types.js";
+import { handleStripeWebhook } from "./webhooks/service.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
 import type { WebauthnRepository } from "./webauthn/types.js";
 import {
@@ -71,11 +81,21 @@ const CreateAgentKeyBodySchema = z.object({
   name: z.string().min(1),
 });
 
+const StepUpBodySchema = z.object({
+  outcome: z.enum(["approved", "declined"]),
+});
+
+const ExecuteBodySchema = z.object({
+  rail: z.string().min(1),
+  payment_method_ref: z.string().min(1),
+});
+
 export interface ServerRepos {
   authorization: AuthorizationRepository;
   agentKeys: AgentKeyRepository;
   evidence: EvidenceRepository;
   webauthn: WebauthnRepository;
+  providerEvents: ProviderEventRepository;
 }
 
 export interface BuildServerOptions {
@@ -83,6 +103,11 @@ export interface BuildServerOptions {
   logger?: boolean;
   repos?: ServerRepos;
   webauthnConfig?: WebauthnConfig;
+  /** Keyed by PaymentAdapter.name ("stripe", "x402"). Defaults to x402
+   * always registered, plus stripe when STRIPE_SECRET_KEY looks real
+   * (test-mode key, not the .env.example placeholder). */
+  adapters?: Record<string, PaymentAdapter>;
+  stripeWebhookSecret?: string;
 }
 
 interface AuthContext {
@@ -95,12 +120,20 @@ interface AuthContext {
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
+    /** Populated for every request by a content-type parser override, so
+     * the Stripe webhook route can verify its HMAC signature against the
+     * exact bytes Stripe signed -- a re-serialized parsed body would not
+     * byte-match and every signature would fail. */
+    rawBody?: Buffer;
   }
 }
 
 /** Routes that work without any credential -- everything else needs an
- * agent API key or an org credential (Phase 4 auth rule). */
-const PUBLIC_ROUTES = new Set(["/health", "/v1/reason-codes"]);
+ * agent API key or an org credential (Phase 4 auth rule). The Stripe
+ * webhook route is exempt for a different reason: it isn't an AgentPay
+ * caller presenting a Bearer credential, it's Stripe presenting an HMAC
+ * signature over the raw body, checked inside the route itself. */
+const PUBLIC_ROUTES = new Set(["/health", "/v1/reason-codes", "/v1/webhooks/stripe"]);
 
 function zodIssues(error: z.ZodError) {
   return error.issues.map((i) => ({ path: `/${i.path.join("/")}`, message: i.message }));
@@ -163,6 +196,24 @@ export function buildServer(options: BuildServerOptions = {}) {
           },
   });
 
+  // Preserves the exact bytes of every JSON body alongside the normal
+  // parsed object -- the webhook route needs the raw bytes for signature
+  // verification; re-serializing the parsed JSON would not byte-match what
+  // Stripe actually signed, and every signature check would spuriously fail.
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (request, rawBody, done) => {
+    const body = rawBody as Buffer;
+    request.rawBody = body;
+    if (body.length === 0) {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body.toString("utf8")));
+    } catch (err) {
+      done(err as Error, undefined);
+    }
+  });
+
   const compiler = options.compiler ?? createCompilerFromEnv(loadCompilerFixtures());
 
   const repos: ServerRepos = options.repos ?? {
@@ -170,6 +221,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     agentKeys: new InMemoryAgentKeyRepository(),
     evidence: new InMemoryEvidenceRepository(),
     webauthn: new InMemoryWebauthnRepository(),
+    providerEvents: new InMemoryProviderEventRepository(),
   };
 
   const webauthnConfig: WebauthnConfig = options.webauthnConfig ?? {
@@ -182,6 +234,25 @@ export function buildServer(options: BuildServerOptions = {}) {
     authorization: repos.authorization,
     evidence: repos.evidence,
   };
+
+  const adapters: Record<string, PaymentAdapter> =
+    options.adapters ??
+    (() => {
+      const registered: Record<string, PaymentAdapter> = { x402: new X402Adapter() };
+      if (probeStripeKey()) {
+        registered.stripe = new StripeAdapter(process.env.STRIPE_SECRET_KEY!);
+      }
+      return registered;
+    })();
+
+  // Only used to verify webhook signatures locally (constructEvent/
+  // generateTestHeaderString are pure HMAC operations, no network calls) --
+  // not tied to whether a real STRIPE_SECRET_KEY is configured. Dev/test
+  // default is fine to ship; production deployments should set the real
+  // secret from the Stripe dashboard once a live webhook endpoint exists.
+  const stripeWebhookSecret =
+    options.stripeWebhookSecret ?? process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_dev_placeholder";
+  const stripeForWebhooks = new Stripe("sk_test_unused_for_webhook_verification");
 
   /**
    * Phase 4 auth rule: every route except /health and /v1/reason-codes
@@ -466,6 +537,20 @@ export function buildServer(options: BuildServerOptions = {}) {
     return reply.code(result.replayed ? 200 : 201).send(toReceiptJSON(result.authorization));
   });
 
+  /**
+   * A pending step-up past its TTL is expired lazily, on the next thing
+   * that looks at it, rather than by a background sweep -- there's no job
+   * infrastructure in this build. Releases the reservation the same way an
+   * explicit decline does (resolveStepUp's own job); returns the
+   * authorization unchanged if there was nothing to expire.
+   */
+  async function expireIfNeeded(stored: StoredAuthorization, now: Date): Promise<StoredAuthorization> {
+    if (stored.status !== "PENDING_STEP_UP") return stored;
+    if (!stored.step_up_expires_at) return stored;
+    if (new Date(stored.step_up_expires_at).getTime() > now.getTime()) return stored;
+    return resolveStepUp(repos.authorization, stored.mandate_id, stored.id, "expired", now);
+  }
+
   /** The receipt. */
   app.get("/v1/authorizations/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -473,7 +558,119 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!stored || stored.organization_id !== request.auth!.organizationId) {
       return reply.code(404).send({ error: "not_found" });
     }
-    return reply.send(toReceiptJSON(stored));
+    const current = await expireIfNeeded(stored, new Date());
+    return reply.send(toReceiptJSON(current));
+  });
+
+  /** Approve or decline a pending step-up. Declining (or a stale pending
+   * step-up simply being looked at past its TTL) releases the reservation --
+   * approving does not execute; POST .../execute is the separate, explicit
+   * step for that, same as for a fresh ALLOW. */
+  app.post("/v1/authorizations/:id/step-up", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = StepUpBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+
+    const stored = await repos.authorization.getAuthorization(id);
+    if (!stored || stored.organization_id !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+
+    const now = new Date();
+    const current = await expireIfNeeded(stored, now);
+    if (current.status !== "PENDING_STEP_UP") {
+      return reply.code(409).send({ error: "not_pending_step_up", status: current.status });
+    }
+
+    const updated = await resolveStepUp(repos.authorization, current.mandate_id, id, body.data.outcome, now);
+    return reply.send(toReceiptJSON(updated));
+  });
+
+  /**
+   * It is structurally impossible to execute a DENIED or PENDING_STEP_UP
+   * authorization here: `asExecutable` (execution/executable.ts) is the
+   * only way to obtain an `ExecutableAuthorization`, `executePayment` only
+   * accepts one, and there is no `as`-cast anywhere on this path. A status
+   * that doesn't qualify gets `null` back and a 409, before any adapter is
+   * ever called.
+   */
+  app.post("/v1/authorizations/:id/execute", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = ExecuteBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+
+    const stored = await repos.authorization.getAuthorization(id);
+    if (!stored || stored.organization_id !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+
+    const now = new Date();
+    const current = await expireIfNeeded(stored, now);
+    const executable = asExecutable(current);
+    if (!executable) {
+      return reply.code(409).send({
+        error: "not_executable",
+        status: current.status,
+        message: `Authorization status is ${current.status}; only AUTHORIZED or STEP_UP_APPROVED can execute.`,
+      });
+    }
+
+    const adapter = adapters[body.data.rail];
+    if (!adapter) {
+      return reply.code(400).send({ error: "unknown_rail", rail: body.data.rail });
+    }
+
+    const result = await executePayment(
+      { authorization: repos.authorization, evidence: repos.evidence },
+      executable,
+      adapter,
+      body.data.payment_method_ref,
+      now,
+    );
+
+    if (result.kind === "rejected") {
+      return reply.code(402).send({ error: "execution_rejected", reason: result.reason });
+    }
+    return reply.send(toReceiptJSON(result.authorization));
+  });
+
+  /**
+   * Stripe webhooks. Not behind the Bearer-credential gate (PUBLIC_ROUTES) --
+   * Stripe authenticates itself with an HMAC signature over the raw body,
+   * checked here instead. Idempotent: the same event id delivered twice
+   * (a provider retry, or an attacker replaying a captured payload) applies
+   * its ledger effect once -- see webhooks/service.ts and
+   * webhooks/types.ts's ProviderEventRepository.
+   */
+  app.post("/v1/webhooks/stripe", async (request, reply) => {
+    const signature = request.headers["stripe-signature"];
+    if (!signature || typeof signature !== "string") {
+      return reply.code(400).send({ error: "missing_signature" });
+    }
+    if (!request.rawBody) {
+      return reply.code(400).send({ error: "missing_body" });
+    }
+
+    let event;
+    try {
+      event = stripeForWebhooks.webhooks.constructEvent(request.rawBody, signature, stripeWebhookSecret);
+    } catch (err) {
+      return reply.code(400).send({
+        error: "invalid_signature",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const result = await handleStripeWebhook(
+      { providerEvents: repos.providerEvents, authorization: repos.authorization, evidence: repos.evidence },
+      event,
+      new Date(),
+    );
+    return reply.send(result);
   });
 
   app.post("/v1/agents", async (request, reply) => {

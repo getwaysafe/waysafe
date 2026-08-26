@@ -305,11 +305,9 @@ export function validatePolicyCoherence(policy: Policy): PolicyIssue[] {
   return issues;
 }
 
-export interface PolicyParseResult {
-  ok: boolean;
-  policy?: Policy;
-  issues: PolicyIssue[];
-}
+export type PolicyParseResult =
+  | { ok: true; policy: Policy; issues: PolicyIssue[] }
+  | { ok: false; policy?: undefined; issues: PolicyIssue[] };
 
 /** Parse + coherence-check in one step. This is the only sanctioned entry point. */
 export function parsePolicy(input: unknown): PolicyParseResult {
@@ -327,11 +325,10 @@ export function parsePolicy(input: unknown): PolicyParseResult {
 
   const issues = validatePolicyCoherence(parsed.data);
   const hasErrors = issues.some((i) => i.severity === "error");
-  return {
-    ok: !hasErrors,
-    policy: hasErrors ? undefined : parsed.data,
-    issues,
-  };
+  if (hasErrors) {
+    return { ok: false, issues };
+  }
+  return { ok: true, policy: parsed.data, issues };
 }
 
 /**

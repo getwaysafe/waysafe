@@ -682,6 +682,128 @@ working (non-persistent) server instead of a crash. Tested in
 
 ---
 
+## D-22 — Week 4: payment execution, and a type-branded state machine for it
+
+**`PaymentAdapter` (`packages/core/src/payment-adapter.ts`) is the product
+surface, per D-13, not an implementation detail.** `ExecutionRequest`,
+`ExecutionResult`, and `RailCapability` name no provider, import no
+provider SDK, and assume no provider's semantics -- `RailCapability`
+(`holdsFundsBeforeCapture`, `reversible`, `settlement`) is how a card
+rail's authorize-then-capture model and a stablecoin's atomic,
+irreversible settlement are represented as *data* that differs, not as a
+branch anywhere in core or in the execution service that treats one rail
+specially. `StripeAdapter` (`apps/api/src/payments/`) and `X402Adapter`
+fill the same three fields in with genuinely different values -- that
+difference, expressible without either adapter knowing the other exists,
+is what makes this a router rather than a Stripe wrapper with a second
+rail bolted on. `X402Adapter.execute()` deliberately does not move money;
+wiring a live x402 settlement is out of scope, and the point this pass
+needed to prove was that nothing in the router assumes there is only ever
+one kind of rail -- a second, structurally valid adapter with a different
+capability profile is that proof.
+
+**It is a compile error to execute a DENIED or PENDING_STEP_UP
+authorization -- not a guard clause a later edit could route around.**
+`ExecutableAuthorization` (`apps/api/src/execution/executable.ts`) is
+branded with a property keyed by a `unique symbol` that the module never
+exports; TypeScript's structural typing would otherwise let any code
+construct a value shaped like the interface just by matching its fields,
+and a symbol nothing outside the file can name closes that hole. The only
+function that can produce one, `asExecutable`, returns `null` for every
+status except `AUTHORIZED` and `STEP_UP_APPROVED` -- including `EXECUTED`
+itself, which is what makes a second execution attempt on the same
+authorization impossible by the same mechanism, not a separate check.
+`executePayment` (`execution/service.ts`) accepts only this branded type,
+so there is no path from a raw `StoredAuthorization` to a rail call that
+doesn't go through the one function that decides whether that's allowed.
+
+This was verified, not just asserted: `apps/api/tsconfig.json` (like every
+package's tsconfig) excludes `*.test.ts` from its build, so `npm run
+typecheck`'s `tsc -b` alone never actually type-checked test files --
+meaning a `@ts-expect-error` proof placed in a test would be silently
+inert, checked by nothing, forever. Added `tsconfig.typecheck.json` (root)
+plus a `typecheck:tests` script so `npm run typecheck` now covers every
+`.ts` file in the repo including tests. Confirmed the specific proof in
+`executable.test.ts` is load-bearing by temporarily widening
+`requiresExecutable`'s parameter type from `ExecutableAuthorization` to
+`StoredAuthorization` and watching `tsc` reject the now-unnecessary
+`@ts-expect-error` as unused -- the same red/green discipline D-15's
+negative control used, applied to a compile-time guarantee instead of a
+runtime one. `recordExecution` (the repository method the branded type
+guards access to) also throws on a non-executable status directly, as
+defense in depth -- the type guard is the primary mechanism, not the only
+one standing between a bad call and a second ledger effect.
+
+Turning on real type-checking for every test file surfaced pre-existing
+gaps that had never been caught (esbuild, which Vitest uses to run tests,
+strips types without checking them): `PolicyParseResult` was declared as
+`{ ok: boolean; policy?: Policy; ... }` rather than a real discriminated
+union, so `if (!result.ok) throw; return result.policy` -- the pattern
+used throughout the test suite -- never actually narrowed `policy` to
+non-optional; TypeScript had no way to know `ok: true` implied `policy`
+was defined, because nothing in the type said so. Fixed at the type
+declaration (`packages/core/src/policy.ts`), not by patching each of the
+five call sites with an assertion. A few Node/`@types/node` `Uint8Array<
+ArrayBufferLike>` vs. the library's `Uint8Array<ArrayBuffer>` mismatches
+(same class as the ones found building `virtual-authenticator.ts` in
+Week 3) and a couple of `noUncheckedIndexedAccess` array-index gaps were
+fixed the same way already established: explicit generic parameters and
+non-null assertions at the point the invariant is actually known.
+
+**Ledger entries record which rail executed and what it took, per D-13.**
+`LedgerEntry` gained nullable `provider`/`providerFee` columns, populated
+only on `CAPTURE` entries. Executing an `ALLOW` or an approved `STEP_UP`
+releases its existing `RESERVATION` and replaces it with a `CAPTURE` for
+the same amount -- net zero change to cumulative spend, since the
+reservation already counted against it at decision time (D-4) -- tagged
+with the rail's name and fee. A receipt that couldn't show which rail
+moved the money, and what that rail charged for itself, couldn't prove
+the router stayed neutral across rails; now it can.
+
+**Step-up completion is a separate, explicit action from execution, for
+both a fresh `ALLOW` and an approved `STEP_UP`.** Approving a step-up
+moves it to `STEP_UP_APPROVED` (already existed, Week 2) and stops there;
+`POST /v1/authorizations/:id/execute` is the one path to a rail call,
+regardless of how the authorization got to an executable status. TTL
+expiry is lazy, not a background sweep -- there's no job infrastructure in
+this build -- checked on read (`GET /v1/authorizations/:id`) and before
+every step-up or execute attempt, so a pending step-up sitting past its
+`step_up_expires_at` expires itself, releasing its reservation, the next
+time anything looks at it rather than requiring an explicit decline.
+
+**Webhook ingestion is idempotent by construction, not by a
+check-then-write.** `ProviderEvent`'s existing `@@unique([provider,
+externalId])` constraint (schema present since Week 1, unused until now)
+is the actual mechanism: `PrismaProviderEventRepository.recordIfNew`
+attempts the insert and treats a `P2002` violation as "already seen,"
+so two concurrent deliveries of the same event race on the database
+itself, not on application logic that could get the order wrong. Signature
+verification happens in `server.ts`, ahead of this: Fastify's default JSON
+parser doesn't expose the raw body bytes HMAC verification needs, so a
+content-type parser override stashes them (`request.rawBody`) before
+parsing, and `POST /v1/webhooks/stripe` is deliberately exempt from the
+Bearer-credential gate -- Stripe authenticates with a signature over those
+exact bytes, not a bearer token. Verified with `stripe.webhooks.
+generateTestHeaderString` (a local HMAC operation, no live webhook
+endpoint or network call needed): a genuinely signed `charge.refunded`
+event applies a `CREDIT` ledger entry once, an identical redelivery is a
+no-op, and a forged signature is rejected outright.
+
+Implemented in `packages/core/src/payment-adapter.ts`,
+`apps/api/src/execution/` (`executable.ts`, `service.ts`),
+`apps/api/src/payments/` (`stripe-adapter.ts`, `x402-adapter.ts`),
+`apps/api/src/webhooks/` (`types.ts`, `in-memory-repository.ts`,
+`prisma-repository.ts`, `service.ts`), and new
+`AuthorizationRepository` methods `recordExecution`/`recordRefund`. New
+Prisma columns: `LedgerEntry.provider`/`providerFee`. Tested in
+`execution/*.test.ts`, `payments/*.test.ts` (Stripe's suite gated on a
+real `STRIPE_SECRET_KEY`, same `db-gate.ts`-style pattern as D-15/D-16/D-20
+-- self-skips until one is configured, `AGENTPAY_REQUIRE_STRIPE=1` fails
+loudly instead), `webhooks/service.test.ts`, and
+`apps/api/src/server.test.ts`.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

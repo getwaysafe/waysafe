@@ -31,7 +31,7 @@ export interface NewPasskeyCredential {
   principalId: string;
   /** base64url. */
   credentialId: string;
-  publicKey: Uint8Array;
+  publicKey: Uint8Array<ArrayBuffer>;
   counter: number;
   transports: string[];
   rpId: string;
@@ -41,7 +41,7 @@ export interface StoredPasskeyCredential {
   id: string;
   principalId: string;
   credentialId: string;
-  publicKey: Uint8Array;
+  publicKey: Uint8Array<ArrayBuffer>;
   counter: number;
   transports: string[];
   rpId: string;
