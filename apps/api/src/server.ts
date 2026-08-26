@@ -22,17 +22,23 @@ import {
   type PaymentAdapter,
 } from "@agentpay/core";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
-import type { AgentKeyRepository } from "./agent-keys/types.js";
+import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
-import type { AuthorizationRepository, StoredAuthorization } from "./authorization/types.js";
+import type {
+  AgentListItem,
+  AuthorizationRepository,
+  MandateDetail,
+  MandateListItem,
+  StoredAuthorization,
+} from "./authorization/types.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import type { EvidenceRepository } from "./evidence/types.js";
 import { asExecutable } from "./execution/executable.js";
 import { executePayment } from "./execution/service.js";
 import { StripeAdapter } from "./payments/stripe-adapter.js";
 import { X402Adapter } from "./payments/x402-adapter.js";
-import { probeStripeKey } from "./payments/test-support/stripe-gate.js";
+import { probeStripeKey } from "./payments/stripe-key.js";
 import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
 import type { ProviderEventRepository } from "./webhooks/types.js";
 import { handleStripeWebhook } from "./webhooks/service.js";
@@ -89,6 +95,12 @@ const ExecuteBodySchema = z.object({
   rail: z.string().min(1),
   payment_method_ref: z.string().min(1),
 });
+
+const ListQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(500).optional(),
+});
+
+const DEFAULT_LIST_LIMIT = 50;
 
 export interface ServerRepos {
   authorization: AuthorizationRepository;
@@ -171,6 +183,53 @@ function toEvidenceJSON(event: EvidenceEvent) {
     previous_hash: event.previous_hash,
     hash: event.hash,
     created_at: event.created_at.toISOString(),
+  };
+}
+
+function toMandateListJSON(mandate: MandateListItem) {
+  return {
+    mandate_id: mandate.mandateId,
+    organization_id: mandate.organizationId,
+    principal_id: mandate.principalId,
+    status: mandate.status,
+    policy_hash: mandate.policyHash,
+    summary: mandate.summary,
+    created_at: mandate.createdAt,
+  };
+}
+
+function toMandateDetailJSON(mandate: MandateDetail) {
+  return {
+    ...toMandateListJSON(mandate),
+    mandate_version_id: mandate.mandateVersionId,
+    policy: mandate.policy,
+    intent_text: mandate.intentText,
+    assumptions: mandate.assumptions,
+    agent_ids: mandate.agentIds,
+    authenticated_at: mandate.authenticatedAt,
+  };
+}
+
+function toAgentJSON(agent: AgentListItem) {
+  return {
+    agent_id: agent.agentId,
+    organization_id: agent.organizationId,
+    name: agent.name,
+    status: agent.status,
+    created_at: agent.createdAt,
+  };
+}
+
+function toKeyJSON(key: AgentKeyRecord) {
+  return {
+    key_id: key.id,
+    organization_id: key.organizationId,
+    agent_id: key.agentId,
+    prefix: key.prefix,
+    name: key.name,
+    last_used_at: key.lastUsedAt?.toISOString() ?? null,
+    revoked_at: key.revokedAt?.toISOString() ?? null,
+    created_at: key.createdAt.toISOString(),
   };
 }
 
@@ -721,6 +780,53 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.code(404).send({ error: "not_found" });
     }
     return reply.code(204).send();
+  });
+
+  /** Dashboard reads (Week 5). Most-recent-first, org-scoped (D-1). */
+  app.get("/v1/mandates", async (request, reply) => {
+    const query = ListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(query.error) });
+    }
+    const mandates = await repos.authorization.listMandates(
+      request.auth!.organizationId,
+      query.data.limit ?? DEFAULT_LIST_LIMIT,
+    );
+    return reply.send({ mandates: mandates.map(toMandateListJSON) });
+  });
+
+  app.get("/v1/mandates/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const mandate = await repos.authorization.getMandateDetail(id);
+    if (!mandate || mandate.organizationId !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    return reply.send(toMandateDetailJSON(mandate));
+  });
+
+  /** The authorization log. Most-recent-first, org-scoped (D-1). */
+  app.get("/v1/authorizations", async (request, reply) => {
+    const query = ListQuerySchema.safeParse(request.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(query.error) });
+    }
+    const authorizations = await repos.authorization.listAuthorizations(
+      request.auth!.organizationId,
+      query.data.limit ?? DEFAULT_LIST_LIMIT,
+    );
+    return reply.send({ authorizations: authorizations.map(toReceiptJSON) });
+  });
+
+  app.get("/v1/agents", async (request, reply) => {
+    const agents = await repos.authorization.listAgents(request.auth!.organizationId);
+    return reply.send({ agents: agents.map(toAgentJSON) });
+  });
+
+  /** Every key in the organization -- agent keys and org credentials alike
+   * (D-18: same table). Never includes the full key, only the prefix. */
+  app.get("/v1/keys", async (request, reply) => {
+    const keys = await repos.agentKeys.listKeysForOrganization(request.auth!.organizationId);
+    return reply.send({ keys: keys.map(toKeyJSON) });
   });
 
   /** The evidence chain for this organization, optionally filtered to one

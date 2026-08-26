@@ -12,6 +12,7 @@ import { PrismaClient } from "@prisma/client";
 import { ID_PREFIX, generateId } from "@agentpay/core";
 import { extractKeyPrefix, generateAgentApiKey, hashApiKey } from "./keys.js";
 import type {
+  AgentKeyRecord,
   AgentKeyRepository,
   AgentKeyVerification,
   CreatedAgentApiKey,
@@ -62,5 +63,22 @@ export class PrismaAgentKeyRepository implements AgentKeyRepository {
       data: { revokedAt: now },
     });
     return result.count > 0;
+  }
+
+  async listKeysForOrganization(organizationId: string): Promise<AgentKeyRecord[]> {
+    const rows = await this.prisma.apiKey.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organizationId,
+      agentId: row.agentId,
+      prefix: row.prefix,
+      name: row.name,
+      lastUsedAt: row.lastUsedAt,
+      revokedAt: row.revokedAt,
+      createdAt: row.createdAt,
+    }));
   }
 }

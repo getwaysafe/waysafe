@@ -10,7 +10,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { probeStripeKey, requireStripeOrExplainSkip } from "./test-support/stripe-gate.js";
+import { probeStripeKey } from "./stripe-key.js";
+import { requireStripeOrExplainSkip } from "./test-support/stripe-gate.js";
 import { StripeAdapter } from "./stripe-adapter.js";
 
 const reachable = probeStripeKey();

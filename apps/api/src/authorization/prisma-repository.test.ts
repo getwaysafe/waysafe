@@ -314,4 +314,39 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     },
     60_000,
   );
+
+  it("listMandates/getMandateDetail/listAuthorizations/listAgents (Week 5) round-trip real Postgres rows", async () => {
+    const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+    const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+    const { organizationId, agentId, principalId, mandateId, apiKey } = await seedMandate(policyFrom());
+
+    const decided = await authorize(repos, {
+      organizationId,
+      request: request(organizationId, agentId, principalId, 42),
+      now: NOW,
+      apiKey,
+    });
+    if (decided.kind !== "decided") throw new Error("unreachable");
+
+    const mandates = await repo.listMandates(organizationId, 10);
+    expect(mandates).toHaveLength(1);
+    expect(mandates[0]!.mandateId).toBe(mandateId);
+    expect(mandates[0]!.summary).toBe("test");
+
+    const detail = await repo.getMandateDetail(mandateId);
+    expect(detail).not.toBeNull();
+    expect(detail!.agentIds).toEqual([agentId]);
+    expect(detail!.intentText).toBe("test");
+    expect(detail!.authenticatedAt).not.toBeNull();
+
+    expect(await repo.getMandateDetail("mandate_does_not_exist")).toBeNull();
+
+    const authorizations = await repo.listAuthorizations(organizationId, 10);
+    expect(authorizations.map((a) => a.id)).toContain(decided.authorization.id);
+
+    const agents = await repo.listAgents(organizationId);
+    expect(agents).toHaveLength(1);
+    expect(agents[0]!.agentId).toBe(agentId);
+    expect(agents[0]!.name).toBe("Test Agent");
+  }, 30_000);
 });

@@ -28,11 +28,14 @@ import {
   type SpendSnapshot,
 } from "@agentpay/core";
 import type {
+  AgentListItem,
   AuthorizationRepository,
   CreatedAgent,
   CreatedMandate,
   LedgerEntryType,
+  MandateDetail,
   MandateGateResult,
+  MandateListItem,
   MandateSummary,
   NewAgent,
   NewMandate,
@@ -48,6 +51,8 @@ interface AgentRow {
   id: string;
   organizationId: string;
   status: AgentStatus;
+  name: string;
+  createdAt: Date;
 }
 
 interface MandateVersionRow {
@@ -56,6 +61,9 @@ interface MandateVersionRow {
   policyHash: string;
   authenticatedAt: Date | null;
   agentIds: string[];
+  intentText: string;
+  assumptions: string[];
+  createdAt: Date;
 }
 
 interface MandateRow {
@@ -64,6 +72,7 @@ interface MandateRow {
   principalId: string;
   status: MandateStatus;
   currentVersion: MandateVersionRow;
+  createdAt: Date;
 }
 
 interface LedgerEntryRow {
@@ -128,6 +137,8 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
         id: input.agentId,
         organizationId: input.organizationId,
         status: input.agentStatus ?? "ACTIVE",
+        name: "Test Agent",
+        createdAt: new Date(),
       });
     }
 
@@ -136,12 +147,16 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       organizationId: input.organizationId,
       principalId: input.principalId,
       status: input.status ?? "ACTIVE",
+      createdAt: new Date(),
       currentVersion: {
         id: mandateVersionId,
         policy: input.policy,
         policyHash: input.policyHash,
         authenticatedAt: input.authenticatedAt === undefined ? new Date() : input.authenticatedAt,
         agentIds,
+        intentText: "seeded for testing",
+        assumptions: [],
+        createdAt: new Date(),
       },
     });
 
@@ -421,7 +436,6 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
   }
 
   async createMandate(input: NewMandate, now: Date): Promise<CreatedMandate> {
-    void now;
     for (const agentId of input.agentIds) {
       const agent = this.agents.get(agentId);
       if (!agent || agent.organizationId !== input.organizationId) {
@@ -437,12 +451,16 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       organizationId: input.organizationId,
       principalId: input.principalId,
       status: "PENDING_AUTHENTICATION",
+      createdAt: now,
       currentVersion: {
         id: mandateVersionId,
         policy: input.policy,
         policyHash: input.policyHash,
         authenticatedAt: null,
         agentIds: input.agentIds,
+        intentText: input.intentText,
+        assumptions: input.assumptions,
+        createdAt: now,
       },
     });
 
@@ -467,9 +485,14 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
   }
 
   async createAgent(input: NewAgent, now: Date): Promise<CreatedAgent> {
-    void now;
     const agentId = generateId(ID_PREFIX.agent);
-    this.agents.set(agentId, { id: agentId, organizationId: input.organizationId, status: "ACTIVE" });
+    this.agents.set(agentId, {
+      id: agentId,
+      organizationId: input.organizationId,
+      status: "ACTIVE",
+      name: input.name,
+      createdAt: now,
+    });
     return { agentId, organizationId: input.organizationId, name: input.name, status: "ACTIVE" };
   }
 
@@ -544,6 +567,62 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       createdAt: now,
     });
     this.ledgerByMandate.set(auth.mandate_id, entries);
+  }
+
+  async listMandates(organizationId: string, limit: number): Promise<MandateListItem[]> {
+    return [...this.mandates.values()]
+      .filter((m) => m.organizationId === organizationId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit)
+      .map((m) => ({
+        mandateId: m.id,
+        organizationId: m.organizationId,
+        principalId: m.principalId,
+        status: m.status,
+        policyHash: m.currentVersion.policyHash,
+        summary: m.currentVersion.policy.summary,
+        createdAt: m.createdAt.toISOString(),
+      }));
+  }
+
+  async getMandateDetail(mandateId: string): Promise<MandateDetail | null> {
+    const mandate = this.mandates.get(mandateId);
+    if (!mandate) return null;
+    return {
+      mandateId: mandate.id,
+      mandateVersionId: mandate.currentVersion.id,
+      organizationId: mandate.organizationId,
+      principalId: mandate.principalId,
+      status: mandate.status,
+      policyHash: mandate.currentVersion.policyHash,
+      policy: mandate.currentVersion.policy,
+      summary: mandate.currentVersion.policy.summary,
+      intentText: mandate.currentVersion.intentText,
+      assumptions: mandate.currentVersion.assumptions,
+      agentIds: mandate.currentVersion.agentIds,
+      authenticatedAt: mandate.currentVersion.authenticatedAt?.toISOString() ?? null,
+      createdAt: mandate.createdAt.toISOString(),
+    };
+  }
+
+  async listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]> {
+    return [...this.authorizations.values()]
+      .filter((a) => a.organizationId === organizationId)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, limit);
+  }
+
+  async listAgents(organizationId: string): Promise<AgentListItem[]> {
+    return [...this.agents.values()]
+      .filter((a) => a.organizationId === organizationId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((a) => ({
+        agentId: a.id,
+        organizationId: a.organizationId,
+        name: a.name,
+        status: a.status,
+        createdAt: a.createdAt.toISOString(),
+      }));
   }
 
   // --- Internal --------------------------------------------------------------

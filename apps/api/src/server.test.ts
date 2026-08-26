@@ -920,3 +920,213 @@ describe("POST /v1/webhooks/stripe", () => {
     expect(response.statusCode).toBe(200);
   });
 });
+
+describe("dashboard reads (Week 5)", () => {
+  async function createMandateFor(organizationId: string, orgApiKey: string) {
+    const agentResponse = await app.inject({
+      method: "POST",
+      url: "/v1/agents",
+      headers: { authorization: `Bearer ${orgApiKey}` },
+      payload: { name: "dashboard test bot" },
+    });
+    const agentId = agentResponse.json().agent_id;
+    const principalId = `prin_dash_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+    const mandateResponse = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: { authorization: `Bearer ${orgApiKey}` },
+      payload: {
+        principal_id: principalId,
+        agent_ids: [agentId],
+        policy: {
+          schema_version: "agentpay.policy/v1",
+          summary: `dashboard test policy for ${organizationId}`,
+          currency: "USD",
+          merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+          categories: { allow: [], deny: [], deny_mcc: [], unlisted: "ALLOW" },
+          cumulative_limits: [],
+          step_up: { ttl_seconds: 900 },
+          accounting: {},
+          expires_at: "2026-09-23T12:00:00.000Z",
+        },
+        intent_text: "dashboard read test",
+        compiler_name: "manual",
+      },
+    });
+    return { agentId, principalId, mandateId: mandateResponse.json().mandate_id as string };
+  }
+
+  it("lists mandates for the caller's organization, most-recent-first, with a summary and no raw policy", async () => {
+    const { mandateId } = await createMandateFor(ORG, orgKey);
+
+    const response = await app.inject({ method: "GET", url: "/v1/mandates", headers: authed() });
+    expect(response.statusCode).toBe(200);
+    const mandates = response.json().mandates as Array<Record<string, unknown>>;
+    const found = mandates.find((m) => m.mandate_id === mandateId);
+    expect(found).toBeDefined();
+    expect(found!.status).toBe("PENDING_AUTHENTICATION");
+    expect(typeof found!.summary).toBe("string");
+    expect(found!.policy).toBeUndefined();
+    // Most-recent-first: the mandate just created should not be after an older one.
+    expect(mandates[0]!.created_at as string >= (mandates[mandates.length - 1]!.created_at as string)).toBe(true);
+  });
+
+  it("returns full mandate detail -- policy, intent text, assumptions, bound agents", async () => {
+    const { mandateId, agentId } = await createMandateFor(ORG, orgKey);
+
+    const response = await app.inject({ method: "GET", url: `/v1/mandates/${mandateId}`, headers: authed() });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.mandate_id).toBe(mandateId);
+    expect(body.intent_text).toBe("dashboard read test");
+    expect(body.agent_ids).toEqual([agentId]);
+    expect(body.policy.schema_version).toBe("agentpay.policy/v1");
+    expect(body.authenticated_at).toBeNull();
+  });
+
+  it("404s a mandate detail lookup for an id that doesn't exist", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/mandates/mandate_does_not_exist",
+      headers: authed(),
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("lists agents for the caller's organization", async () => {
+    const { agentId } = await createMandateFor(ORG, orgKey);
+
+    const response = await app.inject({ method: "GET", url: "/v1/agents", headers: authed() });
+    expect(response.statusCode).toBe(200);
+    const agents = response.json().agents as Array<Record<string, unknown>>;
+    expect(agents.some((a) => a.agent_id === agentId && a.name === "dashboard test bot")).toBe(true);
+  });
+
+  it("lists keys for the caller's organization, prefix only -- never the full key", async () => {
+    const response = await app.inject({ method: "GET", url: "/v1/keys", headers: authed() });
+    expect(response.statusCode).toBe(200);
+    const keys = response.json().keys as Array<Record<string, unknown>>;
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      expect(key.prefix).toBeDefined();
+      expect(JSON.stringify(key)).not.toContain(orgKey);
+    }
+  });
+
+  it("lists authorizations for the caller's organization, most-recent-first", async () => {
+    const { agentId, principalId, mandateId } = await createMandateFor(ORG, orgKey);
+    const authenticator = createVirtualAuthenticator();
+    const registerOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: registerChallenge, rp_id: rpId, origin } = registerOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "register",
+        challenge: registerChallenge,
+        response: buildRegistrationResponse({ authenticator, rpId, origin, challenge: registerChallenge }),
+      },
+    });
+    const authOptions = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: authChallenge } = authOptions.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "authenticate",
+        challenge: authChallenge,
+        response: buildAuthenticationResponse({ authenticator, rpId, origin, challenge: authChallenge }),
+      },
+    });
+    const keyResponse = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${agentId}/keys`,
+      headers: authed(),
+      payload: { name: "dashboard read key" },
+    });
+    const agentApiKey = keyResponse.json().api_key;
+
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: {
+        agent_id: agentId,
+        principal_id: principalId,
+        mandate_id: mandateId,
+        action: {
+          amount: toMinorUnits(5, "USD"),
+          currency: "USD",
+          merchant: { domain: "staples.com" },
+          attestations: {},
+        },
+        context: {},
+      },
+    });
+    const authorizationId = decided.json().id;
+
+    const response = await app.inject({ method: "GET", url: "/v1/authorizations", headers: authed() });
+    expect(response.statusCode).toBe(200);
+    const authorizations = response.json().authorizations as Array<Record<string, unknown>>;
+    expect(authorizations.some((a) => a.id === authorizationId)).toBe(true);
+    expect(
+      (authorizations[0]!.created_at as string) >=
+        (authorizations[authorizations.length - 1]!.created_at as string),
+    ).toBe(true);
+  });
+
+  describe("THE ATTACK: cross-organization isolation", () => {
+    let otherOrgKey: string;
+
+    beforeAll(async () => {
+      const created = await repos.agentKeys.createKey(
+        { organizationId: "org_other_dashboard", name: "other org admin" },
+        new Date(),
+      );
+      otherOrgKey = created.fullKey;
+    });
+
+    it("a mandate belonging to another organization does not appear in this organization's list", async () => {
+      const { mandateId } = await createMandateFor("org_other_dashboard", otherOrgKey);
+
+      const response = await app.inject({ method: "GET", url: "/v1/mandates", headers: authed() });
+      const mandates = response.json().mandates as Array<Record<string, unknown>>;
+      expect(mandates.some((m) => m.mandate_id === mandateId)).toBe(false);
+    });
+
+    it("mandate detail 404s when requested by a different organization's credential", async () => {
+      const { mandateId } = await createMandateFor("org_other_dashboard", otherOrgKey);
+
+      const response = await app.inject({ method: "GET", url: `/v1/mandates/${mandateId}`, headers: authed() });
+      expect(response.statusCode).toBe(404);
+    });
+
+    it("agents from another organization do not appear in this organization's agent list", async () => {
+      const { agentId } = await createMandateFor("org_other_dashboard", otherOrgKey);
+
+      const response = await app.inject({ method: "GET", url: "/v1/agents", headers: authed() });
+      const agents = response.json().agents as Array<Record<string, unknown>>;
+      expect(agents.some((a) => a.agent_id === agentId)).toBe(false);
+    });
+
+    it("keys from another organization do not appear in this organization's key list", async () => {
+      const response = await app.inject({ method: "GET", url: "/v1/keys", headers: authed() });
+      const keys = response.json().keys as Array<Record<string, unknown>>;
+      expect(keys.length).toBeGreaterThan(0);
+      for (const key of keys) {
+        expect(key.organization_id).toBe(ORG);
+      }
+    });
+  });
+});

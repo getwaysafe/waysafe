@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "npm run dev -w @agentpay/api",
+    "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
     "db:generate": "npm run generate -w @agentpay/db",
     "db:push": "npm run push -w @agentpay/db"
   },

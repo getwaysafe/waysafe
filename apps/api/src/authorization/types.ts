@@ -139,6 +139,25 @@ export interface MandateSummary {
   status: MandateStatus;
 }
 
+export interface MandateListItem {
+  mandateId: string;
+  organizationId: string;
+  principalId: string;
+  status: MandateStatus;
+  policyHash: string;
+  summary: string;
+  createdAt: string;
+}
+
+export interface MandateDetail extends MandateListItem {
+  mandateVersionId: string;
+  policy: Policy;
+  intentText: string;
+  assumptions: string[];
+  agentIds: string[];
+  authenticatedAt: string | null;
+}
+
 export interface NewAgent {
   organizationId: string;
   name: string;
@@ -150,6 +169,14 @@ export interface CreatedAgent {
   organizationId: string;
   name: string;
   status: AgentStatus;
+}
+
+export interface AgentListItem {
+  agentId: string;
+  organizationId: string;
+  name: string;
+  status: AgentStatus;
+  createdAt: string;
 }
 
 export interface RecordExecutionInput {
@@ -273,4 +300,16 @@ export interface AuthorizationRepository {
    * mandate.
    */
   recordRefund(input: RecordRefundInput, now: Date): Promise<void>;
+
+  /** Dashboard reads (Week 5). Most-recent-first, capped at `limit`. */
+  listMandates(organizationId: string, limit: number): Promise<MandateListItem[]>;
+
+  /** The full policy + version detail a dashboard mandate page needs, beyond
+   * MandateSummary's lookup-only fields. Null if no such mandate exists. */
+  getMandateDetail(mandateId: string): Promise<MandateDetail | null>;
+
+  /** Most-recent-first, capped at `limit`. */
+  listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]>;
+
+  listAgents(organizationId: string): Promise<AgentListItem[]>;
 }

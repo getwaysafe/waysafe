@@ -3,18 +3,14 @@
  * when there's nothing to test against (no Stripe key configured yet), but
  * fail loudly instead of silently when AGENTPAY_REQUIRE_STRIPE=1 says there
  * should be one.
+ *
+ * `probeStripeKey` itself lives in ../stripe-key.ts, not here -- it's also
+ * called from production code (server.ts), and this file imports `vitest`
+ * at module scope, which must never end up in the server's runtime import
+ * graph. Import `probeStripeKey` from ../stripe-key.js directly.
  */
 
 import { describe, it } from "vitest";
-
-/** True only for a real-looking test-mode key -- not unset, and not the
- * literal placeholder ".env.example" ships with. */
-export function probeStripeKey(): boolean {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) return false;
-  if (key.includes("...")) return false;
-  return key.startsWith("sk_test_") || key.startsWith("rk_test_");
-}
 
 export function requireStripeOrExplainSkip(suiteName: string, reachable: boolean): void {
   if (reachable) return;

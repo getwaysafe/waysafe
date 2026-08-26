@@ -66,6 +66,13 @@ export class InMemoryAgentKeyRepository implements AgentKeyRepository {
     return true;
   }
 
+  async listKeysForOrganization(organizationId: string): Promise<AgentKeyRecord[]> {
+    return [...this.byId.values()]
+      .filter((row) => row.organizationId === organizationId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map(({ secretHash: _secretHash, ...record }) => record);
+  }
+
   /** Test/debug only -- not part of AgentKeyRepository. */
   async getById(keyId: string): Promise<AgentKeyRecord | undefined> {
     return this.byId.get(keyId);

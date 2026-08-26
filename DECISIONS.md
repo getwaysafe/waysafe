@@ -804,6 +804,151 @@ loudly instead), `webhooks/service.test.ts`, and
 
 ---
 
+## D-23 — Week 5: the SDK's error/step-up/idempotency design, the dashboard, and OQ-4
+
+**Typed errors, one class per distinct failure mode the server actually
+returns, not a single generic exception.** `packages/sdk/src/index.ts`
+maps every `{error: "..."}` shape `server.ts` sends into its own
+`AgentPayError` subclass -- `ValidationError` (400), `UnauthorizedError`
+(401), `NotFoundError`/`NoActiveMandateError` (404, the latter carrying
+`reasons` since it's specifically `authorize()`'s "no mandate resolved at
+all" case), `IdempotencyConflictError` (409, carrying the `existing`
+decision the reused key is actually bound to),
+`AuthorizationStatusConflictError` (409 `not_executable` /
+`not_pending_step_up`, carrying the blocking status),
+`ExecutionRejectedError` (402, the rail declined), `UnknownRailError`
+(400). A `DENY` or `STEP_UP` decision is a normal, successful return
+value from `authorize()`, never thrown -- only something that stopped a
+decision from being reached at all throws. `reason_codes` on
+`AuthorizationDecision` is `ReasonCode[]`, the same branded string-literal
+union `@agentpay/core` defines (D-11: additive-only), not `string[]` --
+so a caller's `switch` over reason codes is exhaustiveness-checked by
+`tsc`, the same guarantee the server side already had.
+
+**Idempotency is generated for the caller, and used for something real: a
+safe, automatic retry.** If `authorize()`'s caller doesn't pass
+`idempotency_key`, the SDK generates one (`crypto.randomUUID()`) and
+reuses that exact key across up to three attempts when the *network*
+itself fails (a dropped connection, a timeout) -- never when the server
+actually answered, success or error, since retrying a real HTTP response
+would either be a no-op or wrong. This is what makes the idempotency key
+worth generating automatically rather than just being a parameter a
+developer has to remember: without the SDK owning both the key and the
+retry, a caller who does remember to retry on their own has to also
+remember to reuse the same key, and the two are easy to get out of sync.
+
+**Step-up is driven from the developer's own UI, not a hosted page --
+I-10.** The Week 1 stub's `step_up: { url }` implied a hosted approval
+page; that's gone. `AuthorizationDecision.step_up` is now
+`{ authorization_id, expires_at }` -- the only two things an approval
+screen actually needs -- plus `approveStepUp(authorizationId)` /
+`declineStepUp(authorizationId)`, thin wrappers over the same `POST
+/v1/authorizations/:id/step-up` the API already exposed (Week 4). Nothing
+about how the decision gets shown to a human, or where, is the SDK's
+business. The same principle extends to mandate authentication, which was
+never an SDK concern before this week either:
+`getMandateAuthenticationOptions`/`verifyMandateAuthentication` forward a
+WebAuthn challenge and response as opaque data -- the SDK depends on no
+WebAuthn library, browser or otherwise, and never constructs a ceremony
+itself.
+
+**`execute()` mirrors D-22's branded-type trick, client-side.**
+`ExecutableDecision` is keyed by a `unique symbol` `index.ts` never
+exports, exactly like `ExecutableAuthorization` on the server; the only
+constructor, `asExecutable()`, returns non-null only for `AUTHORIZED` or
+`STEP_UP_APPROVED`. `execute()` accepts only that branded type, so
+passing a `DENY` decision -- or any object merely shaped like a
+decision -- is a compile error, not a runtime check a later edit could
+route around. Proven the same way D-22's server-side version was: a
+`@ts-expect-error`-anchored test (`index.test.ts`) that fails the build
+if it ever stops being necessary.
+
+**A real production bug, found only because the SDK's quickstart runs
+`server.ts` outside Vitest for the first time in this project's
+history.** `apps/api/src/payments/test-support/stripe-gate.ts` imported
+`vitest` at module scope and also exported `probeStripeKey`, which
+`server.ts` calls in production (to decide whether to register the Stripe
+adapter). Every test run happened to work regardless, because tests
+already run inside a Vitest worker -- so this had never once actually
+executed `server.ts` in a plain Node process, which is exactly what a
+deployed server does. `probeStripeKey` moved to a new
+`apps/api/src/payments/stripe-key.ts` with no test-framework import, so
+`vitest` can never end up in the server's runtime dependency graph again.
+Found by writing `examples/quickstart.ts` and actually running it, not by
+review -- the same lesson D-15's negative controls exist to generalize:
+a test suite that never runs the code path a real deployment takes can't
+catch a bug only that path exposes.
+
+**Dashboard (`apps/dashboard`): Next.js App Router, Server Components
+only, no client-side data fetching, no API layer of its own.** Every
+page is an `async` Server Component that calls `@agentpay/sdk` directly
+with the org credential recovered from the session cookie
+(`lib/agentpay.ts`) and renders straight from the response -- there is no
+`fetch` in the browser, no React Query/SWR, no dashboard-specific REST
+endpoints to keep in sync with the API. This is the "don't gold-plate"
+call the brief asked for: five read surfaces (mandates + a version's full
+policy, the authorization log with reason codes joined against `GET
+/v1/reason-codes` for human text, a receipt view, agents + keys with only
+prefixes ever shown, and the evidence chain with its verify state), all
+read-only, no write UI beyond the login form. Plain CSS, no component
+library, no client state management -- legibility over polish, per the
+brief.
+
+**OQ-4, resolved: a session cookie wrapping the org credential itself, no
+separate identity system, no third-party vendor.** There is no dashboard
+user database and nothing to build one against -- the org credential
+already *is* the tenant's identity (D-18) -- so the cheapest thing that
+isn't wrong is to make the session carry that credential, encrypted, not
+reinvent a parallel notion of "who's logged in." `apps/dashboard/src/lib/
+session.ts`: AES-256-GCM under a required `AGENTPAY_DASHBOARD_SESSION_SECRET`
+(32 bytes, base64), `httpOnly`/`secure`/`sameSite: lax` cookie. Login
+posts the submitted key straight to the real API (`listAgents()`, chosen
+because it's a harmless, already-existing org-scoped read) and only sets
+the cookie if that call actually succeeds -- the dashboard never
+re-implements what a valid credential is, D-18's verification is the only
+check that matters. `decryptSession` returns `null` (never throws) for
+anything that doesn't decrypt cleanly, since it runs on every
+authenticated page load and a tampered or stale-secret cookie should look
+like "logged out," not crash the request. **A real IdP (Clerk, WorkOS,
+Auth.js) is explicitly a Week 6+ decision** -- this is intentionally the
+minimum that resolves OQ-4 for a single-tenant-per-browser internal tool,
+not a multi-user-per-org, SSO-capable answer. There is also, as of this
+week, no self-serve way to mint an *organization's first* credential
+through the API itself (every route that mints a key requires already
+being authenticated as that organization) -- today that's an operator
+action, same as the dashboard's own login assumes. Closing that gap is
+part of the same Week 6+ real-auth decision, not something this session
+routed around silently.
+
+**Scoping note:** `apps/dashboard` is deliberately excluded from the root
+`tsconfig.typecheck.json` flat program (see its `exclude`). Every other
+package in this repo shares `tsconfig.base.json`'s `NodeNext` module
+resolution (explicit `.js` extensions on relative imports, matching
+Node's own ESM rules); Next.js's bundler expects the opposite
+(extensionless relative imports, `moduleResolution: "bundler"`). Mixing
+the two in one `tsc` program produces resolution noise unrelated to real
+bugs. The dashboard's own `next build` (which runs `tsc` under its own,
+independent `tsconfig.json`) is its type-checking gate instead -- run
+separately, not part of `npm run typecheck`.
+
+Implemented in `packages/sdk/src/index.ts`, `examples/quickstart.ts`
+(runnable, not prose -- the actual exit-criteria artifact), and
+`apps/dashboard/`. Tested in `packages/sdk/src/index.test.ts` (36 cases
+against a fake `fetch`: every typed error, the idempotency-retry
+behavior, the `asExecutable` brand, all adversarial) and
+`packages/sdk/src/integration.test.ts` (5 cases against `buildServer()`
+bound to a real port with real `fetch` -- the full compile → create →
+authenticate → authorize → step-up → execute → verify journey, plus a
+cross-organization `NoActiveMandateError` attack -- because the mocked
+suite can't catch a wire-format mismatch between what the SDK sends and
+what the server actually expects). The dashboard is tested lightly, per
+the brief: `apps/dashboard/src/lib/session.test.ts` covers the one piece
+of real logic it has (the cookie's encryption), including tampering,
+wrong-secret, and malformed-input attacks; the pages themselves were
+verified by hand against a running server, not with an automated suite.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -843,6 +988,10 @@ what the SDK looks like — whether `authorize()` is called from a LangGraph nod
 an MCP server, or a cron job is a different ergonomics problem each time.
 
 ## OQ-4 — Dashboard authentication
+
+**Resolved by D-23: a session cookie wrapping the org credential, no
+third-party vendor -- a real IdP is a Week 6+ decision.** Left in place,
+unedited below, so the original reasoning survives.
 
 The PRD specifies WebAuthn for *principals* authenticating mandates, but says
 nothing about how a developer logs into the dashboard. Options: build it,

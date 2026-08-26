@@ -63,4 +63,8 @@ export interface AgentKeyRepository {
    * revoke any other organization's key. Returns whether a matching,
    * not-already-revoked key in that organization was found. */
   revokeKey(keyId: string, organizationId: string, now: Date): Promise<boolean>;
+
+  /** For the dashboard's agents/keys page. Never includes the full key --
+   * only the prefix, which is all that was ever safe to store or display. */
+  listKeysForOrganization(organizationId: string): Promise<AgentKeyRecord[]>;
 }

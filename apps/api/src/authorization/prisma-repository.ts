@@ -36,10 +36,13 @@ import {
   type SpendSnapshot,
 } from "@agentpay/core";
 import type {
+  AgentListItem,
   AuthorizationRepository,
   CreatedAgent,
   CreatedMandate,
+  MandateDetail,
   MandateGateResult,
+  MandateListItem,
   MandateSummary,
   NewAgent,
   NewMandate,
@@ -535,6 +538,78 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
         createdAt: now,
       },
     });
+  }
+
+  async listMandates(organizationId: string, limit: number): Promise<MandateListItem[]> {
+    const rows = await this.client.mandate.findMany({
+      where: { organizationId },
+      include: { currentVersion: true },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return rows
+      .filter((m) => m.currentVersion)
+      .map((m) => {
+        const policy = m.currentVersion!.policy as unknown as Policy;
+        return {
+          mandateId: m.id,
+          organizationId: m.organizationId,
+          principalId: m.principalId,
+          status: m.status,
+          policyHash: m.currentVersion!.policyHash,
+          summary: policy.summary,
+          createdAt: m.createdAt.toISOString(),
+        };
+      });
+  }
+
+  async getMandateDetail(mandateId: string): Promise<MandateDetail | null> {
+    const mandate = await this.client.mandate.findUnique({
+      where: { id: mandateId },
+      include: { currentVersion: { include: { agents: true } } },
+    });
+    if (!mandate || !mandate.currentVersion) return null;
+    const policy = mandate.currentVersion.policy as unknown as Policy;
+    return {
+      mandateId: mandate.id,
+      mandateVersionId: mandate.currentVersion.id,
+      organizationId: mandate.organizationId,
+      principalId: mandate.principalId,
+      status: mandate.status,
+      policyHash: mandate.currentVersion.policyHash,
+      policy,
+      summary: policy.summary,
+      intentText: mandate.currentVersion.intentText,
+      assumptions: mandate.currentVersion.assumptions,
+      agentIds: mandate.currentVersion.agents.map((a) => a.agentId),
+      authenticatedAt: mandate.currentVersion.authenticatedAt
+        ? mandate.currentVersion.authenticatedAt.toISOString()
+        : null,
+      createdAt: mandate.createdAt.toISOString(),
+    };
+  }
+
+  async listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]> {
+    const rows = await this.client.authorization.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return rows.map(toStoredAuthorization);
+  }
+
+  async listAgents(organizationId: string): Promise<AgentListItem[]> {
+    const rows = await this.client.agent.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((a) => ({
+      agentId: a.id,
+      organizationId: a.organizationId,
+      name: a.name,
+      status: a.status,
+      createdAt: a.createdAt.toISOString(),
+    }));
   }
 
   // --- Internal --------------------------------------------------------------

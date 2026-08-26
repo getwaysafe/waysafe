@@ -81,4 +81,31 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
 
     expect(result).toEqual({ ok: false, reason: "not_found" });
   }, 30_000);
+
+  it("listKeysForOrganization (Week 5) returns the org's keys, prefix only, never the full key or hash", async () => {
+    const repo = new PrismaAgentKeyRepository(prisma);
+    const { organizationId, agentId } = await seedOrgAndAgent();
+    const created = await repo.createKey({ organizationId, agentId, name: "dashboard key" }, NOW);
+
+    const keys = await repo.listKeysForOrganization(organizationId);
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.id).toBe(created.id);
+    expect(keys[0]!.prefix).toBe(created.prefix);
+    expect(keys[0]!.name).toBe("dashboard key");
+    expect(JSON.stringify(keys)).not.toContain(created.fullKey);
+  }, 30_000);
+
+  it("THE ATTACK: listKeysForOrganization never returns another organization's keys", async () => {
+    const repo = new PrismaAgentKeyRepository(prisma);
+    const orgA = await seedOrgAndAgent();
+    const orgB = await seedOrgAndAgent();
+    await repo.createKey({ organizationId: orgA.organizationId, agentId: orgA.agentId, name: "org a key" }, NOW);
+    await repo.createKey({ organizationId: orgB.organizationId, agentId: orgB.agentId, name: "org b key" }, NOW);
+
+    const keys = await repo.listKeysForOrganization(orgA.organizationId);
+
+    expect(keys).toHaveLength(1);
+    expect(keys[0]!.name).toBe("org a key");
+  }, 30_000);
 });
