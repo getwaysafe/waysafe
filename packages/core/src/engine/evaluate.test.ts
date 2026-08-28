@@ -194,11 +194,14 @@ describe("adversarial merchant assertions", () => {
       action(83, { name: "Staples" }, { category: "office_supplies" }),
     );
     expect(result.decision).toBe(Decision.STEP_UP);
-    // PROCUREMENT_ASK's unlisted:"STEP_UP" already accounts for this -- the
-    // D-3 cap (STEP_UP_MERCHANT_UNVERIFIED) only surfaces on its own when
-    // `unlisted` is ALLOW; see the "D-3 ceiling" tests below.
+    // Two independently true facts about the same merchant, in evaluation
+    // order: not on the allowlist (unlisted:"STEP_UP"), AND not verifiably
+    // who it claims to be (a bare name never verifies). Both are always
+    // surfaced now -- see the "D-3 ceiling" tests below for the cases where
+    // only one of the two applies.
     expect(result.reasons.map((r) => r.code)).toEqual([
       ReasonCode.STEP_UP_MERCHANT_NOT_ALLOWLISTED,
+      ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
     ]);
   });
 
@@ -212,8 +215,11 @@ describe("adversarial merchant assertions", () => {
       ),
     );
     expect(result.decision).toBe(Decision.STEP_UP);
+    // Same two-fact pattern: an unlisted domain that also never resolved to
+    // a verified identity (it isn't in the directory either).
     expect(result.reasons.map((r) => r.code)).toEqual([
       ReasonCode.STEP_UP_MERCHANT_NOT_ALLOWLISTED,
+      ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
     ]);
   });
 
@@ -291,9 +297,15 @@ describe("adversarial merchant assertions", () => {
 });
 
 // The D-3 amendment: the unverified-merchant cap is a ceiling on top of
-// `unlisted`, not a replacement for it. `unlisted` is always evaluated first;
-// the cap can only push the result *up* toward DENY, never down past what
-// `unlisted` already decided.
+// `unlisted`, not a replacement for it. `unlisted` is always evaluated
+// first; the cap can only push the *decision* up toward DENY, never down
+// past what `unlisted` already decided -- but the cap's own reason
+// (STEP_UP_MERCHANT_UNVERIFIED) is now always attached too whenever the
+// merchant isn't VERIFIED, alongside whatever `unlisted` produced, since
+// both are independently true facts a receipt should carry. It only
+// disappears from the final result the same way any STEP_UP-tier reason
+// does: when `unlisted` already forced a DENY, and DENY > STEP_UP drops
+// every STEP_UP-tier reason at the top of `evaluate()`.
 describe("D-3 ceiling: unverified trust vs. the unlisted disposition", () => {
   // luckyspin.example is not in DIRECTORY, so this stays ASSERTED, not VERIFIED.
   const unverified = { domain: "unknown-shop.example" };
@@ -309,12 +321,16 @@ describe("D-3 ceiling: unverified trust vs. the unlisted disposition", () => {
     ]);
   });
 
-  it("unverified + unlisted STEP_UP -> STEP_UP", () => {
+  it("unverified + unlisted STEP_UP -> STEP_UP, carrying BOTH reasons, in evaluation order", () => {
     const policy = policyFrom({ merchants: { allow: [], deny: [], unlisted: "STEP_UP" } });
     const result = run(policy, action(10, unverified));
     expect(result.decision).toBe(Decision.STEP_UP);
+    // Both facts are true and both belong on the receipt: not on the
+    // allowlist (unlisted's own reason, evaluated first) AND not verified
+    // (the D-3 cap, evaluated second) -- not just whichever one "wins."
     expect(result.reasons.map((r) => r.code)).toEqual([
       ReasonCode.STEP_UP_MERCHANT_NOT_ALLOWLISTED,
+      ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
     ]);
   });
 
@@ -711,5 +727,158 @@ describe("precedence", () => {
     expect(result.reasons.map((r) => r.code)).toEqual([
       ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
     ]);
+  });
+});
+
+// Every reason message a human actually reads must show money the way a
+// human reads money ($203.00), never the wire-format integer (20300) the
+// engine compares internally. `detail` and every value on the wire stay
+// raw minor units -- only `message` formats.
+describe("reason messages format money, never bare minor units", () => {
+  it("DENY_TRANSACTION_LIMIT_EXCEEDED formats the per-transaction maximum", () => {
+    const policy = policyFrom({ per_transaction_max: toMinorUnits(150, "USD") });
+    const result = run(policy, action(203, { domain: "staples.com" }));
+    expect(result.reasons[0]?.code).toBe(ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED);
+    expect(result.reasons[0]?.message).toBe(
+      "The amount exceeds the per-transaction maximum of $150.00.",
+    );
+    // detail stays raw minor units -- only the human-readable message formats.
+    expect(result.reasons[0]?.detail).toEqual({
+      amount: toMinorUnits(203, "USD"),
+      max: toMinorUnits(150, "USD"),
+    });
+  });
+
+  it("DENY_CUMULATIVE_LIMIT_EXCEEDED formats both the projected total and the limit", () => {
+    const policy = policyFrom({
+      cumulative_limits: [{ window: "month", max_amount: toMinorUnits(500, "USD") }],
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+    });
+    const spend: SpendSnapshot = {
+      ...emptySpendSnapshot(),
+      month: { amount: toMinorUnits(450, "USD"), count: 3 },
+    };
+    const result = run(policy, action(60, { domain: "staples.com" }), { spend });
+    expect(result.reasons[0]?.code).toBe(ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED);
+    expect(result.reasons[0]?.message).toBe(
+      "The action would bring month spend to $510.00, over the limit of $500.00.",
+    );
+  });
+
+  it("STEP_UP_AMOUNT_THRESHOLD formats the threshold", () => {
+    const policy = policyFrom({
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+      step_up: { above_amount: toMinorUnits(150, "USD"), ttl_seconds: 900 },
+    });
+    const result = run(policy, action(150, { domain: "staples.com" }));
+    expect(result.reasons[0]?.code).toBe(ReasonCode.STEP_UP_AMOUNT_THRESHOLD);
+    expect(result.reasons[0]?.message).toBe(
+      "The amount is at or above the mandate's step-up threshold of $150.00.",
+    );
+  });
+
+  it("STEP_UP_CUMULATIVE_THRESHOLD formats both the projected total and the threshold", () => {
+    const policy = policyFrom({
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+      step_up: {
+        above_cumulative: { window: "month", amount: toMinorUnits(400, "USD") },
+        ttl_seconds: 900,
+      },
+    });
+    const spend: SpendSnapshot = {
+      ...emptySpendSnapshot(),
+      month: { amount: toMinorUnits(380, "USD"), count: 1 },
+    };
+    const result = run(policy, action(30, { domain: "staples.com" }), { spend });
+    expect(result.reasons[0]?.code).toBe(ReasonCode.STEP_UP_CUMULATIVE_THRESHOLD);
+    expect(result.reasons[0]?.message).toBe(
+      "Projected month spend of $410.00 is at or above the step-up threshold of $400.00.",
+    );
+  });
+
+  it("DENY_VELOCITY_LIMIT_EXCEEDED is a transaction count, not money -- stays a bare integer", () => {
+    const policy = policyFrom({
+      cumulative_limits: [{ window: "day", max_amount: toMinorUnits(10000, "USD"), max_count: 3 }],
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+    });
+    const spend: SpendSnapshot = { ...emptySpendSnapshot(), day: { amount: 0, count: 3 } };
+    const result = run(policy, action(10, { domain: "staples.com" }), { spend });
+    expect(result.reasons[0]?.code).toBe(ReasonCode.DENY_VELOCITY_LIMIT_EXCEEDED);
+    expect(result.reasons[0]?.message).toBe(
+      "The action would bring the day transaction count to 4, over the limit of 3.",
+    );
+  });
+
+  it("no reason message, across every reason code that carries a minor-unit amount, contains the bare integer", () => {
+    // One scenario per money-bearing reason code, each with a distinct,
+    // easy-to-spot raw minor-unit value (in the tens of thousands) that
+    // must never appear literally in the message -- only its formatted
+    // dollar form may.
+    const scenarios: { result: ReturnType<typeof run>; rawMinorUnits: number[] }[] = [
+      {
+        result: run(
+          policyFrom({ per_transaction_max: toMinorUnits(150, "USD") }),
+          action(203, { domain: "staples.com" }),
+        ),
+        rawMinorUnits: [toMinorUnits(150, "USD"), toMinorUnits(203, "USD")],
+      },
+      {
+        result: run(
+          policyFrom({
+            cumulative_limits: [{ window: "month", max_amount: toMinorUnits(500, "USD") }],
+            merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+          }),
+          action(60, { domain: "staples.com" }),
+          {
+            spend: {
+              ...emptySpendSnapshot(),
+              month: { amount: toMinorUnits(450, "USD"), count: 3 },
+            },
+          },
+        ),
+        rawMinorUnits: [toMinorUnits(500, "USD"), toMinorUnits(510, "USD")],
+      },
+      {
+        result: run(
+          policyFrom({
+            merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+            step_up: { above_amount: toMinorUnits(150, "USD"), ttl_seconds: 900 },
+          }),
+          action(150, { domain: "staples.com" }),
+        ),
+        rawMinorUnits: [toMinorUnits(150, "USD")],
+      },
+      {
+        result: run(
+          policyFrom({
+            merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+            step_up: {
+              above_cumulative: { window: "month", amount: toMinorUnits(400, "USD") },
+              ttl_seconds: 900,
+            },
+          }),
+          action(30, { domain: "staples.com" }),
+          {
+            spend: {
+              ...emptySpendSnapshot(),
+              month: { amount: toMinorUnits(380, "USD"), count: 1 },
+            },
+          },
+        ),
+        rawMinorUnits: [toMinorUnits(400, "USD"), toMinorUnits(410, "USD")],
+      },
+    ];
+
+    for (const { result, rawMinorUnits } of scenarios) {
+      expect(result.reasons.length).toBeGreaterThan(0);
+      for (const reason of result.reasons) {
+        for (const raw of rawMinorUnits) {
+          expect(reason.message).not.toMatch(new RegExp(`\\b${raw}\\b`));
+        }
+        // Every money-bearing message must show at least one properly
+        // formatted dollar amount instead.
+        expect(reason.message).toMatch(/\$\d[\d,]*\.\d{2}/);
+      }
+    }
   });
 });

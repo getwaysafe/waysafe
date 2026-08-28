@@ -28,6 +28,7 @@ import {
   MerchantTrust,
   type ResolvedMerchant,
 } from "../merchant.js";
+import { formatMoney, type Currency } from "../money.js";
 import {
   UnlistedDisposition,
   type CategoryRules,
@@ -54,7 +55,7 @@ export function evaluate(input: EngineInput): EngineResult {
     ...evaluateCategory(policy.categories, action, merchant),
     ...evaluateConstraints(policy.constraints, action),
     ...evaluateLimits(policy, action, spend),
-    ...evaluateStepUpThresholds(policy.step_up, action, spend),
+    ...evaluateStepUpThresholds(policy.step_up, action, spend, policy.currency),
   ];
 
   const denies = reasons.filter(
@@ -230,10 +231,8 @@ function evaluateMerchant(
     reasons.push(unverifiedMerchantReason());
   } else if (!allow.matched) {
     // `unlisted` is evaluated first and unconditionally -- a DENY or STEP_UP
-    // it produces is never softened by anything below. The D-3 unverified
-    // cap is then applied as a *ceiling*, not a replacement: it can only push
-    // the outcome up toward DENY, never down past whatever `unlisted` already
-    // decided. See DECISIONS.md D-3 amendment for the full matrix.
+    // it produces is never softened by anything below. See DECISIONS.md D-3
+    // amendment for the full matrix.
     switch (rules.unlisted) {
       case UnlistedDisposition.DENY:
         reasons.push({
@@ -253,9 +252,16 @@ function evaluateMerchant(
         break;
     }
 
-    if (merchant.trust !== MerchantTrust.VERIFIED && reasons.length === 0) {
-      // `unlisted` was ALLOW (or contributed nothing): the ceiling still
-      // applies, so an unverified merchant lands at STEP_UP, not ALLOW.
+    // The D-3 unverified cap is always evaluated too, unconditionally, not
+    // only when `unlisted` had nothing else to say. "Not on the allowlist"
+    // and "not verifiably who it claims to be" are independently true facts
+    // about the same merchant -- a receipt (and a human deciding a step-up)
+    // needs both, not whichever one happened to run first. This can only
+    // ever *add* a reason at STEP_UP or below; it never replaces or softens
+    // whatever `unlisted` already decided, and the top-level DENY > STEP_UP
+    // precedence in `evaluate()` still drops it entirely from the final
+    // result whenever `unlisted` already forced a DENY.
+    if (merchant.trust !== MerchantTrust.VERIFIED) {
       reasons.push(unverifiedMerchantReason());
     }
   }
@@ -412,7 +418,7 @@ function evaluateLimits(
   if (policy.per_transaction_max !== undefined && action.amount > policy.per_transaction_max) {
     reasons.push({
       code: ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
-      message: `The amount exceeds the per-transaction maximum of ${policy.per_transaction_max}.`,
+      message: `The amount exceeds the per-transaction maximum of ${formatMoney({ amount: policy.per_transaction_max, currency: policy.currency })}.`,
       policy_path: "/per_transaction_max",
       detail: { amount: action.amount, max: policy.per_transaction_max },
     });
@@ -424,7 +430,7 @@ function evaluateLimits(
     if (projectedAmount > limit.max_amount) {
       reasons.push({
         code: ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED,
-        message: `The action would bring ${limit.window} spend to ${projectedAmount}, over the limit of ${limit.max_amount}.`,
+        message: `The action would bring ${limit.window} spend to ${formatMoney({ amount: projectedAmount, currency: policy.currency })}, over the limit of ${formatMoney({ amount: limit.max_amount, currency: policy.currency })}.`,
         policy_path: `/cumulative_limits/${i}`,
         detail: { window: limit.window, projected: projectedAmount, max: limit.max_amount },
       });
@@ -451,13 +457,14 @@ function evaluateStepUpThresholds(
   stepUp: StepUpRules,
   action: ProposedAction,
   spend: SpendSnapshot,
+  currency: Currency,
 ): Reason[] {
   const reasons: Reason[] = [];
 
   if (stepUp.above_amount !== undefined && action.amount >= stepUp.above_amount) {
     reasons.push({
       code: ReasonCode.STEP_UP_AMOUNT_THRESHOLD,
-      message: `The amount is at or above the mandate's step-up threshold of ${stepUp.above_amount}.`,
+      message: `The amount is at or above the mandate's step-up threshold of ${formatMoney({ amount: stepUp.above_amount, currency })}.`,
       policy_path: "/step_up/above_amount",
       detail: { amount: action.amount, threshold: stepUp.above_amount },
     });
@@ -469,7 +476,7 @@ function evaluateStepUpThresholds(
     if (projected >= stepUp.above_cumulative.amount) {
       reasons.push({
         code: ReasonCode.STEP_UP_CUMULATIVE_THRESHOLD,
-        message: `Projected ${stepUp.above_cumulative.window} spend of ${projected} is at or above the step-up threshold of ${stepUp.above_cumulative.amount}.`,
+        message: `Projected ${stepUp.above_cumulative.window} spend of ${formatMoney({ amount: projected, currency })} is at or above the step-up threshold of ${formatMoney({ amount: stepUp.above_cumulative.amount, currency })}.`,
         policy_path: "/step_up/above_cumulative",
         detail: {
           window: stepUp.above_cumulative.window,

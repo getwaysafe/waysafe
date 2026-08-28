@@ -106,6 +106,48 @@ tested in `engine/evaluate.test.ts` under "D-3 ceiling: unverified trust vs.
 the unlisted disposition" (all four rows, plus the VERIFIED row for each
 disposition).
 
+### Amendment (Week 6) — the cap's own reason is no longer suppressed when `unlisted` also fired
+
+The ceiling table above was always about the *decision*, and that part was
+right. The *reasons* implementation was stricter than it needed to be:
+`STEP_UP_MERCHANT_UNVERIFIED` only got attached when `unlisted` contributed
+nothing (`reasons.length === 0`) -- so the unverified + `unlisted: STEP_UP`
+row produced a decision of `STEP_UP` with only
+`STEP_UP_MERCHANT_NOT_ALLOWLISTED` on the receipt, silently dropping the
+fact that the merchant's identity couldn't be verified at all. Caught
+building the Week 6 demo: its merchant-spoofing attempt (a bare `name`
+assertion) is exactly this row, and the receipt didn't say the one thing
+that actually mattered most for a human deciding whether to approve it.
+
+Both facts are independently true about the same merchant and both now
+attach, in evaluation order (`unlisted`'s reason first, the cap's second) --
+removing the `reasons.length === 0` gate was the entire fix. This changes
+`evaluateMerchant`'s internal output for exactly one row of the ceiling
+matrix (unverified + `unlisted: STEP_UP`); every other row is unaffected,
+including the DENY row, where `evaluate()`'s own DENY > STEP_UP precedence
+already drops every STEP_UP-tier reason from the final result regardless of
+how many `evaluateMerchant` produced internally.
+
+Tested in `engine/evaluate.test.ts`: the ceiling matrix's own "unverified +
+unlisted STEP_UP" row now asserts both codes, in order, and two "adversarial
+merchant assertions" tests (name-only, lookalike domain) were updated the
+same way; the other five ceiling-matrix rows pass unchanged.
+
+### Amendment (Week 6) — reason messages format money, `detail` and the wire never do
+
+Separately, every reason message with a minor-unit amount in it (per-
+transaction and cumulative limits, both step-up thresholds) was interpolating
+the raw integer -- "the per-transaction maximum of 15000" instead of
+"$150.00". Also caught building the demo, whose own narration otherwise
+formats every dollar amount consistently. `detail` and every value on the
+wire are untouched (still raw minor units, per D-2) -- only the
+human-readable `message` string now runs through `formatMoney`.
+`DENY_VELOCITY_LIMIT_EXCEEDED`'s transaction-count message is deliberately
+excluded: a count is not money and was never meant to be formatted as
+currency. Tested in `engine/evaluate.test.ts` under "reason messages format
+money, never bare minor units," including a sweep asserting the raw
+minor-unit integer never appears literally in any money-bearing message.
+
 ---
 
 ## D-4 — Budget accounting is explicit and stamped on every receipt
