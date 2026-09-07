@@ -86,6 +86,13 @@ export const AgentStatus = {
 
 export type AgentStatus = (typeof AgentStatus)[keyof typeof AgentStatus];
 
+export const PrincipalType = {
+  INDIVIDUAL: "INDIVIDUAL",
+  ORGANIZATION: "ORGANIZATION",
+} as const;
+
+export type PrincipalType = (typeof PrincipalType)[keyof typeof PrincipalType];
+
 export const AuthorizationStatus = {
   /** Terminal: ALLOW was returned and the authorization can be executed. */
   AUTHORIZED: "AUTHORIZED",
@@ -171,7 +178,7 @@ export interface Principal {
   /** Display name; for an org principal, the company name. */
   display_name: string;
   email: string | null;
-  type: "individual" | "organization";
+  type: PrincipalType;
   created_at: Date;
 }
 

@@ -1544,6 +1544,115 @@ points there so it isn't rediscovered from scratch at launch.
 
 ---
 
+## D-30 — `POST /v1/principals` and `GET /v1/principals/:id` — resolves OQ-9
+
+D-27's demo found this the hard way: running against real Postgres for the
+first time, `POST /v1/mandates` hit `mandates_principalId_fkey` because
+nothing anywhere creates a `Principal` row. Every prior real-database test
+seeded one directly with Prisma; the demo did the same as a documented
+stopgap, not a fix. This is the fix -- an external developer integrating
+against a real deployment for the first time hits the identical wall the
+demo did, with no Prisma access to work around it with.
+
+**A new `PrincipalRepository`, not a method grafted onto
+`AuthorizationRepository`.** D-18's `createAgent` lives on
+`AuthorizationRepository` for a specific, stated reason: `resolveMandateGate`
+already reads Agent rows from that same repository, so a second, standalone
+Agent store would risk silently desyncing from the one the gate actually
+consults. Nothing about resolving a mandate ever reads a Principal row --
+the FK is enforced by Postgres alone, never re-checked in application code
+-- so that risk doesn't exist here, and grafting Principal onto
+`AuthorizationRepository` anyway would just be irregular for no reason.
+`apps/api/src/principals/` (`types.ts`, `in-memory-repository.ts`,
+`prisma-repository.ts`) mirrors `agent-keys/`'s shape exactly: same DTO
+split (`NewPrincipal` in, `PrincipalRecord` out), no row lock (creating or
+reading a principal is never cumulative or racy, the same reasoning
+`agent-keys/prisma-repository.ts` already gives for skipping D-4/D-16's
+lock pattern).
+
+**Same auth rule as every other route (Phase 4, D-21).** `POST /v1/principals`
+and `GET /v1/principals/:id` sit outside `PUBLIC_ROUTES`, exactly like
+`POST /v1/agents` -- any valid credential for the organization, an agent key
+or an org credential alike, is accepted (D-18's agentId binding is
+authorization-specific and doesn't apply to account-management routes like
+this one, same as agent creation). `GET /v1/principals/:id` follows the
+`GET /v1/mandates/:id` precedent exactly: a principal belonging to a
+different organization returns the same generic 404 as one that doesn't
+exist at all, never a 403 that would confirm the id is real.
+
+**`PrincipalType` (`INDIVIDUAL` / `ORGANIZATION`) now lives in
+`packages/core`'s domain model, matching `AgentStatus`'s precedent --** and
+the dead `Principal` interface already declared there (never wired up
+anywhere, imported nowhere) had its `type` field corrected from a
+lowercase, hand-rolled union that didn't match the Prisma enum's casing to
+the same `PrincipalType` the new repository actually uses. Left unused
+otherwise, same as before -- `apps/api`'s repository DTOs stay local,
+matching `agent-keys/types.ts`'s own precedent of not sharing wire-shaped
+types through core.
+
+**What creating a principal returns is the full record, not a trimmed
+`CreatedAgent`-style projection.** `POST /v1/agents`'s response omits
+`organization_id`/`created_at` because nothing downstream needs them
+echoed back immediately; a `Principal` has no expensive-to-compute field
+worth hiding (unlike a Mandate's policy body), so create and get return
+identically shaped JSON -- one less shape for an SDK consumer to reconcile.
+
+**No implicit creation, and no FK-style validation added to
+`createMandate` or the in-memory repository.** `principal_id` on
+`POST /v1/mandates` still isn't checked against a real Principal row by
+application code -- Postgres's own foreign key is still the only
+enforcement, exactly as before this decision. Teaching the in-memory
+repository to enforce the same constraint (so tests couldn't silently rely
+on a principal that was never created) is a real gap, but a separate one
+from "there is no route to create one" -- OQ-9 was specifically the latter,
+and closing the former would touch most of `apps/api/src/*.test.ts` for a
+correctness question (implicit creation vs. an explicit onboarding step)
+this file already flagged as a product decision, not a schema default to
+make silently. Left as its own follow-up, not folded in here.
+
+**`examples/demo.ts`'s `ensurePrincipal` workaround is gone.** The whole
+mechanism -- the no-op default, the real-Postgres-branch closure that
+called `prisma.principal.create` directly, the `startServer()` return
+field -- is deleted; the demo now calls `org.createPrincipal({ display_name:
+"Demo Principal" })` like any other developer would, identically on both
+the in-memory and real-Postgres branches, closing the exact gap that made
+those two branches diverge. `examples/quickstart.ts`'s hardcoded
+`"prin_quickstart_demo"` string is replaced the same way -- it was
+already latently wrong for anyone running quickstart against a real,
+already-deployed server (`WAYSAFE_BASE_URL`/`WAYSAFE_API_KEY`), just never
+exercised, since quickstart's own in-memory default has no FK to violate.
+
+**`packages/sdk/src/integration.test.ts`'s end-to-end test now creates its
+principal over HTTP, per the task.** `setUpAuthenticatedMandate()` --
+shared by the full-journey, DENY, cross-org-attack, and dashboard-reads
+tests -- calls `orgClient.createPrincipal(...)` instead of minting a bare
+string nobody asked the API about; a dedicated test also round-trips
+`createPrincipal`/`getPrincipal` directly. The step-up test's own,
+separately-duplicated setup and the cross-org attack's deliberately
+synthetic `"prin_doesnt_matter"` (testing a mismatch, not a real principal)
+are both left as they were -- untouched by this decision, not
+overlooked.
+
+Implemented in `apps/api/src/principals/` (new), `apps/api/src/server.ts`
+(`POST /v1/principals`, `GET /v1/principals/:id`, wired into both the
+default in-memory `ServerRepos` and `apps/api/src/index.ts`'s Prisma
+wiring), `packages/core/src/domain.ts` (`PrincipalType`), `packages/sdk/
+src/index.ts` (`createPrincipal`, `getPrincipal`), `examples/demo.ts`,
+`examples/quickstart.ts`, and `packages/sdk/src/integration.test.ts`.
+Tested in `apps/api/src/principals/{in-memory,prisma}-repository.test.ts`
+(the latter against real Postgres), a new `describe("principal lifecycle
+(OQ-9)")` block in `apps/api/src/server.test.ts` (creation, defaults, an
+explicit `ORGANIZATION` type, 400s for a missing name/bad email/bad type,
+a 404 for an unknown id, and the cross-organization-isolation attack), and
+`packages/sdk/src/integration.test.ts`'s new `POST /v1/principals + GET
+/v1/principals/:id` block plus its extended full-journey setup. `npm run
+typecheck`, the full `npm test` (Postgres-backed suites included), `npm
+run build` (all packages plus the dashboard), and both
+`examples/quickstart.ts` and `examples/demo.ts` end-to-end (in-memory and
+against real Postgres, twice in a row) all ran clean after the change.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1686,6 +1795,10 @@ sign every event, or just periodically sign the chain's tip, and who holds
 the verification public key?**
 
 ## OQ-9 — There is no API route that creates a Principal
+
+**Resolved by D-30: `POST /v1/principals` and `GET /v1/principals/:id`,
+same auth rules as the rest of the surface.** Left in place, unedited
+below, so the original reasoning survives.
 
 Found building `examples/demo.ts` (D-27): running it against real Postgres
 for the first time (every prior real-database test seeds a `Principal` row

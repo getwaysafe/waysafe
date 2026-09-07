@@ -65,6 +65,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
     "../apps/api/src/authorization/in-memory-repository.js"
   );
   const { InMemoryEvidenceRepository } = await import("../apps/api/src/evidence/in-memory-repository.js");
+  const { InMemoryPrincipalRepository } = await import("../apps/api/src/principals/in-memory-repository.js");
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
@@ -87,6 +88,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
       evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
+      principals: new InMemoryPrincipalRepository(),
     },
     webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
     adapters: { demo_rail: new FakeAdapter({ providerFee: 25 }) },
@@ -181,7 +183,8 @@ async function main() {
 
   section("3. Register an agent, and create + authenticate a mandate for it");
   const agent = await org.createAgent({ name: "quickstart procurement bot" });
-  const principalId = "prin_quickstart_demo";
+  const principal = await org.createPrincipal({ display_name: "Quickstart Demo Principal" });
+  const principalId = principal.principal_id;
   const mandate = await org.createMandate({
     principal_id: principalId,
     agent_ids: [agent.agent_id],

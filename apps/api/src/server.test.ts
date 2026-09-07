@@ -12,6 +12,7 @@ import { buildServer, type ServerRepos } from "./server.js";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
+import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
 import {
@@ -45,6 +46,7 @@ beforeAll(async () => {
     evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
+    principals: new InMemoryPrincipalRepository(),
   };
 
   app = buildServer({
@@ -269,6 +271,117 @@ describe("agent and key lifecycle", () => {
       headers: { authorization: `Bearer ${apiKey}` },
     });
     expect(useResponse.statusCode).toBe(401);
+  });
+});
+
+describe("principal lifecycle (OQ-9)", () => {
+  it("creates a principal and reads it back", async () => {
+    const createResponse = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: { display_name: "Jordan Rivera", email: "jordan@example.com" },
+    });
+    expect(createResponse.statusCode).toBe(201);
+    const created = createResponse.json();
+    expect(created.principal_id).toMatch(/^prin_/);
+    expect(created.organization_id).toBe(ORG);
+    expect(created.display_name).toBe("Jordan Rivera");
+    expect(created.email).toBe("jordan@example.com");
+    expect(created.type).toBe("INDIVIDUAL");
+
+    const getResponse = await app.inject({
+      method: "GET",
+      url: `/v1/principals/${created.principal_id}`,
+      headers: authed(),
+    });
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toEqual(created);
+  });
+
+  it("defaults email to null and type to INDIVIDUAL when omitted", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: { display_name: "No Email Given" },
+    });
+    expect(response.statusCode).toBe(201);
+    const body = response.json();
+    expect(body.email).toBeNull();
+    expect(body.type).toBe("INDIVIDUAL");
+  });
+
+  it("honors an explicit ORGANIZATION type", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: { display_name: "Acme Corp", type: "ORGANIZATION" },
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json().type).toBe("ORGANIZATION");
+  });
+
+  it("400s a missing display_name", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: {},
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toBe("invalid_request");
+  });
+
+  it("400s an invalid email", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: { display_name: "Bad Email", email: "not-an-email" },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("400s an invalid type", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: authed(),
+      payload: { display_name: "Bad Type", type: "CORPORATION" },
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("404s a principal id that doesn't exist", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/principals/prin_does_not_exist",
+      headers: authed(),
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("THE ATTACK: a principal created by another organization 404s, not a leak of its data", async () => {
+    const otherOrgKey = (
+      await repos.agentKeys.createKey({ organizationId: "org_principal_attack", name: "attacker admin" }, new Date())
+    ).fullKey;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/principals",
+      headers: { authorization: `Bearer ${otherOrgKey}` },
+      payload: { display_name: "Victim's Principal" },
+    });
+    const principalId = created.json().principal_id;
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/principals/${principalId}`,
+      headers: authed(),
+    });
+    expect(response.statusCode).toBe(404);
   });
 });
 

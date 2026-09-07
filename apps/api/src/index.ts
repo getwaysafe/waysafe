@@ -5,6 +5,7 @@ import { PrismaAgentKeyRepository } from "./agent-keys/prisma-repository.js";
 import { PrismaAuthorizationRepository } from "./authorization/prisma-repository.js";
 import { PrismaEvidenceRepository } from "./evidence/prisma-repository.js";
 import { loadOrGenerateEvidenceSigningKey } from "./evidence/signing-key.js";
+import { PrismaPrincipalRepository } from "./principals/prisma-repository.js";
 import { PrismaWebauthnRepository } from "./webauthn/prisma-repository.js";
 import { PrismaProviderEventRepository } from "./webhooks/prisma-repository.js";
 
@@ -26,6 +27,7 @@ const repos: ServerRepos | undefined = process.env.DATABASE_URL
         evidence: new PrismaEvidenceRepository(prisma, loadOrGenerateEvidenceSigningKey()),
         webauthn: new PrismaWebauthnRepository(prisma),
         providerEvents: new PrismaProviderEventRepository(prisma),
+        principals: new PrismaPrincipalRepository(prisma),
       };
     })()
   : undefined;

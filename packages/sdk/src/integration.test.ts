@@ -30,6 +30,7 @@ import { buildServer, type ServerRepos } from "../../../apps/api/src/server.js";
 import { InMemoryAgentKeyRepository } from "../../../apps/api/src/agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../../../apps/api/src/authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../../../apps/api/src/evidence/in-memory-repository.js";
+import { InMemoryPrincipalRepository } from "../../../apps/api/src/principals/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "../../../apps/api/src/webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "../../../apps/api/src/webhooks/in-memory-repository.js";
 import {
@@ -58,6 +59,7 @@ beforeAll(async () => {
     evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
+    principals: new InMemoryPrincipalRepository(),
   };
 
   app = buildServer({
@@ -85,14 +87,17 @@ const PROCUREMENT_STRICT =
   "You may spend $500 per month on office supplies. Amazon and Staples are approved. Never spend more than $150 in a single transaction. Ask me before buying from another merchant.";
 
 /** Full setup a developer would do once per agent: compile, create, and
- * authenticate a mandate, mint an agent key. Runs entirely through the SDK. */
+ * authenticate a mandate, mint an agent key. Runs entirely through the SDK --
+ * including registering the principal itself over HTTP (OQ-9), not a
+ * locally-minted id nobody asked the API about. */
 async function setUpAuthenticatedMandate() {
   const agent = await orgClient.createAgent({ name: "sdk integration bot" });
 
   const compiled = await orgClient.compileMandate({ instruction: PROCUREMENT_STRICT });
   if (compiled.status !== "compiled") throw new Error("expected the fixture instruction to compile");
 
-  const principalId = `prin_sdk_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const principal = await orgClient.createPrincipal({ display_name: "sdk integration principal" });
+  const principalId = principal.principal_id;
   const mandate = await orgClient.createMandate({
     principal_id: principalId,
     agent_ids: [agent.agent_id],
@@ -133,6 +138,22 @@ async function setUpAuthenticatedMandate() {
 
   return { agent, mandate, principalId, agentClient };
 }
+
+describe("POST /v1/principals + GET /v1/principals/:id (OQ-9)", () => {
+  it("creates a principal over HTTP and reads it back through the SDK", async () => {
+    const created = await orgClient.createPrincipal({
+      display_name: "Integration Test Principal",
+      email: "principal@example.com",
+      type: "ORGANIZATION",
+    });
+    expect(created.principal_id).toMatch(/^prin_/);
+    expect(created.display_name).toBe("Integration Test Principal");
+    expect(created.type).toBe("ORGANIZATION");
+
+    const fetched = await orgClient.getPrincipal(created.principal_id);
+    expect(fetched).toEqual(created);
+  });
+});
 
 describe("the full journey through the SDK against a real server", () => {
   it("compiles, creates, authenticates a mandate, authorizes, executes, and verifies -- no raw REST", async () => {

@@ -24,6 +24,8 @@ import {
 } from "@waysafe/core";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
+import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.js";
+import type { PrincipalRecord, PrincipalRepository } from "./principals/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import type {
@@ -85,6 +87,12 @@ const CreateAgentBodySchema = z.object({
   description: z.string().optional(),
 });
 
+const CreatePrincipalBodySchema = z.object({
+  display_name: z.string().min(1),
+  email: z.string().email().optional(),
+  type: z.enum(["INDIVIDUAL", "ORGANIZATION"]).optional(),
+});
+
 const CreateAgentKeyBodySchema = z.object({
   name: z.string().min(1),
 });
@@ -110,6 +118,7 @@ export interface ServerRepos {
   evidence: EvidenceRepository;
   webauthn: WebauthnRepository;
   providerEvents: ProviderEventRepository;
+  principals: PrincipalRepository;
 }
 
 export interface BuildServerOptions {
@@ -233,6 +242,17 @@ function toAgentJSON(agent: AgentListItem) {
   };
 }
 
+function toPrincipalJSON(principal: PrincipalRecord) {
+  return {
+    principal_id: principal.id,
+    organization_id: principal.organizationId,
+    display_name: principal.displayName,
+    email: principal.email,
+    type: principal.type,
+    created_at: principal.createdAt.toISOString(),
+  };
+}
+
 function toKeyJSON(key: AgentKeyRecord) {
   return {
     key_id: key.id,
@@ -296,6 +316,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     ),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
+    principals: new InMemoryPrincipalRepository(),
   };
 
   const webauthnConfig: WebauthnConfig = options.webauthnConfig ?? {
@@ -766,6 +787,40 @@ export function buildServer(options: BuildServerOptions = {}) {
       name: created.name,
       status: created.status,
     });
+  });
+
+  /** OQ-9: the route an external developer needs to complete an
+   * integration -- without it there is no way to get a `principal_id`
+   * that `POST /v1/mandates` will accept, other than seeding the row by
+   * hand against Postgres directly. Same auth rule as every other route
+   * here: any valid credential for this organization, agent key or org
+   * credential alike (D-18) -- creating a principal isn't an agent-scoped
+   * action, so nothing about D-18's agentId binding applies. */
+  app.post("/v1/principals", async (request, reply) => {
+    const body = CreatePrincipalBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+
+    const created = await repos.principals.createPrincipal(
+      {
+        organizationId: request.auth!.organizationId,
+        displayName: body.data.display_name,
+        email: body.data.email,
+        type: body.data.type,
+      },
+      new Date(),
+    );
+    return reply.code(201).send(toPrincipalJSON(created));
+  });
+
+  app.get("/v1/principals/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const principal = await repos.principals.getPrincipal(id, request.auth!.organizationId);
+    if (!principal) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    return reply.send(toPrincipalJSON(principal));
   });
 
   /** Mints an agent API key. The full key is shown exactly once, here. */

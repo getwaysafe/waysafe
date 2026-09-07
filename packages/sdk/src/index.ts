@@ -26,6 +26,7 @@ import type {
   Decision,
   MandateStatus,
   Policy,
+  PrincipalType,
   ProposedAction,
   Reason,
   ReasonCode,
@@ -352,6 +353,24 @@ export function asExecutable(decision: AuthorizationDecision): ExecutableDecisio
   return { [EXECUTABLE]: true, decision };
 }
 
+// --- principals ---------------------------------------------------------------
+
+export interface CreatePrincipalRequest {
+  display_name: string;
+  email?: string;
+  /** Defaults to INDIVIDUAL. */
+  type?: PrincipalType;
+}
+
+export interface PrincipalDetail {
+  principal_id: string;
+  organization_id: string;
+  display_name: string;
+  email: string | null;
+  type: PrincipalType;
+  created_at: string;
+}
+
 // --- agents / keys -----------------------------------------------------------
 
 export interface CreateAgentRequest {
@@ -643,6 +662,18 @@ export class Waysafe {
       policy_hash?: string;
     }>("POST", "/v1/policies/validate", policy);
     return body;
+  }
+
+  /** Registers the person (or org) a mandate delegates authority over.
+   * `createMandate`'s `principal_id` must name a principal created here
+   * first (OQ-9) -- there is no implicit creation on first reference. */
+  async createPrincipal(request: CreatePrincipalRequest): Promise<PrincipalDetail> {
+    const { body } = await this.request<PrincipalDetail>("POST", "/v1/principals", request);
+    return body;
+  }
+
+  async getPrincipal(principalId: string): Promise<PrincipalDetail> {
+    return this.get<PrincipalDetail>(`/v1/principals/${principalId}`);
   }
 
   /** Persists a compiled, confirmed policy as a Mandate, status

@@ -97,7 +97,6 @@ async function startServer(): Promise<{
   baseUrl: string;
   apiKey: string;
   usingRealDatabase: boolean;
-  ensurePrincipal: (principalId: string) => Promise<void>;
 }> {
   const { buildServer } = await import("../apps/api/src/server.js");
   const { InMemoryAgentKeyRepository } = await import("../apps/api/src/agent-keys/in-memory-repository.js");
@@ -105,6 +104,7 @@ async function startServer(): Promise<{
     "../apps/api/src/authorization/in-memory-repository.js"
   );
   const { InMemoryEvidenceRepository } = await import("../apps/api/src/evidence/in-memory-repository.js");
+  const { InMemoryPrincipalRepository } = await import("../apps/api/src/principals/in-memory-repository.js");
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
@@ -122,11 +122,6 @@ async function startServer(): Promise<{
   let agentKeys: InstanceType<typeof InMemoryAgentKeyRepository>;
   let app: ReturnType<typeof buildServer>;
   let usingRealDatabase = false;
-  // No-op for the in-memory repositories (no foreign keys to satisfy); on
-  // real Postgres, seeds the Principal row createMandate's FK requires --
-  // there is no public API route that creates one (see DECISIONS.md OQ-9),
-  // so this mirrors exactly what the Prisma test suites already do by hand.
-  let ensurePrincipal: (principalId: string) => Promise<void> = async () => {};
 
   // A fresh organization every run -- the "against a fresh database" half
   // of this file's promise. Re-running this against a real, already-used
@@ -140,19 +135,18 @@ async function startServer(): Promise<{
       "../apps/api/src/authorization/prisma-repository.js"
     );
     const { PrismaEvidenceRepository } = await import("../apps/api/src/evidence/prisma-repository.js");
+    const { PrismaPrincipalRepository } = await import("../apps/api/src/principals/prisma-repository.js");
     const { PrismaWebauthnRepository } = await import("../apps/api/src/webauthn/prisma-repository.js");
     const { PrismaProviderEventRepository } = await import("../apps/api/src/webhooks/prisma-repository.js");
 
     const prisma = new PrismaClient();
     // The parent Organization row a real database's foreign keys require --
     // the in-memory repositories have no such constraint, so this step only
-    // exists on this branch.
+    // exists on this branch. The Principal row itself is created through
+    // POST /v1/principals below, over HTTP like everything else (OQ-9) --
+    // this used to be a direct Prisma seed; that workaround is gone now
+    // that the route exists.
     await prisma.organization.create({ data: { id: organizationId, name: "Demo Org" } });
-    ensurePrincipal = async (principalId: string) => {
-      await prisma.principal.create({
-        data: { id: principalId, organizationId, displayName: "Demo Principal" },
-      });
-    };
 
     const signingKey = loadOrGenerateEvidenceSigningKey((msg) => console.warn(`  ${warn(msg)}`));
     const prismaAgentKeys = new PrismaAgentKeyRepository(prisma);
@@ -166,6 +160,7 @@ async function startServer(): Promise<{
         evidence: new PrismaEvidenceRepository(prisma, signingKey),
         webauthn: new PrismaWebauthnRepository(prisma),
         providerEvents: new PrismaProviderEventRepository(prisma),
+        principals: new PrismaPrincipalRepository(prisma),
       },
       webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
       adapters,
@@ -187,6 +182,7 @@ async function startServer(): Promise<{
         evidence: new InMemoryEvidenceRepository(loadOrGenerateEvidenceSigningKey()),
         webauthn: new InMemoryWebauthnRepository(),
         providerEvents: new InMemoryProviderEventRepository(),
+        principals: new InMemoryPrincipalRepository(),
       },
       webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
       adapters,
@@ -204,7 +200,6 @@ async function startServer(): Promise<{
     baseUrl: `http://127.0.0.1:${address.port}`,
     apiKey: org.fullKey,
     usingRealDatabase,
-    ensurePrincipal,
   };
 }
 
@@ -223,7 +218,7 @@ async function main() {
   console.log(bold("\n=== Waysafe: instruction to verifiable receipt ===\n"));
 
   section("1. Connect");
-  const { baseUrl, apiKey, usingRealDatabase, ensurePrincipal } = await startServer();
+  const { baseUrl, apiKey, usingRealDatabase } = await startServer();
   const org = new Waysafe({ baseUrl, apiKey });
   console.log(
     `  ${ok("connected")} to ${baseUrl} (${usingRealDatabase ? "real Postgres" : "in-memory, no database configured"})`,
@@ -255,8 +250,8 @@ async function main() {
   );
 
   const agent = await org.createAgent({ name: "procurement bot" });
-  const principalId = `prin_demo_${Date.now()}`;
-  await ensurePrincipal(principalId);
+  const principal = await org.createPrincipal({ display_name: "Demo Principal" });
+  const principalId = principal.principal_id;
   const mandate = await org.createMandate({
     principal_id: principalId,
     agent_ids: [agent.agent_id],
