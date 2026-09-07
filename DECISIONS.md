@@ -1653,6 +1653,126 @@ against real Postgres, twice in a row) all ran clean after the change.
 
 ---
 
+## D-31 — Runtime target: dashboard on Vercel, API and a new expiry worker on Render — resolves OQ-6
+
+OQ-6 already sketched the answer informally ("the dashboard on Vercel plus
+the API on a container host... is the lower-friction split") but never
+picked one of the three container hosts it named, and never said what the
+"background worker for step-up expiry" it mentioned would actually run.
+Both are settled here.
+
+**The dashboard stays on Vercel.** Next.js App Router (D-23) on Vercel is
+the zero-friction default the framework is built for -- nothing about the
+dashboard (D-24's read-mostly pages, the session cookie from D-23/OQ-4)
+needs anything Vercel's serverless model can't give it: every request is
+short-lived, nothing holds a lock across requests, and nothing needs a
+long-lived database connection the way the API does. No alternative was
+seriously considered here; this part of OQ-6 was never actually in doubt.
+
+**The API and the new expiry worker both go on Render, as two separate
+services from the same repo, not Railway or Fly.** All three names OQ-6
+listed can run an arbitrary long-lived Node process against a persistent
+Postgres connection -- that part of the decision was never the hard part.
+What decided it: this build now needs exactly two kinds of process
+(a request-serving API and a clock-driven background worker with no HTTP
+port), and Render is the one of the three with that distinction built in
+as a first-class primitive -- a "Web Service" and a "Background Worker"
+are different resource types in its model, not the same "process with a
+start command" dressed up two ways. Railway can run the worker fine (any
+service without an exposed port works), but nothing about its model
+names or expects this shape; Fly trades the least friction for the most
+control (Firecracker VMs, `fly.toml`, explicit regions/volumes) that
+this deployment -- one region, two processes, one Postgres -- has no use
+for yet. Pick the platform whose primitives already match the shape of
+what's being deployed, not the one with the most dials to turn.
+
+**What the expiry worker needs to run, concretely.** Implemented in
+`apps/api/src/worker.ts` plus `sweepExpiredStepUps` (`apps/api/src/
+authorization/service.ts`, next to `resolveStepUp`, which it wraps) and a
+new `AuthorizationRepository.listExpiredPendingStepUps(now)` method
+(implemented on both `InMemoryAuthorizationRepository` and
+`PrismaAuthorizationRepository`, though only the Prisma one is ever used
+in production -- the worker refuses to start without `DATABASE_URL`,
+deliberately: there is nothing for a clock-driven sweep to do against an
+in-memory store no request handler can also see).
+
+*Why this needed a real worker at all, not just the lazy check already in
+`server.ts`.* A pending step-up past its TTL is already expired lazily,
+the moment anything looks at it -- `expireIfNeeded`, called from GET,
+execute, and approve/decline. That's sufficient to guarantee an expired
+step-up can never be executed (the existing "THE ATTACK: a pending
+step-up past its TTL cannot be executed" test in `server.test.ts` proves
+exactly that, and only that). It is not sufficient to guarantee the
+RESERVATION an expired step-up holds ever gets *released*: `resolveStepUp`
+is the only thing that appends the offsetting `RELEASE` entry, and lazy
+checking only ever calls it when something touches that specific
+authorization again. An agent that requests a step-up, a human who never
+opens an approval UI for it, and no coincidental later `GET` on that
+exact authorization id leaves the reservation held indefinitely --
+confirmed directly against `getSpendSnapshot` (D-4): its `mandate`-window
+sum (`sumWhere(() => true)`) is unbounded and unconditional, so an
+abandoned step-up permanently reduces that mandate's lifetime budget,
+forever, unless *something* eventually calls `resolveStepUp` on it. No
+existing test proved that "something" happens without a coincidental
+touch -- there wasn't one to prove, before this decision.
+
+*Why a separate process, not `setInterval` inside `index.ts`.* A sweep
+holds a mandate row lock (D-4's `withMandateLock`, a real Postgres
+`SELECT ... FOR UPDATE` under `AsyncLocalStorage`) for its duration. That
+must never share an event loop with request handling -- a slow or stuck
+sweep in-process would degrade API latency for every concurrent request,
+for a reason no request-serving code caused. Separate processes also
+deploy, restart, and scale independently, which matters once the API
+itself needs a redeploy mid-sweep and shouldn't have to wait for one.
+
+*What it actually does.* Polls on a timer (`WAYSAFE_WORKER_POLL_MS`,
+default 60 seconds -- short enough that a reservation is never held
+meaningfully longer than its stated TTL, long enough not to hammer
+Postgres with an unindexed-by-time query every second). Each pass:
+`listExpiredPendingStepUps(now)` finds every `PENDING_STEP_UP`
+authorization across every organization whose `stepUpExpiresAt` has
+passed -- deliberately unscoped to one org or mandate, unlike everything
+else on `AuthorizationRepository`, because this is what a clock-driven
+sweep does, not what one tenant's request reads. Each match goes through
+`resolveStepUp(..., "expired", ...)`, the identical function and lock
+path the lazy check already uses -- no second code path for the same
+state transition. A `resolveStepUp` call losing a race against a
+concurrent lazy expiry (or another sweep pass, if a run overlaps a slow
+previous one) throws because the row is no longer `PENDING_STEP_UP` by
+the time its lock is acquired; the worker logs and moves on, the same way
+losing a race for any other resource is expected, not a bug.
+
+*What it needs from its environment, concretely, for whoever provisions
+Render:* the same `DATABASE_URL` as the API (one Postgres, two
+connections), no inbound port (a Render "Background Worker," not a "Web
+Service" -- nothing ever calls it over HTTP), and `WAYSAFE_WORKER_POLL_MS`
+as its one optional tuning knob. Start command:
+`npm run start:worker -w @waysafe/api` (added alongside `dev:worker` for
+local development, mirroring the API's own `dev`/`start` split).
+
+Not implemented: any actual Render/Vercel account, service, or deploy
+config (`render.yaml` and equivalents) -- nothing is provisioned yet,
+this decision records the target and what the worker needs so
+provisioning isn't a research task when it happens.
+
+Implemented in `apps/api/src/worker.ts` (new), `apps/api/src/
+authorization/service.ts` (`sweepExpiredStepUps`), `apps/api/src/
+authorization/types.ts` (`listExpiredPendingStepUps` on
+`AuthorizationRepository`), `in-memory-repository.ts` and
+`prisma-repository.ts` (both implementations), and new `dev:worker`/
+`start:worker` scripts in `apps/api/package.json` (and a `dev:worker`
+passthrough at the root). Tested in `apps/api/src/authorization/
+service.test.ts` (a reservation released with nobody touching the
+authorization again, and a not-yet-expired step-up correctly left alone)
+and `apps/api/src/authorization/prisma-repository.test.ts` (the same
+scenario against real Postgres). `npm run typecheck`, the full `npm test`
+(Postgres-backed suites included), and `npm run build` all ran clean; the
+worker was also run directly against real Postgres (polling on a short
+interval, then stopped) to confirm it starts, connects, and logs
+correctly outside the test suite.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1728,6 +1848,10 @@ existed to avoid, just for a name that might not survive to launch.
 Revisit once trademark clearance lands.
 
 ## OQ-6 — Runtime target
+
+**Resolved by D-31: dashboard on Vercel, API and a new expiry worker both
+on Render, as separate services.** Left in place, unedited below, so the
+original reasoning survives.
 
 Vercel is in the PRD's stack. The policy engine wants row locks, a long-lived
 Postgres pool, and a background worker for step-up expiry, none of which suit

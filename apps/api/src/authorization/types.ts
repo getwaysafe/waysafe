@@ -242,6 +242,17 @@ export interface AuthorizationRepository {
   ): Promise<StoredAuthorization>;
 
   /**
+   * Every PENDING_STEP_UP authorization whose TTL has already passed as of
+   * `now`, across every organization -- not scoped to one mandate or org,
+   * unlike everything else on this interface, because this is what the
+   * expiry worker (D-31/OQ-6) sweeps on a timer, not what one tenant's
+   * request reads. Each result feeds `resolveStepUp(..., "expired", ...)`
+   * directly, which still takes `withMandateLock` itself -- this method
+   * only finds the work, it does not hold anything.
+   */
+  listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]>;
+
+  /**
    * Stamps `authenticatedAt` on the mandate version and moves the mandate to
    * ACTIVE. D-20: the only caller is `webauthn/service.ts`'s
    * `authenticateMandate()`, and only after `verifyAuthentication()` (a real

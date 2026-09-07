@@ -41,7 +41,7 @@ import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.j
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
 import { PrismaAuthorizationRepository } from "./prisma-repository.js";
-import { authorize, type AuthorizeRepos } from "./service.js";
+import { authorize, sweepExpiredStepUps, type AuthorizeRepos } from "./service.js";
 
 // This file's focus is the D-4/D-15 mandate row lock against real Postgres;
 // agent-key verification (D-18) is exercised on its own in
@@ -349,5 +349,35 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     expect(agents).toHaveLength(1);
     expect(agents[0]!.agentId).toBe(agentId);
     expect(agents[0]!.name).toBe("Test Agent");
+  }, 30_000);
+
+  it("D-31/OQ-6: sweepExpiredStepUps releases a reservation nobody ever asked about again, against real Postgres", async () => {
+    const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+    const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+    const { organizationId, agentId, principalId, mandateId, apiKey } = await seedMandate(
+      policyFrom({ merchants: { allow: [], deny: [], unlisted: "STEP_UP" } }),
+    );
+
+    const decided = await authorize(repos, {
+      organizationId,
+      request: request(organizationId, agentId, principalId, 42),
+      now: NOW,
+      apiKey,
+    });
+    if (decided.kind !== "decided") throw new Error("unreachable");
+    expect(decided.authorization.status).toBe("PENDING_STEP_UP");
+
+    const later = new Date(NOW.getTime() + 1000 * 60 * 20);
+    const count = await sweepExpiredStepUps(repo, later);
+
+    expect(count).toBeGreaterThanOrEqual(1);
+    const stored = await repo.getAuthorization(decided.authorization.id);
+    expect(stored?.status).toBe("EXPIRED");
+
+    const ledgerNet = await prisma.ledgerEntry.aggregate({
+      where: { mandateId },
+      _sum: { amount: true },
+    });
+    expect(ledgerNet._sum.amount).toBe(0);
   }, 30_000);
 });

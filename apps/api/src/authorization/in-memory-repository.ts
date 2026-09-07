@@ -423,6 +423,17 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return auth;
   }
 
+  async listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]> {
+    return [...this.authorizations.values()]
+      .filter(
+        (a) =>
+          a.status === "PENDING_STEP_UP" &&
+          a.step_up_expires_at !== null &&
+          new Date(a.step_up_expires_at).getTime() <= now.getTime(),
+      )
+      .map((a) => ({ mandateId: a.mandate_id, authorizationId: a.id }));
+  }
+
   async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
     const mandate = this.mandates.get(mandateId);
     if (!mandate) throw new Error(`no such mandate: ${mandateId}`);

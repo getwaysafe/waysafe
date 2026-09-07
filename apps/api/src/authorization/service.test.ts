@@ -13,7 +13,7 @@ import {
 import { InMemoryAuthorizationRepository } from "./in-memory-repository.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
-import { authorize, resolveStepUp, type AuthorizeRepos } from "./service.js";
+import { authorize, resolveStepUp, sweepExpiredStepUps, type AuthorizeRepos } from "./service.js";
 
 const ORG = "org_test";
 const PRINCIPAL = "prin_test";
@@ -534,6 +534,64 @@ describe("step-up lifecycle and the spend ledger", () => {
     expect(expired.status).toBe("EXPIRED");
     const entries = repo.ledgerEntriesFor(mandateId);
     expect(entries.reduce((sum, e) => sum + e.amount, 0)).toBe(0);
+  });
+
+  it("D-31/OQ-9: sweepExpiredStepUps releases a reservation nobody ever asked about again", async () => {
+    const { repo, repos, apiKey, mandateId } = await repoWithMandate(policyFrom({}));
+    const result = await authorize(repos, {
+      organizationId: ORG,
+      request: request({
+        action: {
+          amount: toMinorUnits(203, "USD"),
+          currency: "USD",
+          merchant: { domain: "staples.com" },
+          category: "office_supplies",
+          attestations: {},
+        },
+      }),
+      now: NOW,
+      apiKey,
+    });
+    if (result.kind !== "decided") throw new Error("unreachable");
+    expect(result.authorization.status).toBe("PENDING_STEP_UP");
+
+    // Nothing reads or touches this authorization again -- no GET, no
+    // execute, no approve/decline. Lazy expiry (server.ts's
+    // expireIfNeeded) never runs. The sweep is the only thing that can
+    // still release the hold.
+    const later = new Date(NOW.getTime() + 1000 * 60 * 20);
+    const count = await sweepExpiredStepUps(repo, later);
+
+    expect(count).toBe(1);
+    const authorization = await repo.getAuthorization(result.authorization.id);
+    expect(authorization?.status).toBe("EXPIRED");
+    const entries = repo.ledgerEntriesFor(mandateId);
+    expect(entries.reduce((sum, e) => sum + e.amount, 0)).toBe(0);
+  });
+
+  it("D-31: sweepExpiredStepUps ignores a step-up that hasn't expired yet", async () => {
+    const { repo, repos, apiKey } = await repoWithMandate(policyFrom({}));
+    const result = await authorize(repos, {
+      organizationId: ORG,
+      request: request({
+        action: {
+          amount: toMinorUnits(203, "USD"),
+          currency: "USD",
+          merchant: { domain: "staples.com" },
+          category: "office_supplies",
+          attestations: {},
+        },
+      }),
+      now: NOW,
+      apiKey,
+    });
+    if (result.kind !== "decided") throw new Error("unreachable");
+
+    const count = await sweepExpiredStepUps(repo, NOW);
+
+    expect(count).toBe(0);
+    const authorization = await repo.getAuthorization(result.authorization.id);
+    expect(authorization?.status).toBe("PENDING_STEP_UP");
   });
 
   it("does not reserve for a pending step-up when reserve_on_step_up is false", async () => {

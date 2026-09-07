@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev:api": "npm run dev -w @waysafe/api",
+    "dev:worker": "npm run dev:worker -w @waysafe/api",
     "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
     "demo": "tsx --env-file-if-exists=.env examples/demo.ts",
     "db:generate": "npm run generate -w @waysafe/db",

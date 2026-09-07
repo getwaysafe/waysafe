@@ -369,6 +369,14 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return toStoredAuthorization(updated);
   }
 
+  async listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]> {
+    const rows = await this.client.authorization.findMany({
+      where: { status: "PENDING_STEP_UP", stepUpExpiresAt: { lte: now } },
+      select: { id: true, mandateId: true },
+    });
+    return rows.map((row) => ({ mandateId: row.mandateId, authorizationId: row.id }));
+  }
+
   async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
     const client = this.client;
     const result = await client.mandateVersion.updateMany({

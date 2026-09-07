@@ -234,6 +234,31 @@ export async function resolveStepUp(
   );
 }
 
+/**
+ * One pass of the expiry worker (D-31/OQ-6): every step-up past its TTL,
+ * across every organization, expired the same way `resolveStepUp` always
+ * has. Exists alongside `resolveStepUp` rather than in `worker.ts` itself
+ * so it can be unit-tested without importing a file whose only other job
+ * is to run forever.
+ */
+export async function sweepExpiredStepUps(repo: AuthorizationRepository, now: Date): Promise<number> {
+  const expired = await repo.listExpiredPendingStepUps(now);
+  for (const { mandateId, authorizationId } of expired) {
+    // Another sweep, or a request that happened to touch this same
+    // authorization first (server.ts's expireIfNeeded), may have already
+    // resolved it between the list above and this call -- resolveStepUp
+    // throws if the row is no longer PENDING_STEP_UP by the time its lock
+    // is acquired. Losing that race is expected, the same way two HTTP
+    // requests racing for the same resource is expected, not a bug.
+    try {
+      await resolveStepUp(repo, mandateId, authorizationId, "expired", now);
+    } catch (err) {
+      console.error(`failed to expire step-up ${authorizationId} on mandate ${mandateId}:`, err);
+    }
+  }
+  return expired.length;
+}
+
 type AgentKeyCheck = { ok: true } | { ok: false; reasons: Reason[] };
 
 /**
