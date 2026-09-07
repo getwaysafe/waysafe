@@ -1470,6 +1470,80 @@ name.
 
 ---
 
+## D-29 — Production WebAuthn RP ID: `dashboard.waysafe.ai`, a subdomain, not the apex — resolves OQ-5
+
+D-20 deferred the actual answer here on purpose: it depended on D-19's
+rename clearing trademark search, which hadn't happened by Week 6's end.
+It has now (D-28) -- `waysafe.ai` is registered, so this is no longer
+blocked, and it's worth settling before launch rather than at launch,
+for the same reason D-20 gave: passkeys are bound to the RP ID, and
+every credential registered against the wrong one has to be thrown away
+and re-registered the moment the real one is picked. `localhost` stays
+the RP ID for local development, per D-20 -- nothing here changes that;
+every credential registered there was always disposable and stays that
+way.
+
+**The production RP ID is `dashboard.waysafe.ai` -- a subdomain, not the
+apex (`waysafe.ai`).** This is the one part of this decision that
+matters; everything else follows from it.
+
+**Why not the apex.** WebAuthn's RP ID matching rule lets a page at any
+origin whose domain has the RP ID as a registrable-domain suffix present
+that RP ID and attempt a ceremony against credentials registered under
+it. Register credentials against the apex (`waysafe.ai`) and every
+current and future subdomain -- a marketing site, docs, a status page,
+a blog, anything ever pointed at `*.waysafe.ai` -- becomes a surface
+that can invoke passkey ceremonies bound to those credentials, not just
+the dashboard that actually issues and consumes them. The apex is
+exactly the property most likely to run less-trusted code over time: a
+marketing site is the canonical thing that ends up on a CMS, with
+third-party scripts, a redirect service, or a vendor-managed page --
+none of which should sit inside the trust boundary of a credential that
+authorizes someone's money. A subdomain RP ID doesn't have this
+problem in the other direction: `dashboard.waysafe.ai` as the RP ID
+means only pages served from `dashboard.waysafe.ai` itself (or a future
+subdomain under it) can ever present that RP ID: a page at
+`docs.waysafe.ai` or the bare apex cannot, because the suffix
+relationship only runs one way.
+
+**Why `dashboard.waysafe.ai` specifically, not a new dedicated auth
+subdomain.** The WebAuthn ceremony is implemented today in
+`apps/dashboard` (`getMandateAuthenticationOptions`,
+`verifyMandateAuthentication`, and the passkey registration flow), and
+OQ-6 (immediately below) settles the dashboard's own production host as
+a Vercel deployment separate from the API's container host -- so
+`dashboard.waysafe.ai` is not a hypothetical name, it's the literal
+production hostname the dashboard is already headed for. A narrower,
+purpose-built subdomain used only for the passkey ceremony (something
+like `auth.waysafe.ai`) would scope the attack surface even tighter, and
+is worth revisiting if the dashboard ever grows enough unrelated surface
+area that isolating the ceremony becomes worth the operational cost of
+running a second deployment -- but building that now, before the
+dashboard exists in production at all, is inventing infrastructure this
+decision wasn't asked to build. Pick the narrowest RP ID that matches
+where the ceremony actually runs today; widen deliberately later if the
+shape of the deployment changes, the same way D-20 itself was deferred
+rather than guessed at.
+
+**This is why the choice couldn't wait for D-19/D-28's dust to fully
+settle, and also why it's being made now rather than at actual launch.**
+Every week between this decision and the first real user registering a
+passkey is a week where getting it wrong costs nothing; every credential
+registered against `dashboard.waysafe.ai` after a real launch is a
+credential that a later correction would invalidate. There is no
+migration path for a wrong RP ID -- only re-registration -- so the
+right time to decide is now, before there's anything to migrate.
+
+**Not implemented yet.** `WAYSAFE_RP_ID`/`WAYSAFE_RP_ORIGIN` in `.env`
+and `.env.example` still default to `localhost` -- correctly, since
+nothing is deployed to `dashboard.waysafe.ai` yet and D-20's dev-mode
+reasoning still applies unchanged. This decision records the production
+value for whoever configures the production environment when the
+dashboard is actually deployed (OQ-6); a comment in `.env.example`
+points there so it isn't rediscovered from scratch at launch.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1526,6 +1600,9 @@ Clerk, WorkOS, or Auth.js. Needs an answer before Week 5.
 
 **Resolved by D-20: `localhost` for the whole sprint.** Left in place,
 unedited below, so the original reasoning survives.
+
+**The production RP ID -- the part D-20 deliberately left open -- is
+resolved by D-29: `dashboard.waysafe.ai`.**
 
 Passkeys are bound to a domain. Registering against `localhost` and later moving
 to a real domain invalidates every credential. Picking the production domain
