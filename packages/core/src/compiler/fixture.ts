@@ -16,7 +16,7 @@ import type {
  * deterministic and offline while still exercising the full validation,
  * coherence-checking and assumption-surfacing path.
  *
- * Record new fixtures with: npm run compile:record -w @bles/api
+ * Record new fixtures with: npm run compile:record -w @waysafe/api
  */
 export interface CompilerFixture {
   name: string;

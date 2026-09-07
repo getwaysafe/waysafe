@@ -72,7 +72,7 @@ describe("policy schema", () => {
 
   it("rejects an unknown schema version", () => {
     expect(
-      parsePolicy(basePolicy({ schema_version: "bles.policy/v2" } as never)).ok,
+      parsePolicy(basePolicy({ schema_version: "waysafe.policy/v2" } as never)).ok,
     ).toBe(false);
   });
 });

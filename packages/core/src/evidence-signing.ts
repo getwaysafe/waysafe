@@ -44,7 +44,7 @@ export function generateEvidenceSigningKeyPair(): EvidenceSigningKeyPair {
   return { privateKey, publicKey };
 }
 
-/** Base64 PKCS8 -- the format `BLES_EVIDENCE_SIGNING_KEY` is stored in. */
+/** Base64 PKCS8 -- the format `WAYSAFE_EVIDENCE_SIGNING_KEY` is stored in. */
 export function exportPrivateKeyBase64(privateKey: KeyObject): string {
   return (privateKey.export({ type: "pkcs8", format: "der" }) as Buffer).toString("base64");
 }

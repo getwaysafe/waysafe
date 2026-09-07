@@ -47,7 +47,7 @@ describe("extractKeyPrefix", () => {
   });
 
   it("returns null for a key too short to contain a full prefix", () => {
-    expect(extractKeyPrefix("bls_live_a")).toBeNull();
+    expect(extractKeyPrefix("wsf_live_a")).toBeNull();
   });
 
   it("returns null for an empty or garbage string", () => {

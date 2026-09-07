@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { requireSessionClient } from "../../../lib/bles";
+import { requireSessionClient } from "../../../lib/waysafe";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function MandatesPage() {
-  const bles = await requireSessionClient();
-  const mandates = await bles.listMandates({ limit: 100 });
+  const waysafe = await requireSessionClient();
+  const mandates = await waysafe.listMandates({ limit: 100 });
 
   return (
     <>

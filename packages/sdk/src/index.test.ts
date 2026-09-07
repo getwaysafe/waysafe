@@ -7,16 +7,16 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import type { AuthorizationStatus, Decision } from "@bles/core";
+import type { AuthorizationStatus, Decision } from "@waysafe/core";
 import {
   computeEventHash,
   exportPublicKeyBase64,
   generateEvidenceSigningKeyPair,
   signEventHash,
-} from "@bles/core";
+} from "@waysafe/core";
 import {
-  Bles,
-  BlesError,
+  Waysafe,
+  WaysafeError,
   AuthorizationStatusConflictError,
   ExecutionRejectedError,
   IdempotencyConflictError,
@@ -63,7 +63,7 @@ function receiptWith(overrides: Partial<Record<string, unknown>> = {}): Record<s
 }
 
 function clientWith(fetchImpl: typeof globalThis.fetch) {
-  return new Bles({ baseUrl: "https://api.example.test", apiKey: "bls_live_testkey", fetch: fetchImpl });
+  return new Waysafe({ baseUrl: "https://api.example.test", apiKey: "wsf_live_testkey", fetch: fetchImpl });
 }
 
 describe("authorize()", () => {
@@ -88,7 +88,7 @@ describe("authorize()", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://api.example.test/v1/authorizations");
-    expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer bls_live_testkey");
+    expect((calls[0]!.init.headers as Record<string, string>).authorization).toBe("Bearer wsf_live_testkey");
   });
 
   it("generates an idempotency key when the caller doesn't supply one", async () => {
@@ -247,7 +247,7 @@ describe("authorize()", () => {
     ).rejects.toBeInstanceOf(UnauthorizedError);
   });
 
-  it("falls back to the base BlesError for an unrecognized error shape", async () => {
+  it("falls back to the base WaysafeError for an unrecognized error shape", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(500, { error: "internal_error" }));
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
@@ -258,7 +258,7 @@ describe("authorize()", () => {
         action: { amount: 500, currency: "USD", merchant: { domain: "staples.com" }, attestations: {} },
       })
       .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(BlesError);
+    expect(error).toBeInstanceOf(WaysafeError);
     expect(error).not.toBeInstanceOf(ValidationError);
   });
 });
@@ -561,12 +561,12 @@ describe("write helpers pass method, path, and body through unmodified", () => {
 
   it("createAgentKey", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(201, { key_id: "key_1", prefix: "bls_live_abcd", api_key: "bls_live_abcd1234secret", created_at: "2026-08-24T12:00:00.000Z" }),
+      jsonResponse(201, { key_id: "key_1", prefix: "wsf_live_abcd", api_key: "wsf_live_abcd1234secret", created_at: "2026-08-24T12:00:00.000Z" }),
     );
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
     const created = await client.createAgentKey("agt_1", { name: "prod bot" });
-    expect(created.api_key).toBe("bls_live_abcd1234secret");
+    expect(created.api_key).toBe("wsf_live_abcd1234secret");
   });
 
   it("revokeAgentKey issues a DELETE and resolves with no return value", async () => {
@@ -611,7 +611,7 @@ describe("no API key configured", () => {
       calls.push(init!);
       return jsonResponse(200, { reason_codes: [] });
     });
-    const client = new Bles({ baseUrl: "https://api.example.test", fetch: fetchImpl as unknown as typeof globalThis.fetch });
+    const client = new Waysafe({ baseUrl: "https://api.example.test", fetch: fetchImpl as unknown as typeof globalThis.fetch });
 
     await client.listReasonCodes();
     expect((calls[0]!.headers as Record<string, string>).authorization).toBeUndefined();

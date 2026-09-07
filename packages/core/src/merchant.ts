@@ -6,7 +6,7 @@
  * string supplied by the agent, the allowlist is decorative: a misbehaving or
  * compromised agent simply types "Staples". The policy engine would be theater.
  *
- * The rule Bles enforces instead:
+ * The rule Waysafe enforces instead:
  *
  *   A merchant assertion that cannot be verified can never produce ALLOW.
  *

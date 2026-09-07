@@ -1,8 +1,8 @@
 /**
  * Agent API key generation and hashing.
  *
- * A key is `bls_live_` + an 8-hex-char lookup prefix + a high-entropy secret
- * tail, e.g. `bls_live_7f2c9a1de8k3n...` -- matching the example in
+ * A key is `wsf_live_` + an 8-hex-char lookup prefix + a high-entropy secret
+ * tail, e.g. `wsf_live_7f2c9a1de8k3n...` -- matching the example in
  * `schema.prisma`'s `ApiKey.prefix` comment. Only the prefix and a SHA-256
  * hash of the full key are ever stored (`ApiKey.prefix`, `ApiKey.secretHash`);
  * the full key is generated once, returned to the caller, and never
@@ -13,7 +13,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 
-export const API_KEY_MARKER = "bls_live_";
+export const API_KEY_MARKER = "wsf_live_";
 const PREFIX_HEX_LENGTH = 8;
 const SECRET_BYTES = 28;
 

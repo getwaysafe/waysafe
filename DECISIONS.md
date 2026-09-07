@@ -514,6 +514,10 @@ Implemented in `apps/api/src/agent-keys/` (`keys.ts`, `types.ts`,
 
 ## D-19 — The product is renamed from "AgentPay Router" to "Bles"
 
+**Superseded by D-28: "Bles" did not clear trademark search and was
+renamed again, to "Waysafe."** Left in place, unedited below, so the
+original reasoning survives.
+
 Resolves OQ-2. Mastercard Agent Pay already owns "Agent Pay" as a category
 name, and the collision was only going to get more expensive to unwind the
 longer the name stuck around in code, package scopes, and a growing surface
@@ -1042,6 +1046,10 @@ for the dashboard, since there's still no page-level automated suite.
 
 ## D-25 — Week 6: the rename, implemented (D-19)
 
+**Superseded by D-28: the same mechanical pass was run again when "Bles"
+was renamed to "Waysafe."** Left in place, unedited below, so the
+original reasoning survives.
+
 D-19 named the rename and its timing but explicitly wasn't the rename
 itself ("Not implemented yet"). This is that follow-through, done exactly
 where D-19 said it should happen -- Week 6, before anything is public.
@@ -1348,6 +1356,117 @@ verified by execution, not assertions.
 
 Implemented in `examples/demo.ts` (new), plus a new `demo` script in the
 root `package.json`.
+
+---
+
+## D-28 — The product is renamed again, from "Bles" to "Waysafe" — supersedes D-19 and D-25
+
+**Bles did not clear.** D-19 named trademark search as the gating step
+before a production WebAuthn domain could be chosen (see OQ-5's own text:
+"It depends on 'Bles' (D-19) clearing trademark search, which has not
+happened as of this sprint's end"). It didn't clear. "Bles" is trademarked
+by another party in a way that made it unsafe to build a brand on, so it
+gets dropped before any of it becomes public, for the same reason D-19
+gave for renaming away from "AgentPay Router" in the first place: the
+longer a name with a real conflict stays wired into code, package scopes,
+and external-facing strings, the more expensive it is to unwind. Nothing
+about the positioning changes -- this is still the system of record for
+delegated financial authority, still not payments -- only the name.
+
+**Waysafe was chosen because all four checks came back clean:**
+`waysafe.ai` (registered), the npm scope `@waysafe` (org created), the
+GitHub org `github.com/getwaysafe` (see below for why it isn't bare
+`waysafe`), and a USPTO search that came back clear. That is the actual
+bar this time, not "sounds good" -- Bles was dropped for failing exactly
+this check, so Waysafe wasn't adopted until it passed all four.
+
+**The GitHub-org/npm-scope asymmetry is deliberate, not a leftover to
+tidy up.** Bare `waysafe` was already taken on GitHub, so the org is
+`getwaysafe`. The npm scope stays the short `@waysafe`, unshortened,
+because a package scope is typed in every import a developer writes
+(`import { Waysafe } from "@waysafe/sdk"`) while a GitHub org name is
+typed rarely -- once to clone, maybe once to open an issue. Optimizing
+the frequently-typed surface for brevity and accepting the awkwardness on
+the rarely-typed one is the right trade, not an inconsistency. Do not
+"fix" this later by renaming the npm scope to match the GitHub org, or by
+chasing bare `waysafe` on GitHub through a dispute process -- both would
+spend real cost undoing a choice that was made on purpose.
+
+**What changed, mechanically -- the same pass D-25 ran, one name later:**
+
+- Package scope: `@bles/*` → `@waysafe/*` (`packages/core`, `packages/db`,
+  `packages/sdk`, `apps/api`, `apps/dashboard`, and every import
+  referencing them). Root `package.json` name: `bles` → `waysafe`.
+- Env vars: every `BLES_*` → `WAYSAFE_*` (`WAYSAFE_COMPILER`,
+  `WAYSAFE_COMPILER_MODEL`, `WAYSAFE_RP_ID`, `WAYSAFE_RP_ORIGIN`,
+  `WAYSAFE_EVIDENCE_SIGNING_KEY`, `WAYSAFE_DASHBOARD_SESSION_SECRET`,
+  `WAYSAFE_API_BASE_URL`, plus the test-only `WAYSAFE_REQUIRE_DB`/
+  `WAYSAFE_REQUIRE_STRIPE` gates) -- `.env`, `.env.example`, and
+  `apps/dashboard/.env.example` all updated so local dev doesn't silently
+  break.
+- The SDK's exported names: `Bles` → `Waysafe`, `BlesError` →
+  `WaysafeError`, `BlesOptions` → `WaysafeOptions`.
+- The agent API key marker: `bls_live_` → `wsf_live_`
+  (`apps/api/src/agent-keys/keys.ts`) -- same reasoning D-25 gave for
+  `ap_live_` → `bls_live_`: a branded, visible string shown in the
+  dashboard's Agents & Keys table and in every `createAgentKey` response,
+  not an internal implementation detail. Kept the same three-letter
+  abbreviation shape (`bls_` → `wsf_`) rather than spelling out
+  `waysafe_live_`, matching the existing convention of a short, visible,
+  branded prefix distinct from the full product name.
+- The policy schema id: `bles.policy/v1` → `waysafe.policy/v1`
+  (`POLICY_SCHEMA_VERSION` in `packages/core/src/policy.ts`), matched by
+  `z.literal` so this is a hard break the same way D-25's bump was --
+  bumped cleanly again, no alias for the old id, for the same reason: no
+  external developer has integrated yet, and this is still the window
+  D-19 called "the window between 'nothing to break' and 'something to
+  break.'" All five `fixtures/compiler/*.json` files carry their own
+  `schema_version` field and were updated in the same pass, including the
+  three (`procurement.json`, `travel.json`, `underspecified.json`) whose
+  `assumptions`/`rationale` prose also mentioned "Bles" by name.
+- The Stripe metadata key: `bles_authorization_id` →
+  `waysafe_authorization_id` (`stripe-adapter.ts`, `webhooks/service.ts`,
+  and their tests) -- an external-facing string stored on real
+  PaymentIntents, same reasoning as D-25.
+- The dashboard's session cookie name:
+  `bles_dashboard_session` → `waysafe_dashboard_session`
+  (`apps/dashboard/src/lib/session.ts`).
+- `README.md`, `docs/CODE-REVIEW-BRIEF.md`'s title, the dashboard's brand
+  text, and every doc comment describing the product by name in
+  currently-live code.
+
+**What deliberately didn't change:** this file's own historical entries
+(D-1 through D-27, and OQ-2's discussion of "Mastercard Agent Pay") --
+same reasoning D-19 and D-25 already established, one level deeper now.
+D-19 still says "AgentPay Router" throughout; D-25 still says "Bles"
+throughout ("the package scope: `@agentpay/*` → `@bles/*`", etc.) --
+both are the record of what was being renamed *from*, at the time each
+was written, and rewriting either to say "Waysafe" would misrepresent
+what was actually decided, and when. Only their headers get a
+"Superseded by D-28" note prepended, matching the pattern already used
+for every other resolved entry in this file (D-19 resolved OQ-2, so this
+mirrors OQ-2's own "Resolved by D-19" treatment one level up).
+
+**Verification, not just search-and-replace by feel -- same bar D-25
+set:** after the pass, grepped the entire tree (excluding
+`node_modules`/`dist`/`.next`/`package-lock.json`) case-insensitively for
+`bles` and confirmed zero matches outside D-1 through D-27's preserved
+historical text, OQ-2's preserved discussion of Mastercard's product, and
+this entry's own necessary references to the name it's replacing.
+`package-lock.json` was not hand-edited -- regenerated via `npm install`
+after every `package.json` name changed, which also re-links each
+workspace package under its new scope in `node_modules/@waysafe/*`.
+`npm run typecheck`, the full `npm test` (Postgres-backed suites
+included -- `DATABASE_URL` was reachable), `npm run build` (all four
+packages plus the dashboard's `next build`), and both
+`examples/quickstart.ts` and `examples/demo.ts` end-to-end (in-memory and
+against real Postgres) were all run clean after the rename, in that
+order.
+
+Implemented across the entire tree; see the commit for the full file
+list. No behavior changed anywhere except the literal identifiers named
+above -- this is D-19's mechanical pass, run a second time under a new
+name.
 
 ---
 

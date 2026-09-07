@@ -1,4 +1,4 @@
-# Bles — Code Review Brief
+# Waysafe — Code Review Brief
 
 **Version 1.0 · For use with an independent code reviewer**
 

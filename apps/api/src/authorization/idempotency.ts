@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { AuthorizationRequest } from "@bles/core";
+import type { AuthorizationRequest } from "@waysafe/core";
 
 /** SHA-256 over the request fields that determine the decision. */
 export function hashAuthorizationRequest(request: AuthorizationRequest): string {

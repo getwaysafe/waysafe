@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { formatMoney } from "@bles/core";
-import { requireSessionClient } from "../../../lib/bles";
+import { formatMoney } from "@waysafe/core";
+import { requireSessionClient } from "../../../lib/waysafe";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function AuthorizationsPage() {
-  const bles = await requireSessionClient();
-  const authorizations = await bles.listAuthorizations({ limit: 200 });
+  const waysafe = await requireSessionClient();
+  const authorizations = await waysafe.listAuthorizations({ limit: 200 });
 
   return (
     <>

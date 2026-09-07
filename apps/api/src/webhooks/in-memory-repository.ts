@@ -1,4 +1,4 @@
-import { ID_PREFIX, generateId } from "@bles/core";
+import { ID_PREFIX, generateId } from "@waysafe/core";
 import type { ProviderEventRepository } from "./types.js";
 
 interface StoredEvent {

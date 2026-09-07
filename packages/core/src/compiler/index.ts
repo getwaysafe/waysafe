@@ -33,12 +33,12 @@ export function createCompileContext(
 /**
  * Select a compiler from the environment.
  *
- * BLES_COMPILER=anthropic (default) | fixture
+ * WAYSAFE_COMPILER=anthropic (default) | fixture
  */
 export function createCompilerFromEnv(
   fixtures: CompilerFixture[] = [],
 ): IntentCompiler {
-  const kind = process.env.BLES_COMPILER ?? "anthropic";
+  const kind = process.env.WAYSAFE_COMPILER ?? "anthropic";
   if (kind === "fixture") return new FixtureIntentCompiler(fixtures);
   return new AnthropicIntentCompiler();
 }

@@ -1,9 +1,9 @@
 /**
- * Money in Bles is ALWAYS an integer number of minor units, never a float.
+ * Money in Waysafe is ALWAYS an integer number of minor units, never a float.
  *
  * The PRD's example request used `"amount": 687`, which is ambiguous between
  * $687.00 and $6.87. That ambiguity is resolved here and enforced by the schema:
- * every amount crossing an Bles boundary is minor units (cents for USD).
+ * every amount crossing an Waysafe boundary is minor units (cents for USD).
  *
  * $687.00 -> 68700
  * $6.87   ->   687
@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 
-/** ISO-4217 codes Bles accepts. MVP is USD-only; the enum is the extension point. */
+/** ISO-4217 codes Waysafe accepts. MVP is USD-only; the enum is the extension point. */
 export const SUPPORTED_CURRENCIES = ["USD"] as const;
 export type Currency = (typeof SUPPORTED_CURRENCIES)[number];
 

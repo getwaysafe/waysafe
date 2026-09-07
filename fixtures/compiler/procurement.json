@@ -5,7 +5,7 @@
   "output": {
     "status": "compiled",
     "policy": {
-      "schema_version": "bles.policy/v1",
+      "schema_version": "waysafe.policy/v1",
       "summary": "Spend up to $500 per calendar month on office supplies at Amazon and Staples, with your approval required above $150 or at any other merchant.",
       "currency": "USD",
       "cumulative_limits": [{ "window": "month", "max_amount": 50000 }],
@@ -44,7 +44,7 @@
       "Categories other than office supplies require your approval rather than being blocked, matching 'ask me' for anything unexpected.",
       "Set this authority to expire in 30 days. The $500 monthly budget resets each calendar month until then.",
       "Monthly budget follows calendar months in America/New_York.",
-      "Spend counts when Bles authorizes it, and a pending approval holds budget while it waits."
+      "Spend counts when Waysafe authorizes it, and a pending approval holds budget while it waits."
     ]
   }
 }

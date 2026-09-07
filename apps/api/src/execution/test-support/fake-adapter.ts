@@ -6,7 +6,7 @@
  * proofs both depend on this).
  */
 
-import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@bles/core";
+import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@waysafe/core";
 
 export interface FakeAdapterOptions {
   outcome?: "success" | "failure";

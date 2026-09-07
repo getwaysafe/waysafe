@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AuthorizationStatus, Decision } from "@bles/core";
+import type { AuthorizationStatus, Decision } from "@waysafe/core";
 import type { StoredAuthorization } from "../authorization/types.js";
 import { asExecutable, type ExecutableAuthorization } from "./executable.js";
 

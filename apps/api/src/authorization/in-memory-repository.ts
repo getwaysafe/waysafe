@@ -26,7 +26,7 @@ import {
   type ReasonCode,
   type ResolvedMerchant,
   type SpendSnapshot,
-} from "@bles/core";
+} from "@waysafe/core";
 import type {
   AgentListItem,
   AuthorizationRepository,

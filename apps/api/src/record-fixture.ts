@@ -1,7 +1,7 @@
 /**
  * Record a compiler fixture from a live model call.
  *
- *   npm run compile:record -w @bles/api -- <name> "<instruction>"
+ *   npm run compile:record -w @waysafe/api -- <name> "<instruction>"
  *
  * Writes fixtures/compiler/<name>.json. Fixtures are compiled against
  * FIXTURE_NOW so expiries stay stable; review the output before committing.
@@ -12,14 +12,14 @@ import {
   AnthropicIntentCompiler,
   createCompileContext,
   FIXTURE_NOW,
-} from "@bles/core";
+} from "@waysafe/core";
 
 const [name, ...rest] = process.argv.slice(2);
 const instruction = rest.join(" ").trim();
 
 if (!name || !instruction) {
   console.error(
-    'usage: npm run compile:record -w @bles/api -- <name> "<instruction>"',
+    'usage: npm run compile:record -w @waysafe/api -- <name> "<instruction>"',
   );
   process.exit(1);
 }

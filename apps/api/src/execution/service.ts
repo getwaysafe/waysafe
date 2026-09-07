@@ -13,7 +13,7 @@
  * D-4). Records an EvidenceEvent either way, success or rejection.
  */
 
-import type { PaymentAdapter } from "@bles/core";
+import type { PaymentAdapter } from "@waysafe/core";
 import type { AuthorizationRepository, StoredAuthorization } from "../authorization/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import type { ExecutableAuthorization } from "./executable.js";
@@ -61,9 +61,9 @@ export async function executePayment(
     currency: authorization.action.currency,
     paymentMethodRef,
     // Deterministic and scoped to this one authorization: a retried
-    // execute() call (Bles's own request retried, not a fresh attempt)
+    // execute() call (Waysafe's own request retried, not a fresh attempt)
     // reuses the same idempotency key, so the provider itself refuses to
-    // double-charge even if Bles's first attempt's response was lost.
+    // double-charge even if Waysafe's first attempt's response was lost.
     idempotencyKey: `execute:${authorization.id}`,
   });
 

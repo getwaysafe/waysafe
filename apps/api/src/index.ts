@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { EMPTY_DIRECTORY } from "@bles/core";
+import { EMPTY_DIRECTORY } from "@waysafe/core";
 import { buildServer, type ServerRepos } from "./server.js";
 import { PrismaAgentKeyRepository } from "./agent-keys/prisma-repository.js";
 import { PrismaAuthorizationRepository } from "./authorization/prisma-repository.js";
@@ -33,8 +33,8 @@ const repos: ServerRepos | undefined = process.env.DATABASE_URL
 const app = buildServer({
   repos,
   webauthnConfig: {
-    rpId: process.env.BLES_RP_ID ?? "localhost",
-    origin: process.env.BLES_RP_ORIGIN ?? "http://localhost:3000",
+    rpId: process.env.WAYSAFE_RP_ID ?? "localhost",
+    origin: process.env.WAYSAFE_RP_ORIGIN ?? "http://localhost:3000",
   },
 });
 
@@ -47,7 +47,7 @@ if (!repos) {
 app
   .listen({ port, host })
   .then(() => {
-    app.log.info(`bles api listening on ${host}:${port}`);
+    app.log.info(`waysafe api listening on ${host}:${port}`);
   })
   .catch((error) => {
     app.log.error(error);

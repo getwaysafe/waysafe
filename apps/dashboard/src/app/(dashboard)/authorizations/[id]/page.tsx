@@ -1,21 +1,21 @@
 import { notFound } from "next/navigation";
-import { formatMoney } from "@bles/core";
-import { NotFoundError } from "@bles/sdk";
-import { requireSessionClient } from "../../../../lib/bles";
+import { formatMoney } from "@waysafe/core";
+import { NotFoundError } from "@waysafe/sdk";
+import { requireSessionClient } from "../../../../lib/waysafe";
 import { Badge, formatDate } from "../../../../lib/format";
 import { formatDetail } from "../../../../lib/reasons";
 import { approveStepUp, declineStepUp } from "./actions";
 
 export default async function AuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const bles = await requireSessionClient();
+  const waysafe = await requireSessionClient();
 
   const [receipt, reasonCodes] = await Promise.all([
-    bles.verify(id).catch((error) => {
+    waysafe.verify(id).catch((error) => {
       if (error instanceof NotFoundError) return null;
       throw error;
     }),
-    bles.listReasonCodes(),
+    waysafe.listReasonCodes(),
   ]);
   if (!receipt) notFound();
 

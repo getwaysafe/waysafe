@@ -1,21 +1,22 @@
-# Bles
+# Waysafe
 
 The system of record for delegated financial authority.
 
 One API to decide whether an AI agent may take an economic action:
 
 ```ts
-const decision = await bles.authorize({ agent, principal, action });
+const decision = await waysafe.authorize({ agent, principal, action });
 // => ALLOW | DENY | STEP_UP
 ```
 
 **Status: Week 6 of 6, complete.** ✅ Domain model, policy engine, WebAuthn +
 agent keys, payment execution, the TypeScript SDK, and the developer
 dashboard are all in place. Week 6 shipped the dashboard's step-up approval
-UI, this rename (`DECISIONS.md` D-19/D-25), a signed and independently
+UI, the Bles rename (`DECISIONS.md` D-19/D-25), a signed and independently
 verifiable evidence chain (D-26/OQ-8), and a scripted end-to-end demo
-(`npm run demo`, D-27). One open item remains before a real launch: OQ-9 --
-there is no way to create a `Principal` through the API yet.
+(`npm run demo`, D-27). The product has since been renamed again, to
+Waysafe (`DECISIONS.md` D-28). One open item remains before a real launch:
+OQ-9 -- there is no way to create a `Principal` through the API yet.
 
 ---
 
@@ -26,8 +27,8 @@ npm install
 npx tsx examples/quickstart.ts
 ```
 
-That's it — no `.env`, no database, no API key. It boots a local Bles API
-in-memory and walks the full journey through `@bles/sdk`: compile a
+That's it — no `.env`, no database, no API key. It boots a local Waysafe API
+in-memory and walks the full journey through `@waysafe/sdk`: compile a
 policy, create and authenticate a mandate, authorize a few purchases (an
 ALLOW, a STEP_UP you approve yourself, a DENY), execute one, and read the
 evidence chain back. `examples/quickstart.ts` is a runnable program, not
@@ -37,8 +38,8 @@ in the SDK, not these docs.
 To point the same script at a real, already-running deployment instead:
 
 ```bash
-BLES_BASE_URL=https://your-deployment.example \
-BLES_API_KEY=bls_live_... \
+WAYSAFE_BASE_URL=https://your-deployment.example \
+WAYSAFE_API_KEY=wsf_live_... \
 npx tsx examples/quickstart.ts
 ```
 
@@ -46,8 +47,8 @@ Run the dashboard (needs the API running separately, `npm run dev:api`):
 
 ```bash
 cp apps/dashboard/.env.example apps/dashboard/.env.local
-# set BLES_DASHBOARD_SESSION_SECRET -- see the file for how
-npm run dev -w @bles/dashboard
+# set WAYSAFE_DASHBOARD_SESSION_SECRET -- see the file for how
+npm run dev -w @waysafe/dashboard
 ```
 
 Or watch the whole story end to end -- an instruction, a passkey, four
@@ -70,7 +71,7 @@ A person tells an agent something fuzzy:
 
 > "Get me a good hotel in Miami. Nothing ridiculous."
 
-Financial infrastructure cannot enforce that. Bles compiles it into a
+Financial infrastructure cannot enforce that. Waysafe compiles it into a
 policy that can be enforced:
 
 ```
@@ -155,8 +156,8 @@ in plain language, for the principal to check before they authenticate. (`D-6`)
 - A model interprets intent. A model never authorizes a transaction.
 - Every mandate and policy change is versioned; nothing is edited in place.
 - Every execution cites the exact policy hash that authorized it.
-- Passkeys prove authorization without Bles storing biometric data.
+- Passkeys prove authorization without Waysafe storing biometric data.
 - The system is designed to stay out of PCI scope, not to manage it.
 - Every evidence event is Ed25519-signed and independently verifiable --
-  `verifyEvidenceIndependently` in `@bles/sdk` checks a receipt without
+  `verifyEvidenceIndependently` in `@waysafe/sdk` checks a receipt without
   trusting this server's own database or its judgment about it. (`D-26`)

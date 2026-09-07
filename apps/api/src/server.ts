@@ -21,7 +21,7 @@ import {
   type EvidenceEvent,
   type IntentCompiler,
   type PaymentAdapter,
-} from "@bles/core";
+} from "@waysafe/core";
 import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js";
 import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
@@ -144,12 +144,12 @@ declare module "fastify" {
 
 /** Routes that work without any credential -- everything else needs an
  * agent API key or an org credential (Phase 4 auth rule). The Stripe
- * webhook route is exempt for a different reason: it isn't a Bles
+ * webhook route is exempt for a different reason: it isn't a Waysafe
  * caller presenting a Bearer credential, it's Stripe presenting an HMAC
  * signature over the raw body, checked inside the route itself. The evidence
  * public key is exempt because the whole point of D-26/OQ-8 is that a third
- * party -- who by definition has no Bles credential -- can verify a chain
- * independently; gating the key that makes that possible behind a Bles
+ * party -- who by definition has no Waysafe credential -- can verify a chain
+ * independently; gating the key that makes that possible behind a Waysafe
  * credential would defeat it. */
 const PUBLIC_ROUTES = new Set([
   "/health",
@@ -299,8 +299,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   };
 
   const webauthnConfig: WebauthnConfig = options.webauthnConfig ?? {
-    rpId: process.env.BLES_RP_ID ?? "localhost",
-    origin: process.env.BLES_RP_ORIGIN ?? "http://localhost:3000",
+    rpId: process.env.WAYSAFE_RP_ID ?? "localhost",
+    origin: process.env.WAYSAFE_RP_ORIGIN ?? "http://localhost:3000",
   };
 
   const webauthnRepos: WebauthnServiceRepos = {
@@ -874,7 +874,7 @@ export function buildServer(options: BuildServerOptions = {}) {
    * against (D-26/OQ-8). Deliberately public (see PUBLIC_ROUTES) and
    * deliberately not org-scoped: one signing key covers every
    * organization's chain on this deployment, so there's one key to publish,
-   * not one per tenant. Base64 SPKI -- see @bles/core's
+   * not one per tenant. Base64 SPKI -- see @waysafe/core's
    * `loadEvidencePublicKey` to reconstruct a usable key from it.
    */
   app.get("/v1/evidence/public-key", async (_request, reply) => {

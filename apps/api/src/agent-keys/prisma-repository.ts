@@ -9,7 +9,7 @@
  */
 
 import { PrismaClient } from "@prisma/client";
-import { ID_PREFIX, generateId } from "@bles/core";
+import { ID_PREFIX, generateId } from "@waysafe/core";
 import { extractKeyPrefix, generateAgentApiKey, hashApiKey } from "./keys.js";
 import type {
   AgentKeyRecord,

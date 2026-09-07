@@ -3,7 +3,7 @@ import {
   generateEvidenceSigningKeyPair,
   loadEvidencePublicKey,
   verifyEvidenceChain,
-} from "@bles/core";
+} from "@waysafe/core";
 import { InMemoryEvidenceRepository } from "./in-memory-repository.js";
 
 const ORG = "org_test";

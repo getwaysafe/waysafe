@@ -1,9 +1,9 @@
-import { requireSessionClient } from "../../../lib/bles";
+import { requireSessionClient } from "../../../lib/waysafe";
 import { Badge, formatDate, truncateId } from "../../../lib/format";
 
 export default async function AgentsPage() {
-  const bles = await requireSessionClient();
-  const [agents, keys] = await Promise.all([bles.listAgents(), bles.listKeys()]);
+  const waysafe = await requireSessionClient();
+  const [agents, keys] = await Promise.all([waysafe.listAgents(), waysafe.listKeys()]);
 
   return (
     <>

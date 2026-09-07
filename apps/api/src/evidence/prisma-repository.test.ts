@@ -3,7 +3,7 @@
  *
  * Same rationale as `authorization/prisma-repository.test.ts` (D-15),
  * applied to the D-16 organization lock instead of the D-4 mandate lock.
- * Skips itself when DATABASE_URL isn't reachable, unless BLES_REQUIRE_DB=1
+ * Skips itself when DATABASE_URL isn't reachable, unless WAYSAFE_REQUIRE_DB=1
  * (see test-support/db-gate.ts).
  */
 
@@ -16,7 +16,7 @@ import {
   loadEvidencePublicKey,
   verifyEvidenceChain,
   type EvidenceEvent,
-} from "@bles/core";
+} from "@waysafe/core";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaEvidenceRepository } from "./prisma-repository.js";
 

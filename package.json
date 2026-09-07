@@ -1,8 +1,8 @@
 {
-  "name": "bles",
+  "name": "waysafe",
   "private": true,
   "version": "0.1.0",
-  "description": "Bles: the system of record for delegated financial authority.",
+  "description": "Waysafe: the system of record for delegated financial authority.",
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -16,11 +16,11 @@
     "typecheck:tests": "tsc -p tsconfig.typecheck.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev:api": "npm run dev -w @bles/api",
+    "dev:api": "npm run dev -w @waysafe/api",
     "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
     "demo": "tsx --env-file-if-exists=.env examples/demo.ts",
-    "db:generate": "npm run generate -w @bles/db",
-    "db:push": "npm run push -w @bles/db"
+    "db:generate": "npm run generate -w @waysafe/db",
+    "db:push": "npm run push -w @waysafe/db"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

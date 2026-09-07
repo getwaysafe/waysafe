@@ -16,7 +16,7 @@
  * assumes there is only ever one kind of rail.
  */
 
-import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@bles/core";
+import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@waysafe/core";
 
 export class X402Adapter implements PaymentAdapter {
   readonly name = "x402";

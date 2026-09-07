@@ -1,5 +1,5 @@
 /**
- * Bles TypeScript SDK.
+ * Waysafe TypeScript SDK.
  *
  * A thin, typed HTTP client. Every method here is a direct wrapper around one
  * REST call -- nothing here is a framework, a UI, or a required flow. That is
@@ -9,15 +9,15 @@
  * this file assumes Node, a browser, or any particular framework beyond
  * `fetch` and `crypto.randomUUID`, both available in either.
  *
- *   const mandate  = await bles.compileMandate({ instruction });
- *   const decision = await bles.authorize({ agent_id, principal_id, action });
- *   if (bles.asExecutable(decision)) await bles.execute(...)
- *   const receipt  = await bles.verify(decision.authorization_id);
+ *   const mandate  = await waysafe.compileMandate({ instruction });
+ *   const decision = await waysafe.authorize({ agent_id, principal_id, action });
+ *   if (waysafe.asExecutable(decision)) await waysafe.execute(...)
+ *   const receipt  = await waysafe.verify(decision.authorization_id);
  *
  * See examples/quickstart.ts for the full, runnable journey -- compiling a
  * policy, creating and authenticating a mandate, authorizing, handling a
  * step-up, executing, and verifying -- against a real (or locally running)
- * Bles API.
+ * Waysafe API.
  */
 
 import type {
@@ -30,12 +30,12 @@ import type {
   Reason,
   ReasonCode,
   ResolvedMerchant,
-} from "@bles/core";
-import type { ChainVerificationResult, EvidenceEvent } from "@bles/core";
+} from "@waysafe/core";
+import type { ChainVerificationResult, EvidenceEvent } from "@waysafe/core";
 import {
   loadEvidencePublicKey,
   verifyEvidenceChain as verifyEvidenceChainLocally,
-} from "@bles/core";
+} from "@waysafe/core";
 
 // --- Errors -------------------------------------------------------------
 
@@ -45,14 +45,14 @@ import {
  * caller that doesn't care about the specific subclass to still log or
  * report something useful.
  */
-export class BlesError extends Error {
+export class WaysafeError extends Error {
   constructor(
     message: string,
     readonly status?: number,
     readonly body?: unknown,
   ) {
     super(message);
-    this.name = "BlesError";
+    this.name = "WaysafeError";
   }
 }
 
@@ -61,7 +61,7 @@ export class BlesError extends Error {
  * built-in retry treats as safe to retry -- an HTTP error means the server
  * *did* receive and decide the request, and retrying that would either be a
  * no-op (idempotency) or wrong. */
-export class NetworkError extends BlesError {
+export class NetworkError extends WaysafeError {
   constructor(message: string, readonly cause: unknown) {
     super(message);
     this.name = "NetworkError";
@@ -69,7 +69,7 @@ export class NetworkError extends BlesError {
 }
 
 /** 400 invalid_request: the request body failed schema validation. */
-export class ValidationError extends BlesError {
+export class ValidationError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -82,7 +82,7 @@ export class ValidationError extends BlesError {
 }
 
 /** 401: the API key is missing, forged, or revoked. */
-export class UnauthorizedError extends BlesError {
+export class UnauthorizedError extends WaysafeError {
   constructor(message: string, status: number, body: unknown) {
     super(message, status, body);
     this.name = "UnauthorizedError";
@@ -90,7 +90,7 @@ export class UnauthorizedError extends BlesError {
 }
 
 /** 404: no row with this id exists in your organization. */
-export class NotFoundError extends BlesError {
+export class NotFoundError extends WaysafeError {
   constructor(message: string, status: number, body: unknown) {
     super(message, status, body);
     this.name = "NotFoundError";
@@ -101,7 +101,7 @@ export class NotFoundError extends BlesError {
  * combination doesn't resolve to a mandate that could even be evaluated --
  * distinct from a DENY, which is a normal decision this SDK returns, not
  * throws. `reasons` explains why no mandate resolved. */
-export class NoActiveMandateError extends BlesError {
+export class NoActiveMandateError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -118,7 +118,7 @@ export class NoActiveMandateError extends BlesError {
  * that key is actually bound to. A plain retry of the same call never hits
  * this -- the server recognizes it as a replay and returns the same decision
  * instead (see `AuthorizationDecision.replayed`). */
-export class IdempotencyConflictError extends BlesError {
+export class IdempotencyConflictError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -134,7 +134,7 @@ export class IdempotencyConflictError extends BlesError {
  * authorization's current status doesn't allow the operation you asked for
  * (already executed, not pending step-up, etc). `authorizationStatus` is the
  * status that blocked it. */
-export class AuthorizationStatusConflictError extends BlesError {
+export class AuthorizationStatusConflictError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -149,7 +149,7 @@ export class AuthorizationStatusConflictError extends BlesError {
 /** 402 execution_rejected, from `execute()`: the payment rail itself
  * declined the charge (a card decline, an insufficient balance) -- the
  * authorization was valid, the money didn't move. */
-export class ExecutionRejectedError extends BlesError {
+export class ExecutionRejectedError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -163,7 +163,7 @@ export class ExecutionRejectedError extends BlesError {
 
 /** 400 unknown_rail, from `execute()`: the `rail` you asked for isn't
  * registered on this deployment. */
-export class UnknownRailError extends BlesError {
+export class UnknownRailError extends WaysafeError {
   constructor(
     message: string,
     status: number,
@@ -177,8 +177,8 @@ export class UnknownRailError extends BlesError {
 
 // --- Options --------------------------------------------------------------
 
-export interface BlesOptions {
-  /** Base URL of the Bles API, e.g. https://api.bles.dev */
+export interface WaysafeOptions {
+  /** Base URL of the Waysafe API, e.g. https://api.waysafe.dev */
   baseUrl: string;
   /** Agent service credential, or an org credential for account-management
    * calls (createAgent, createMandate, list*, ...). Never a card credential,
@@ -325,7 +325,7 @@ export interface ExecuteParams {
   paymentMethodRef: string;
 }
 
-const EXECUTABLE: unique symbol = Symbol("bles.executable");
+const EXECUTABLE: unique symbol = Symbol("waysafe.executable");
 
 /**
  * Mirrors the server's own `ExecutableAuthorization` brand
@@ -537,8 +537,8 @@ function buildQuery(params: Record<string, string | number | undefined>): string
   return query ? `?${query}` : "";
 }
 
-function mapError(path: string, status: number, body: unknown): BlesError {
-  const message = `bles ${path} failed with ${status}`;
+function mapError(path: string, status: number, body: unknown): WaysafeError {
+  const message = `waysafe ${path} failed with ${status}`;
   const errorCode = isRecord(body) ? body.error : undefined;
 
   switch (errorCode) {
@@ -590,7 +590,7 @@ function mapError(path: string, status: number, body: unknown): BlesError {
         isRecord(body) && typeof body.rail === "string" ? body.rail : "unknown",
       );
     default:
-      return new BlesError(message, status, body);
+      return new WaysafeError(message, status, body);
   }
 }
 
@@ -600,12 +600,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // --- Client -----------------------------------------------------------------
 
-export class Bles {
+export class Waysafe {
   private readonly baseUrl: string;
   private readonly apiKey: string | undefined;
   private readonly fetchImpl: typeof globalThis.fetch;
 
-  constructor(options: BlesOptions) {
+  constructor(options: WaysafeOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
@@ -883,7 +883,7 @@ export class Bles {
         ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
       });
     } catch (err) {
-      throw new NetworkError(`bles ${path} could not be reached: ${(err as Error).message}`, err);
+      throw new NetworkError(`waysafe ${path} could not be reached: ${(err as Error).message}`, err);
     }
 
     const body = await response.json().catch(() => undefined);

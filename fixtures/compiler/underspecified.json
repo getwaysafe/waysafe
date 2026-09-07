@@ -9,7 +9,7 @@
         "path": "/per_transaction_max",
         "question": "What is the most this agent may spend in a single purchase?",
         "suggested_default": 10000,
-        "rationale": "No spending ceiling was stated. Bles will not invent one, because an incorrect guess is either useless or expensive."
+        "rationale": "No spending ceiling was stated. Waysafe will not invent one, because an incorrect guess is either useless or expensive."
       },
       {
         "path": "/cumulative_limits",
@@ -25,7 +25,7 @@
       }
     ],
     "draft": {
-      "schema_version": "bles.policy/v1",
+      "schema_version": "waysafe.policy/v1",
       "summary": "Buy from Amazon, limits not yet set.",
       "currency": "USD",
       "merchants": {

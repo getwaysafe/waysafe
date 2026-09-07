@@ -1,12 +1,12 @@
-import { requireSessionClient } from "../../../lib/bles";
+import { requireSessionClient } from "../../../lib/waysafe";
 import { formatDate, truncateId } from "../../../lib/format";
 
 export default async function EvidencePage() {
-  const bles = await requireSessionClient();
+  const waysafe = await requireSessionClient();
   const [events, chain, publicKey] = await Promise.all([
-    bles.listEvidence(),
-    bles.verifyEvidenceChain(),
-    bles.getEvidencePublicKey(),
+    waysafe.listEvidence(),
+    waysafe.verifyEvidenceChain(),
+    waysafe.getEvidencePublicKey(),
   ]);
 
   return (

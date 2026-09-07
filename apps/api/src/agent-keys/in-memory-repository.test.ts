@@ -20,7 +20,7 @@ describe("InMemoryAgentKeyRepository", () => {
     const repo = new InMemoryAgentKeyRepository();
     await repo.createKey({ organizationId: ORG, agentId: AGENT, name: "bot" }, NOW);
 
-    const result = await repo.verifyKey("bls_live_00000000forgedsecretvaluethatdoesnotexist", NOW);
+    const result = await repo.verifyKey("wsf_live_00000000forgedsecretvaluethatdoesnotexist", NOW);
 
     expect(result).toEqual({ ok: false, reason: "not_found" });
   });
@@ -80,7 +80,7 @@ describe("InMemoryAgentKeyRepository", () => {
     const repo = new InMemoryAgentKeyRepository();
     const created = await repo.createKey({ organizationId: ORG, agentId: AGENT, name: "bot" }, NOW);
 
-    await repo.verifyKey("bls_live_00000000wrongsecretentirely", new Date(NOW.getTime() + 60_000));
+    await repo.verifyKey("wsf_live_00000000wrongsecretentirely", new Date(NOW.getTime() + 60_000));
 
     const record = await repo.getById(created.id);
     expect(record?.lastUsedAt).toBeNull();

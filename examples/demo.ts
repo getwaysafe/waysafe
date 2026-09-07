@@ -1,6 +1,6 @@
 #!/usr/bin/env -S npx tsx
 /**
- * The Bles demo (Week 6). One scripted, watchable run:
+ * The Waysafe demo (Week 6). One scripted, watchable run:
  *
  *   npx tsx examples/demo.ts
  *
@@ -41,7 +41,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
-import { Bles, asExecutable, verifyEvidenceIndependently } from "@bles/sdk";
+import { Waysafe, asExecutable, verifyEvidenceIndependently } from "@waysafe/sdk";
 
 const section = (title: string) => console.log(`\n\x1b[1m\x1b[36m${title}\x1b[0m`);
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -90,7 +90,7 @@ let closeServer: () => Promise<void> = async () => {};
  * repositories, and the same evidence-signing-key loading, apps/api's own
  * entrypoint uses); the zero-config in-memory bootstrap otherwise. Either
  * way, a real Fastify server, listening on a real local port, driven only
- * through @bles/sdk from here on -- this file never imports the server's
+ * through @waysafe/sdk from here on -- this file never imports the server's
  * internals for anything except constructing this one, honest exception.
  */
 async function startServer(): Promise<{
@@ -109,7 +109,7 @@ async function startServer(): Promise<{
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
   const { loadOrGenerateEvidenceSigningKey } = await import("../apps/api/src/evidence/signing-key.js");
-  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@bles/core");
+  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@waysafe/core");
 
   const directory = createStaticDirectory([
     { domain: "staples.com", display_name: "Staples" },
@@ -208,7 +208,7 @@ async function startServer(): Promise<{
   };
 }
 
-function printDecision(label: string, decision: Awaited<ReturnType<Bles["authorize"]>>): void {
+function printDecision(label: string, decision: Awaited<ReturnType<Waysafe["authorize"]>>): void {
   console.log(`  ${dim(label)}`);
   console.log(`  decision: ${bold(decision.decision)}   status: ${bold(decision.status)}`);
   for (const reason of decision.reasons) {
@@ -220,11 +220,11 @@ function printDecision(label: string, decision: Awaited<ReturnType<Bles["authori
 }
 
 async function main() {
-  console.log(bold("\n=== Bles: instruction to verifiable receipt ===\n"));
+  console.log(bold("\n=== Waysafe: instruction to verifiable receipt ===\n"));
 
   section("1. Connect");
   const { baseUrl, apiKey, usingRealDatabase, ensurePrincipal } = await startServer();
-  const org = new Bles({ baseUrl, apiKey });
+  const org = new Waysafe({ baseUrl, apiKey });
   console.log(
     `  ${ok("connected")} to ${baseUrl} (${usingRealDatabase ? "real Postgres" : "in-memory, no database configured"})`,
   );
@@ -291,7 +291,7 @@ async function main() {
   console.log(`  ${ok("authenticated")} -- mandate ${mandate.mandate_id} is now ACTIVE`);
 
   const key = await org.createAgentKey(agent.agent_id, { name: "demo agent key" });
-  const agentClient = new Bles({ baseUrl, apiKey: key.api_key });
+  const agentClient = new Waysafe({ baseUrl, apiKey: key.api_key });
   await beat(1200);
 
   const executed: string[] = [];

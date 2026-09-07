@@ -7,7 +7,7 @@ import {
   POLICY_SCHEMA_VERSION,
   toMinorUnits,
   type Policy,
-} from "@bles/core";
+} from "@waysafe/core";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { authorize } from "../authorization/service.js";
@@ -89,7 +89,7 @@ function refundEvent(id: string, authorizationId: string, amountRefunded: number
         id: "ch_test_123",
         object: "charge",
         amount_refunded: amountRefunded,
-        metadata: { bles_authorization_id: authorizationId },
+        metadata: { waysafe_authorization_id: authorizationId },
       },
     },
   } as unknown as Stripe.Event;

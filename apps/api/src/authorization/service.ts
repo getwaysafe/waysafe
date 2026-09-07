@@ -25,7 +25,7 @@ import {
   type AuthorizationRequest,
   type AuthorizationStatus,
   type Reason,
-} from "@bles/core";
+} from "@waysafe/core";
 import { extractKeyPrefix } from "../agent-keys/keys.js";
 import type { AgentKeyRepository } from "../agent-keys/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";

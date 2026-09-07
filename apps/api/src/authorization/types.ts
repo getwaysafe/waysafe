@@ -1,7 +1,7 @@
 /**
  * The persistence boundary the authorization service talks to.
  *
- * `evaluate()` in @bles/core is pure; everything on this interface is the
+ * `evaluate()` in @waysafe/core is pure; everything on this interface is the
  * I/O it deliberately doesn't do. Two implementations exist:
  *
  *  - `InMemoryAuthorizationRepository` — an in-process fake, used by every
@@ -27,7 +27,7 @@ import type {
   Reason,
   ResolvedMerchant,
   SpendSnapshot,
-} from "@bles/core";
+} from "@waysafe/core";
 
 export type LedgerEntryType = "RESERVATION" | "RELEASE" | "CAPTURE" | "CREDIT";
 

@@ -30,7 +30,7 @@ import {
   generateId,
   signEventHash,
   type EvidenceEvent,
-} from "@bles/core";
+} from "@waysafe/core";
 import type { KeyObject } from "node:crypto";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 

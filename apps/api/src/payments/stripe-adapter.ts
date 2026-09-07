@@ -12,7 +12,7 @@
  */
 
 import Stripe from "stripe";
-import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@bles/core";
+import type { ExecutionRequest, ExecutionResult, PaymentAdapter, RailCapability } from "@waysafe/core";
 
 export class StripeAdapter implements PaymentAdapter {
   readonly name = "stripe";
@@ -41,7 +41,7 @@ export class StripeAdapter implements PaymentAdapter {
           payment_method_types: ["card"],
           confirm: true,
           off_session: true,
-          metadata: { bles_authorization_id: request.authorizationId },
+          metadata: { waysafe_authorization_id: request.authorizationId },
           expand: ["latest_charge.balance_transaction"],
         },
         { idempotencyKey: request.idempotencyKey },

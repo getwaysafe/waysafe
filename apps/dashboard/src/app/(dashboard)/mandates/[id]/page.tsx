@@ -1,13 +1,13 @@
 import { notFound } from "next/navigation";
-import { NotFoundError } from "@bles/sdk";
-import { requireSessionClient } from "../../../../lib/bles";
+import { NotFoundError } from "@waysafe/sdk";
+import { requireSessionClient } from "../../../../lib/waysafe";
 import { Badge, formatDate } from "../../../../lib/format";
 
 export default async function MandateDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const bles = await requireSessionClient();
+  const waysafe = await requireSessionClient();
 
-  const mandate = await bles.getMandate(id).catch((error) => {
+  const mandate = await waysafe.getMandate(id).catch((error) => {
     if (error instanceof NotFoundError) return null;
     throw error;
   });

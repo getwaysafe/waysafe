@@ -1,5 +1,5 @@
 /**
- * The SDK against a real, listening Bles server -- not a mocked fetch.
+ * The SDK against a real, listening Waysafe server -- not a mocked fetch.
  *
  * index.test.ts proves the SDK's own logic (error mapping, retries,
  * idempotency, the executable brand) against a fake `fetch`; it can't catch
@@ -12,7 +12,7 @@
  *
  * Imports server.ts and the WebAuthn virtual authenticator by relative path
  * rather than as a dependency: the SDK package itself has no dependency on
- * @bles/api (it would be a layering violation -- SDK is a client, not
+ * @waysafe/api (it would be a layering violation -- SDK is a client, not
  * coupled to one implementation of the server), but this test file is
  * allowed to reach into the sibling app since it exists to prove the two are
  * wire-compatible, in the one place that needs both.
@@ -25,7 +25,7 @@ import {
   FixtureIntentCompiler,
   generateEvidenceSigningKeyPair,
   loadCompilerFixtures,
-} from "@bles/core";
+} from "@waysafe/core";
 import { buildServer, type ServerRepos } from "../../../apps/api/src/server.js";
 import { InMemoryAgentKeyRepository } from "../../../apps/api/src/agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../../../apps/api/src/authorization/in-memory-repository.js";
@@ -38,12 +38,12 @@ import {
   createVirtualAuthenticator,
 } from "../../../apps/api/src/webauthn/test-support/virtual-authenticator.js";
 import { FakeAdapter } from "../../../apps/api/src/execution/test-support/fake-adapter.js";
-import { Bles, asExecutable, NoActiveMandateError, verifyEvidenceIndependently } from "./index.js";
+import { Waysafe, asExecutable, NoActiveMandateError, verifyEvidenceIndependently } from "./index.js";
 
 let app: ReturnType<typeof buildServer>;
 let repos: ServerRepos;
 let baseUrl: string;
-let orgClient: Bles;
+let orgClient: Waysafe;
 let orgKey: string;
 
 const ORG = "org_sdk_integration";
@@ -74,7 +74,7 @@ beforeAll(async () => {
 
   const created = await repos.agentKeys.createKey({ organizationId: ORG, name: "org admin" }, new Date());
   orgKey = created.fullKey;
-  orgClient = new Bles({ baseUrl, apiKey: orgKey });
+  orgClient = new Waysafe({ baseUrl, apiKey: orgKey });
 });
 
 afterAll(async () => {
@@ -129,7 +129,7 @@ async function setUpAuthenticatedMandate() {
   expect(authResult.kind).toBe("activated");
 
   const key = await orgClient.createAgentKey(agent.agent_id, { name: "sdk integration key" });
-  const agentClient = new Bles({ baseUrl, apiKey: key.api_key });
+  const agentClient = new Waysafe({ baseUrl, apiKey: key.api_key });
 
   return { agent, mandate, principalId, agentClient };
 }
@@ -227,7 +227,7 @@ describe("the full journey through the SDK against a real server", () => {
     });
 
     const key = await orgClient.createAgentKey(agent.agent_id, { name: "sdk step-up key" });
-    const agentClient = new Bles({ baseUrl, apiKey: key.api_key });
+    const agentClient = new Waysafe({ baseUrl, apiKey: key.api_key });
 
     const decision = await agentClient.authorize({
       agent_id: agent.agent_id,
@@ -255,12 +255,12 @@ describe("the full journey through the SDK against a real server", () => {
     const otherOrgKey = (
       await repos.agentKeys.createKey({ organizationId: "org_sdk_other", name: "other org" }, new Date())
     ).fullKey;
-    const otherOrgClient = new Bles({ baseUrl, apiKey: otherOrgKey });
+    const otherOrgClient = new Waysafe({ baseUrl, apiKey: otherOrgKey });
     const { mandate: victimMandate } = await setUpAuthenticatedMandate();
 
     const otherAgent = await otherOrgClient.createAgent({ name: "attacker bot" });
     const otherKey = await otherOrgClient.createAgentKey(otherAgent.agent_id, { name: "attacker key" });
-    const attackerClient = new Bles({ baseUrl, apiKey: otherKey.api_key });
+    const attackerClient = new Waysafe({ baseUrl, apiKey: otherKey.api_key });
 
     await expect(
       attackerClient.authorize({
@@ -296,7 +296,7 @@ describe("the full journey through the SDK against a real server", () => {
 
     const detail = await orgClient.getMandate(mandate.mandate_id);
     expect(detail.agent_ids).toContain(agent.agent_id);
-    expect(detail.policy.schema_version).toBe("bles.policy/v1");
+    expect(detail.policy.schema_version).toBe("waysafe.policy/v1");
 
     const authorizations = await orgClient.listAuthorizations({ limit: 100 });
     expect(authorizations.some((a) => a.authorization_id === decision.authorization_id)).toBe(true);
@@ -348,7 +348,7 @@ describe("the full journey through the SDK against a real server", () => {
     // one. The hash isn't recomputed, same as evidence.test.ts's simplest
     // tamper case; the "full chain rewrite" that recomputes hashes
     // consistently is proven once, thoroughly, in
-    // @bles/core's evidence.test.ts -- this test's job is only to prove the
+    // @waysafe/core's evidence.test.ts -- this test's job is only to prove the
     // SDK's local verification wires up correctly against real server data.
     const tampered = events.map((e) => ({ ...e }));
     tampered[0]!.payload = { tampered: true };
