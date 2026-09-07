@@ -272,7 +272,15 @@ export async function handleIssuingAuthorizationRequest(
   } else {
     // detail is non-null here: gateMandateStatus only returns null when it is.
     const mandate = detail as MandateDetail;
-    const merchant = resolveMerchant(parsed.action.merchant, repos.authorization.getMerchantDirectory());
+    // D-34: this is the one rail-attested resolveMerchant() call in the
+    // codebase -- merchant_data.network_id came from Stripe's own webhook
+    // payload, not from anything the agent (or whoever holds the card)
+    // could fabricate, so "rail" is the only source that's ever honest here.
+    const merchant = resolveMerchant(
+      parsed.action.merchant,
+      repos.authorization.getMerchantDirectory(),
+      "rail",
+    );
     result = await repos.authorization.withMandateLock(mandateId, async () => {
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
       return evaluate({ policy: mandate.policy, action: parsed.action, merchant, spend, now });

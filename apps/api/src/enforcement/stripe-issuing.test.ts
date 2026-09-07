@@ -185,24 +185,28 @@ describe("StripeIssuingAdapter.toResponse", () => {
 describe("handleIssuingAuthorizationRequest", () => {
   const adapter = new StripeIssuingAdapter();
 
-  it("approves a network_mid the policy allowlists, within its limits", async () => {
-    const { authorization, evidence, mandateId } = setup();
-    const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
-      adapter,
-      buildAuthorization({ mandateId, amount: toMinorUnits(60, "USD") }),
-      NOW,
-    );
+  it(
+    "D-34: approves a network_mid the policy allowlists, within its limits -- rail-attested, " +
+      "so unlike the same value arriving via authorize() (service.test.ts), this one genuinely verifies",
+    async () => {
+      const { authorization, evidence, mandateId } = setup();
+      const decision = await handleIssuingAuthorizationRequest(
+        { authorization, evidence },
+        adapter,
+        buildAuthorization({ mandateId, amount: toMinorUnits(60, "USD") }),
+        NOW,
+      );
 
-    expect(decision.response.approved).toBe(true);
-    expect(decision.response.reason_codes).toEqual([ReasonCode.ALLOW_WITHIN_MANDATE]);
+      expect(decision.response.approved).toBe(true);
+      expect(decision.response.reason_codes).toEqual([ReasonCode.ALLOW_WITHIN_MANDATE]);
 
-    const events = await evidence.listForOrganization(ORG);
-    const event = events.find((e) => e.type === "enforcement.stripe_issuing.decision");
-    expect(event).toBeDefined();
-    expect(event!.subject_id).toBe(mandateId);
-    expect((event!.payload as { decision: string }).decision).toBe("ALLOW");
-  });
+      const events = await evidence.listForOrganization(ORG);
+      const event = events.find((e) => e.type === "enforcement.stripe_issuing.decision");
+      expect(event).toBeDefined();
+      expect(event!.subject_id).toBe(mandateId);
+      expect((event!.payload as { decision: string }).decision).toBe("ALLOW");
+    },
+  );
 
   it("declines a merchant the policy does not allowlist, and records why in evidence", async () => {
     const { authorization, evidence, mandateId } = setup();

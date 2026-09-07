@@ -15,6 +15,14 @@
  * ASSERTED references (a name the agent typed, a domain it claimed but we could
  * not corroborate) degrade the best possible outcome to STEP_UP — a human
  * confirms who the counterparty actually is.
+ *
+ * D-34: trust is a function of *who* attested a value, not merely *which*
+ * scheme it arrived on. `psp_account` and `network_mid` were originally
+ * treated as inherently VERIFIED by field alone -- but `ProposedAction.merchant`
+ * on `POST /v1/authorizations` is supplied by the agent, and an agent typing
+ * `psp_account: "acct_realStaples"` is exactly the "Staples" attack the rest
+ * of this file exists to stop, just moved to a different field. See
+ * `MerchantAttestationSource` below and DECISIONS.md D-34.
  */
 
 import { z } from "zod";
@@ -61,6 +69,45 @@ export const MerchantTrust = {
 } as const;
 
 export type MerchantTrust = (typeof MerchantTrust)[keyof typeof MerchantTrust];
+
+/**
+ * Who supplied a merchant identifier on a `MerchantAssertion` -- D-34.
+ *
+ * `resolveMerchant`'s trust decision was, until D-34, a function of which
+ * *field* an assertion carried: `psp_account` or `network_mid` present meant
+ * VERIFIED, full stop. That's non-negotiable #3 read too literally --
+ * `POST /v1/authorizations`' `ProposedAction.merchant` is supplied by the
+ * agent, the exact same untrusted party a bare `name` claim already can't
+ * come from. An agent that types `psp_account: "acct_realStaples"` or
+ * `network_mid: "visa_mid_staples"` is doing precisely what D-3 exists to
+ * stop a `name` claim from doing, and the field-based rule let it through.
+ * Trust has to be a function of *who* supplied the identifier, not merely
+ * *which* field it landed in.
+ *
+ * - `agent`  the caller of authorize() asserted it directly on the request
+ *            (`ProposedAction.merchant`). Every field here is exactly as
+ *            untrustworthy as a `name` claim would be -- an agent can type
+ *            any string into `psp_account` or `network_mid` as easily as
+ *            into `name`. Caps at ASSERTED, same ceiling D-3 already
+ *            applies to a bare name.
+ * - `rail`   a payment rail's own callback supplied it -- e.g. Stripe
+ *            Issuing's `merchant_data.network_id` (D-32) -- assigned by the
+ *            card network/acquirer/PSP, not something the party requesting
+ *            money movement could fabricate. This is the only source that
+ *            can still verify a `psp_account`/`network_mid` field directly.
+ *
+ * Directory-corroborated `domain` is unaffected either way: that
+ * corroboration comes from Waysafe's own directory recognizing the domain
+ * value, independent of who supplied the string, so there is nothing here
+ * for attestation source to change.
+ */
+export const MerchantAttestationSource = {
+  AGENT: "agent",
+  RAIL: "rail",
+} as const;
+
+export type MerchantAttestationSource =
+  (typeof MerchantAttestationSource)[keyof typeof MerchantAttestationSource];
 
 /** A merchant reference as it appears inside a policy (allowlist / denylist). */
 export const MerchantRefSchema = z.object({
@@ -202,38 +249,55 @@ export function matchesDenylist(
 }
 
 /**
- * Resolve an agent's merchant assertion.
+ * Resolve a merchant assertion against who supplied it (D-34).
  *
  * MVP resolution order:
- *   1. PSP account id  -> VERIFIED (Week 4 wires the real Stripe lookup)
- *   2. Network merchant id (network_mid) -> VERIFIED (D-33: acquirer/network-
- *      assigned, same corroboration class as a PSP account id -- never
- *      something the agent itself could have typed. This is what makes a
- *      card-network merchant identifier on a rail's own callback, e.g.
- *      Stripe Issuing's `merchant_data.network_id`, actually able to satisfy
- *      an allowlist per D-3's table, instead of forever capping at STEP_UP.)
- *   3. Known-merchant directory hit on domain -> VERIFIED
+ *   1. PSP account id, rail-attested  -> VERIFIED (Week 4 wires the real
+ *      Stripe lookup). Agent-attested -> ASSERTED at most (D-34): the field
+ *      alone proves nothing about who put the value there.
+ *   2. Network merchant id (network_mid), rail-attested -> VERIFIED (D-33:
+ *      acquirer/network-assigned, same corroboration class as a PSP account
+ *      id -- this is what makes a card-network merchant identifier on a
+ *      rail's own callback, e.g. Stripe Issuing's `merchant_data.network_id`,
+ *      actually able to satisfy an allowlist per D-3's table, instead of
+ *      forever capping at STEP_UP). Agent-attested -> ASSERTED at most
+ *      (D-34), same reasoning as psp_account above.
+ *   3. Known-merchant directory hit on domain -> VERIFIED, regardless of
+ *      attestation source (the corroboration is Waysafe's own directory
+ *      lookup, not a claim about who supplied the domain string).
  *   4. Domain present but unknown -> ASSERTED
  *   5. Name only -> ASSERTED, with no identity ref at all
  *   6. Nothing usable -> UNKNOWN
  */
 export function resolveMerchant(
   assertion: MerchantAssertion,
-  directory: MerchantDirectory = EMPTY_DIRECTORY,
+  directory: MerchantDirectory,
+  source: MerchantAttestationSource,
 ): ResolvedMerchant {
   const refs: MerchantRef[] = [];
   let trust: MerchantTrust = MerchantTrust.UNKNOWN;
-  let source: ResolvedMerchant["resolution_source"] = "none";
+  let resolutionSource: ResolvedMerchant["resolution_source"] = "none";
   let mcc = assertion.mcc;
   let mccSource: ResolvedMerchant["mcc_source"] = mcc ? "assertion" : undefined;
+
+  // D-34: only a rail's own callback can make a psp_account/network_mid
+  // field VERIFIED by itself -- an agent asserting either on
+  // POST /v1/authorizations is exactly as untrustworthy as it asserting a
+  // bare name, since it can type any string into any of these fields.
+  const attestedByRail = source === MerchantAttestationSource.RAIL;
 
   if (assertion.psp_account) {
     refs.push({
       scheme: MerchantScheme.PSP_ACCOUNT,
       value: assertion.psp_account,
     });
-    trust = MerchantTrust.VERIFIED;
-    source = "psp";
+    if (attestedByRail) {
+      trust = MerchantTrust.VERIFIED;
+      resolutionSource = "psp";
+    } else if (trust === MerchantTrust.UNKNOWN) {
+      trust = MerchantTrust.ASSERTED;
+      resolutionSource = "assertion";
+    }
   }
 
   if (assertion.network_mid) {
@@ -241,21 +305,23 @@ export function resolveMerchant(
       scheme: MerchantScheme.NETWORK_MID,
       value: assertion.network_mid,
     });
-    // D-33: a network_mid is assigned by the card network/acquirer, not
-    // typed by the agent -- the same corroboration class as psp_account,
-    // per D-3's table ("network_mid — yes, acquirer-assigned", no directory
-    // caveat the way domain has one). Previously this branch only pushed a
-    // ref and never touched `trust`, so a bare network_mid assertion (no
-    // domain, no psp_account) left trust at UNKNOWN/ASSERTED and could never
-    // satisfy an allowlist -- silently defeating the one rail (card-network
-    // enforcement, D-32) whose merchant identity is *always* network_mid +
-    // MCC, never a domain.
-    if (trust !== MerchantTrust.VERIFIED) {
-      trust = MerchantTrust.VERIFIED;
-      source = "network";
-    }
-    if (mcc && mccSource === "assertion") {
-      mccSource = "network";
+    if (attestedByRail) {
+      // D-33: a network_mid is assigned by the card network/acquirer, not
+      // typed by the agent -- the same corroboration class as psp_account,
+      // per D-3's table ("network_mid — yes, acquirer-assigned", no directory
+      // caveat the way domain has one). But that reasoning only holds when
+      // the rail itself is the one asserting it (D-34) -- an agent typing
+      // the same string proves nothing.
+      if (trust !== MerchantTrust.VERIFIED) {
+        trust = MerchantTrust.VERIFIED;
+        resolutionSource = "network";
+      }
+      if (mcc && mccSource === "assertion") {
+        mccSource = "network";
+      }
+    } else if (trust === MerchantTrust.UNKNOWN) {
+      trust = MerchantTrust.ASSERTED;
+      resolutionSource = "assertion";
     }
   }
 
@@ -264,9 +330,11 @@ export function resolveMerchant(
     refs.push({ scheme: MerchantScheme.DOMAIN, value: domain });
     const entry = directory.lookupDomain(domain);
     if (entry) {
+      // Unaffected by attestation source: the corroboration is Waysafe's own
+      // directory recognizing this domain, not a claim about who supplied it.
       if (trust !== MerchantTrust.VERIFIED) {
         trust = MerchantTrust.VERIFIED;
-        source = "directory";
+        resolutionSource = "directory";
       }
       if (!mcc && entry.mcc) {
         mcc = entry.mcc;
@@ -274,7 +342,7 @@ export function resolveMerchant(
       }
     } else if (trust === MerchantTrust.UNKNOWN) {
       trust = MerchantTrust.ASSERTED;
-      source = "assertion";
+      resolutionSource = "assertion";
     }
   }
 
@@ -282,7 +350,7 @@ export function resolveMerchant(
     refs.push({ scheme: MerchantScheme.NAME, value: assertion.name });
     if (trust === MerchantTrust.UNKNOWN) {
       trust = MerchantTrust.ASSERTED;
-      source = "assertion";
+      resolutionSource = "assertion";
     }
   }
 
@@ -294,7 +362,7 @@ export function resolveMerchant(
     mcc,
     mcc_source: mccSource,
     display_name: assertion.name ?? domain ?? undefined,
-    resolution_source: source,
+    resolution_source: resolutionSource,
   };
 }
 

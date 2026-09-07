@@ -13,6 +13,13 @@
  * the spend snapshot, resolves the merchant, calls `evaluate()`, and
  * persists the decision plus any ledger entries in one atomic step. No LLM
  * call anywhere on this path.
+ *
+ * Every `resolveMerchant` call below passes `"agent"` (D-34): the merchant on
+ * `request.action` is whatever the caller of `authorize()` asserted, the
+ * same untrusted party a bare `name` claim already can't come from -- a
+ * `psp_account` or `network_mid` here is exactly as unverified as a `name`
+ * would be, and caps at ASSERTED accordingly. Only a rail's own callback
+ * (apps/api/src/enforcement/*.ts) is ever entitled to pass `"rail"`.
  */
 
 import {
@@ -114,7 +121,7 @@ export async function authorize(
         status: "DENIED",
         reasons: keyCheck.ok ? gate.reasons : keyCheck.reasons,
         action: request.action,
-        merchant: resolveMerchant(request.action.merchant, repo.getMerchantDirectory()),
+        merchant: resolveMerchant(request.action.merchant, repo.getMerchantDirectory(), "agent"),
         idempotencyKey: request.idempotency_key ?? null,
         requestHash,
         stepUpExpiresAt: null,
@@ -144,7 +151,7 @@ export async function authorize(
         status: "DENIED",
         reasons: keyCheck.reasons,
         action: request.action,
-        merchant: resolveMerchant(request.action.merchant, repo.getMerchantDirectory()),
+        merchant: resolveMerchant(request.action.merchant, repo.getMerchantDirectory(), "agent"),
         idempotencyKey: request.idempotency_key ?? null,
         requestHash,
         stepUpExpiresAt: null,
@@ -168,7 +175,7 @@ export async function authorize(
       }
     }
 
-    const merchant = resolveMerchant(request.action.merchant, repo.getMerchantDirectory());
+    const merchant = resolveMerchant(request.action.merchant, repo.getMerchantDirectory(), "agent");
     const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);
     const result = evaluate({ policy: gate.policy, action: request.action, merchant, spend, now });
 

@@ -106,11 +106,16 @@ function action(
 function run(
   policy: Policy,
   proposedAction: ProposedAction,
-  opts: { spend?: SpendSnapshot; now?: Date } = {},
+  opts: { spend?: SpendSnapshot; now?: Date; merchantSource?: "agent" | "rail" } = {},
 ) {
+  // D-34: this suite represents the authorize() path -- a ProposedAction the
+  // caller of authorize() submitted -- so "agent" is the honest default.
+  // Only a handful of tests below explicitly pass "rail" to prove the one
+  // legitimate case (a payment rail's own callback) still verifies.
   const merchant = resolveMerchant(
     proposedAction.merchant,
     DIRECTORY,
+    opts.merchantSource ?? "agent",
   );
   const input: EngineInput = {
     policy,
@@ -239,7 +244,35 @@ describe("adversarial merchant assertions", () => {
     ]);
   });
 
-  it("a PSP account id is VERIFIED even off-directory, and can satisfy an allowlist", () => {
+  it(
+    "THE ATTACK: D-34 (was 'a PSP account id is VERIFIED even off-directory, and can satisfy " +
+      "an allowlist' -- that was the bug) -- an agent-attested psp_account alone caps at STEP_UP, not ALLOW",
+    () => {
+      // D-34: this test used to assert ALLOW here, because resolveMerchant()
+      // trusted the `psp_account` *field* regardless of who supplied it.
+      // POST /v1/authorizations' ProposedAction.merchant is agent-supplied,
+      // so an agent typing a real psp_account it doesn't actually transact
+      // through got the exact same free pass a bare `name` claim already
+      // can't get (D-3). No accompanying domain here on purpose -- adding
+      // one back in would let directory corroboration verify the merchant
+      // by a different path and mask the point this test exists to prove.
+      const policy = policyFrom({
+        merchants: {
+          allow: [{ scheme: "psp_account", value: "acct_staples_1" }],
+          deny: [],
+          unlisted: "STEP_UP",
+        },
+      });
+      const result = run(policy, action(83, { psp_account: "acct_staples_1" }));
+      expect(result.decision).toBe(Decision.STEP_UP);
+      expect(result.reasons.map((r) => r.code)).toEqual([ReasonCode.STEP_UP_MERCHANT_UNVERIFIED]);
+    },
+  );
+
+  it("D-34: the same PSP account id, rail-attested, IS verified and reaches ALLOW", () => {
+    // The legitimate counterpart to the attack above: a payment rail's own
+    // callback (not an agent's claim) asserting a psp_account is exactly
+    // the corroboration D-3's table always meant for this scheme.
     const policy = policyFrom({
       merchants: {
         allow: [{ scheme: "psp_account", value: "acct_staples_1" }],
@@ -247,10 +280,40 @@ describe("adversarial merchant assertions", () => {
         unlisted: "STEP_UP",
       },
     });
-    const result = run(
-      policy,
-      action(83, { psp_account: "acct_staples_1", domain: "staples.com" }),
-    );
+    const result = run(policy, action(83, { psp_account: "acct_staples_1" }), {
+      merchantSource: "rail",
+    });
+    expect(result.decision).toBe(Decision.ALLOW);
+  });
+
+  it("THE ATTACK: D-34 -- an agent-attested network_mid alone caps at STEP_UP, not ALLOW", () => {
+    // Same attack, the other field D-33 made VERIFIED-eligible. An agent
+    // asserting a real card-network merchant id it never actually
+    // transacted through must not reach ALLOW just because the field
+    // happens to be one a rail could have legitimately supplied.
+    const policy = policyFrom({
+      merchants: {
+        allow: [{ scheme: "network_mid", value: "visa_mid_staples_1" }],
+        deny: [],
+        unlisted: "STEP_UP",
+      },
+    });
+    const result = run(policy, action(83, { network_mid: "visa_mid_staples_1" }));
+    expect(result.decision).toBe(Decision.STEP_UP);
+    expect(result.reasons.map((r) => r.code)).toEqual([ReasonCode.STEP_UP_MERCHANT_UNVERIFIED]);
+  });
+
+  it("D-34: the same network_mid, rail-attested (e.g. Stripe Issuing's webhook), IS verified and reaches ALLOW", () => {
+    const policy = policyFrom({
+      merchants: {
+        allow: [{ scheme: "network_mid", value: "visa_mid_staples_1" }],
+        deny: [],
+        unlisted: "STEP_UP",
+      },
+    });
+    const result = run(policy, action(83, { network_mid: "visa_mid_staples_1" }), {
+      merchantSource: "rail",
+    });
     expect(result.decision).toBe(Decision.ALLOW);
   });
 

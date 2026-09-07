@@ -148,6 +148,21 @@ currency. Tested in `engine/evaluate.test.ts` under "reason messages format
 money, never bare minor units," including a sweep asserting the raw
 minor-unit integer never appears literally in any money-bearing message.
 
+### Amendment (D-34) — the table above is superseded for agent-supplied identifiers
+
+The table's `psp_account` and `network_mid` rows ("yes, VERIFIED" / "yes,
+acquirer-assigned") are only accurate for a **rail-attested** value from
+here on. `resolveMerchant()` granted VERIFIED trust to either field
+unconditionally, regardless of who supplied it -- meaning an agent could
+assert `psp_account` or `network_mid` directly on `POST /v1/authorizations`
+and reach ALLOW, exactly the "Staples" attack this decision exists to stop,
+just moved to a field this table said was always safe. D-34 makes trust a
+function of attestation source: rail-attested (a payment rail's own
+callback, e.g. Stripe Issuing's `merchant_data.network_id`, D-32) still
+verifies; agent-attested caps at ASSERTED, same ceiling a bare `name` claim
+already had. `domain` (directory-corroborated) is unaffected -- see D-34 for
+the full reasoning and the tests this broke and re-proved.
+
 ---
 
 ## D-4 — Budget accounting is explicit and stamped on every receipt
@@ -2043,6 +2058,118 @@ recorded payloads, no key required), and `apps/api/src/enforcement/
 stripe-issuing.bypass.test.ts` (the live bypass test D-32 said this spike
 would be judged by; gated on `STRIPE_ISSUING_SECRET_KEY` exactly as
 `stripe-adapter.test.ts` gates itself on `STRIPE_SECRET_KEY`).
+
+---
+
+## D-34 — A fix to non-negotiable #3 that D-33 point 1 exposed: trust is a function of *who* attested an identifier, not merely *which* field it's in
+
+**The bug.** D-33 point 1 fixed `resolveMerchant()` so a bare `network_mid`
+assertion could reach VERIFIED trust -- necessary for the card rail to ever
+produce ALLOW at all. But it fixed the *symptom* D-32 needed and missed the
+actual rule underneath: `resolveMerchant()` had, since Week 1, granted
+VERIFIED trust to a `psp_account` field unconditionally, and D-33 gave
+`network_mid` the identical unconditional treatment. Neither check asked
+*who* put the value there. `POST /v1/authorizations`' `ProposedAction.merchant`
+(`packages/core/src/domain.ts`) is supplied by the agent -- the same
+untrusted party non-negotiable #3 already refuses to trust for a bare `name`
+claim. An agent asserting `psp_account: "acct_realStaples"` or
+`network_mid: "visa_mid_staples"` -- strings it can read off a real Staples
+receipt, or simply guess the shape of -- got the exact same free ALLOW the
+whole point of D-3 is to deny a `name` claim. This was true for `psp_account`
+from Week 1 onward; D-33 didn't introduce the class of bug, it just added a
+second field vulnerable to it, which is what made building the D-32 spike's
+own tests surface it -- exercising `network_mid` for the first time is what
+finally exercised the shape of assertion neither field had ever been checked
+against.
+
+**The fix.** Trust is now a function of *attestation source*, not merely
+*scheme*. `resolveMerchant` takes a required third parameter,
+`MerchantAttestationSource` (`"agent" | "rail"`, `packages/core/src/
+merchant.ts`) -- required, not defaulted, the same reasoning D-6 already
+applies to spending ceilings: a security-critical parameter that's easy to
+forget to override is worse than one every call site has to name explicitly.
+`psp_account`/`network_mid` now reach VERIFIED only when `source === "rail"`
+-- a payment rail's own callback (Stripe Issuing's `merchant_data.network_id`,
+D-32) supplied the value, not something the party requesting money movement
+could fabricate. Agent-attested, either field caps at ASSERTED, same ceiling
+a bare `name` claim already had. Directory-corroborated `domain` is
+unaffected either way -- that corroboration is Waysafe's own static
+directory recognizing the domain value, independent of who typed the string,
+so there was never anything for attestation source to change there.
+
+**Every call site now says explicitly who it trusts.**
+`apps/api/src/authorization/service.ts`'s three `resolveMerchant` calls (the
+`authorize()` path, agent-initiated per D-13) pass `"agent"`.
+`apps/api/src/enforcement/stripe-issuing.ts`'s one call (D-32, the only
+rail-initiated caller in the codebase) passes `"rail"` -- `merchant_data.
+network_id` came from Stripe's own webhook payload, not from the agent or
+whoever holds the card. This is also, by construction, the exhaustive list
+of everywhere a `MerchantAssertion` reaches `resolveMerchant()`: a future
+rail adapter has to make the same choice explicit, not inherit a default.
+
+**Tests first, per CLAUDE.md's testing posture.** Every dimension the task
+named:
+
+- **THE ATTACK, via the authorize path** (`apps/api/src/authorization/
+  service.test.ts`, new `describe("D-34: ...")`): an agent asserting an
+  allowlisted `psp_account`, and separately an allowlisted `network_mid`, via
+  a real `authorize()` call -- both land `STEP_UP` with exactly
+  `STEP_UP_MERCHANT_UNVERIFIED`, never `ALLOW`. Deliberately no accompanying
+  `domain` in either request: adding one back would let directory
+  corroboration verify the merchant by a different path and mask whether the
+  fix actually holds.
+- **The same `network_mid`, rail-attested, still reaches ALLOW**
+  (`apps/api/src/enforcement/stripe-issuing.test.ts`'s existing "approves a
+  network_mid the policy allowlists" test, renamed to cite D-34 and to say
+  explicitly it's the legitimate counterpart to the agent-path attack test
+  above -- the fix had to not just close the hole, but leave the one real
+  rail-initiated caller working).
+- **`evaluate.test.ts:242-255`, the exact lines the task named, updated and
+  renamed** (`packages/core/src/engine/evaluate.test.ts`): "a PSP account id
+  is VERIFIED even off-directory, and can satisfy an allowlist" asserted
+  `ALLOW` -- that assertion was the bug, encoded as a passing test. Renamed
+  to say so directly and now asserts `STEP_UP` / `STEP_UP_MERCHANT_UNVERIFIED`
+  for an agent-attested `psp_account`, paired with a new "the same PSP
+  account id, rail-attested, IS verified" test right after it, and the
+  identical pair repeated for `network_mid`. `run()`'s helper gained an
+  optional `merchantSource` override (default `"agent"`, since this whole
+  suite represents the `authorize()` path) rather than every one of its
+  ~50 other call sites needing to change.
+- **`packages/core/src/merchant.test.ts`**, the unit level underneath all of
+  the above: every existing `psp_account`/`network_mid` test now says which
+  source it's proving, plus four new cases -- agent-attested `psp_account`
+  and `network_mid` each capped at ASSERTED (not VERIFIED), the `mcc_source`
+  tag correctly reading `"assertion"` rather than `"network"` when the
+  network_mid itself was only agent-claimed, and an allowlist-level version
+  of the same attack (`matched: true, verified: false`) proving the D-3
+  ceiling actually engages downstream.
+
+**Change cost if wrong:** would have stayed low to fix earlier -- three call
+sites, one new required parameter, additive test coverage at every layer
+that already existed. The cost that already accrued is the one D-3's own
+history warns about: a security invariant stated in prose ("an unverified
+merchant can never produce ALLOW") that the code did not actually enforce
+for two of its five schemes, for however long between Week 1 (`psp_account`)
+and this fix. No evidence surfaced that this was exploited outside this
+codebase's own tests; the fix and its tests are the artifact of catching it
+during D-32's own build-out, not from an incident.
+
+Implemented in `packages/core/src/merchant.ts` (`MerchantAttestationSource`,
+`resolveMerchant`'s required third parameter), `apps/api/src/authorization/
+service.ts` (three call sites, `"agent"`), `apps/api/src/enforcement/
+stripe-issuing.ts` (one call site, `"rail"`). Tested in
+`packages/core/src/merchant.test.ts` (4 new cases plus every existing
+`psp_account`/`network_mid` case now explicit about source),
+`packages/core/src/engine/evaluate.test.ts` (`run()`'s `merchantSource`
+override; the renamed line-242 test plus its rail-attested counterpart,
+repeated for `network_mid`), `apps/api/src/authorization/service.test.ts`
+(new `describe("D-34: ...")`, both attack cases via the real `authorize()`
+call), and `apps/api/src/enforcement/stripe-issuing.test.ts` (the renamed
+rail-attested ALLOW case). `npm run typecheck` and the full `npm test` both
+ran clean (388 passed, 1 skipped -- the D-33 live bypass test's own,
+unrelated, already-documented SKIP; one pre-existing, unrelated failure in
+`payments/stripe-adapter.test.ts` -- a real-Stripe-test-mode fee assertion --
+confirmed present on `main` before this change too, via `git stash`).
 
 ---
 

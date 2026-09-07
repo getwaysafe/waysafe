@@ -23,11 +23,18 @@ tests pass.
 2. **Money is integer minor units.** `$150` is `15000`. No floats, no decimal
    strings, no `parseFloat` on an amount, ever. See `packages/core/src/money.ts`.
 
-3. **An unverified merchant can never produce ALLOW.** Allowlists match on
-   domains, PSP account ids, and card-network merchant identifiers, never names.
-   An agent that asserts only a name, or an uncorroborated domain, caps out at
-   `STEP_UP`. This is `D-3` and it is the difference between a policy engine and
-   policy theater. Any change here needs a test proving the attack still fails.
+3. **An unverified merchant can never produce ALLOW.** Trust comes from who
+   attested an identifier, never merely which field it's in (`D-34`): a PSP
+   account id or card-network merchant id is verified only when a payment
+   rail's own callback supplied it, never when the agent asserted it on
+   `POST /v1/authorizations` — an agent typing `psp_account` or `network_mid`
+   is exactly as untrustworthy as it typing a `name`, and caps out at
+   `STEP_UP` right alongside it. Directory-corroborated domains verify either
+   way, since that corroboration is Waysafe's own lookup, not a claim about
+   who supplied the string. This is `D-3`, amended by `D-34`, and it is the
+   difference between a policy engine and policy theater. Any change here
+   needs a test proving the attack still fails — for both the agent path and
+   the rail path.
 
 4. **No credential ever reaches a model prompt, a log, or a trace.** Logger
    redaction lives in `apps/api/src/server.ts` and the path list only grows.
@@ -106,15 +113,20 @@ Stripe adapter is not registered and `execute()` on that rail is unavailable.
 
 The six-week sprint is complete (`D-1`…`D-27`). Since then: the rename to
 Waysafe (`D-28`), production RP ID (`D-29`), principal routes (`D-30`), runtime
-target (`D-31`), the enforcement model (`D-32`), and the `D-32` spike itself
-(`D-33`): `EnforcementAdapter` in core plus the Stripe Issuing real-time-
-authorization adapter, judged by the bypass test D-32 named. Known follow-ups
-from building it: card-rail approvals don't yet write a ledger entry, so a
-cumulative cap doesn't yet see card spend (D-33 point 6 — needs a schema
-answer for who "acts" on a rail-initiated decision); the live bypass test's
-account in this environment hasn't completed Stripe's own Issuing setup, so
-it currently self-reports SKIPPED rather than a live pass. `OQ-7` (per-unit
-limits vs. correcting the PRD's example) is the one open question left.
+target (`D-31`), the enforcement model (`D-32`), the `D-32` spike itself
+(`D-33`: `EnforcementAdapter` in core plus the Stripe Issuing real-time-
+authorization adapter, judged by the bypass test D-32 named), and a fix to
+non-negotiable #3 that D-33 exposed (`D-34`: merchant trust now depends on
+who attested an identifier, not merely which field it's in — an agent could
+previously assert an allowlisted `psp_account`/`network_mid` on
+`POST /v1/authorizations` and get ALLOW, exactly the attack D-3 exists to
+stop, just on a different field). Known follow-ups: card-rail approvals
+don't yet write a ledger entry, so a cumulative cap doesn't yet see card
+spend (D-33 point 6 — needs a schema answer for who "acts" on a
+rail-initiated decision); the live bypass test's account in this environment
+hasn't completed Stripe's own Issuing setup, so it currently self-reports
+SKIPPED rather than a live pass. `OQ-7` (per-unit limits vs. correcting the
+PRD's example) is the one open question left.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

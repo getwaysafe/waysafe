@@ -176,6 +176,78 @@ describe("authorize() end-to-end", () => {
   });
 });
 
+describe("D-34: merchant trust is a function of who attested it, not which field it's in", () => {
+  it(
+    "THE ATTACK: an agent asserting an allowlisted psp_account via the authorize path " +
+      "is capped at STEP_UP with the unverified-merchant reason, not ALLOW",
+    async () => {
+      const policy = policyFrom({
+        merchants: {
+          allow: [{ scheme: "psp_account", value: "acct_real_staples" }],
+          deny: [],
+          unlisted: "STEP_UP",
+        },
+      });
+      const { repos, apiKey } = await repoWithMandate(policy);
+      const result = await authorize(repos, {
+        organizationId: ORG,
+        request: request({
+          action: {
+            amount: toMinorUnits(83, "USD"),
+            currency: "USD",
+            // The agent asserts a psp_account it does not actually
+            // transact through -- no accompanying domain, so directory
+            // corroboration can't verify it by a different path and mask
+            // whether this fix actually holds.
+            merchant: { psp_account: "acct_real_staples" },
+            attestations: {},
+          },
+        }),
+        now: NOW,
+        apiKey,
+      });
+      if (result.kind !== "decided") throw new Error("unreachable");
+      expect(result.authorization.decision).toBe(Decision.STEP_UP);
+      expect(result.authorization.reasons.map((r) => r.code)).toEqual([
+        ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
+      ]);
+    },
+  );
+
+  it(
+    "THE ATTACK: an agent asserting an allowlisted network_mid via the authorize path " +
+      "is capped at STEP_UP with the unverified-merchant reason, not ALLOW",
+    async () => {
+      const policy = policyFrom({
+        merchants: {
+          allow: [{ scheme: "network_mid", value: "visa_mid_real_staples" }],
+          deny: [],
+          unlisted: "STEP_UP",
+        },
+      });
+      const { repos, apiKey } = await repoWithMandate(policy);
+      const result = await authorize(repos, {
+        organizationId: ORG,
+        request: request({
+          action: {
+            amount: toMinorUnits(83, "USD"),
+            currency: "USD",
+            merchant: { network_mid: "visa_mid_real_staples" },
+            attestations: {},
+          },
+        }),
+        now: NOW,
+        apiKey,
+      });
+      if (result.kind !== "decided") throw new Error("unreachable");
+      expect(result.authorization.decision).toBe(Decision.STEP_UP);
+      expect(result.authorization.reasons.map((r) => r.code)).toEqual([
+        ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
+      ]);
+    },
+  );
+});
+
 describe("the actor-state gate (outside the pure engine)", () => {
   it("denies when no mandate matches and does not persist anything", async () => {
     const repo = new InMemoryAuthorizationRepository(DIRECTORY);
