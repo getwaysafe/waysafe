@@ -1948,3 +1948,68 @@ is actually at stake, the latter seems more likely right, but that's a
 call for whoever owns the product surface, not a schema detail to default
 silently. **Blocking for any integration that runs against real
 persistence, not just the demo.**
+
+## OQ-10 — What stops an agent spending outside Waysafe?
+
+Found working OQ-3 (Sep 2026), reading `packages/sdk/src/index.ts` against
+the three integration shapes OQ-3 names. The SDK's I-10 neutrality means
+`authorize()` has the same signature from a graph node, an MCP tool handler
+or a cron tick -- OQ-3 doesn't change the SDK, only what ships above it.
+But every one of those shapes shares a hole that no D-n addresses, and it
+is the first question a serious integrator asks.
+
+What the code enforces today is real, and narrower than the README implies.
+An agent holds an agent API key (D-18) and never a rail credential:
+`STRIPE_SECRET_KEY` lives in the server's environment (`stripe-key.ts`),
+and the only path to `adapter.execute()` is `POST
+/v1/authorizations/:id/execute`, which the type brand in D-22 refuses for
+anything but an `AUTHORIZED` or `STEP_UP_APPROVED` decision. On the Stripe
+rail, in a deployment where Waysafe runs execution, an agent structurally
+cannot move money without a decision -- Waysafe holds the only credential
+that can. That is genuine enforcement. It holds for exactly one rail in
+exactly one deployment shape.
+
+It stops holding as soon as either changes:
+
+- **An advisory integration.** A developer who calls `authorize()` and then
+  executes on their own processor credential (the cron-job shape in OQ-3,
+  and likely the first thing a real integrator does) has made Waysafe a
+  consultant. Nothing prevents the agent from skipping the call. The
+  evidence chain (D-16, D-26) then proves what Waysafe *decided*, which is
+  not the same as proving nothing was spent outside it -- D-26's
+  "verifiable by a third party" is a claim about decisions, and a third
+  party will read it as a claim about spend.
+- **A rail where the payer signs.** `paymentMethodRef` is opaque by design
+  (D-13): a tokenized card is inert without the processor credential
+  Waysafe holds, but a wallet address is spendable by whoever holds the
+  key, and in x402 the *payer* signs the payment. The x402 adapter is a
+  stub, so nothing has yet decided whether Waysafe holds that wallet key or
+  the agent does. If the agent does, Waysafe on that rail is advisory by
+  construction, whatever the deployment.
+
+The product is meant to sit across every rail an agent might spend on --
+card networks, stablecoin wallets, AP2, x402 -- and the honest observation
+is that "what stops the agent" has a different answer on each: on a card
+rail it is custody of the processor credential (or being the token issuer);
+on a wallet it is key custody, or a smart-account / session-key design
+where Waysafe's decision *is* the signature the account requires; on a
+mandate protocol like AP2 it is being the issuer of the signed mandate the
+merchant or PSP verifies. Three different enforcement positions behind one
+`authorize()`. `RailCapability` currently describes settlement semantics
+and says nothing about who holds the spending authority for that rail.
+
+The evidence-chain design leaned toward "prove decisions, don't custody
+money" (D-26: sign the record, not the funds), and there are strong
+reasons to keep it there -- holding or minting payment credentials is a
+different product with a different regulatory surface. But that choice
+has to be made explicitly, and its trust boundary stated in the docs,
+rather than left for a security review to discover.
+
+**Does Waysafe claim enforcement -- custody or required-signer position on
+every rail it supports -- or is it a decision-and-evidence layer with a
+documented trust boundary, where enforcement is the integrator's job and
+Waysafe ships per-rail guidance (and, for the rails where it *can* enforce,
+says so)?** Whichever way this goes, the README's invariant language
+("an unverified merchant can never produce ALLOW") is a claim about
+decisions and should not be read as a claim about spend until this is
+answered.
