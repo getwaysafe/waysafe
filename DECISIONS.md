@@ -276,7 +276,7 @@ parser — a test that passes because a regex agreed with itself would tell us
 nothing. The fixtures still exercise the full validation, coherence-check and
 assumption-surfacing path, offline and deterministically.
 
-Re-record with `npm run compile:record -w @agentpay/api -- <name> "<instruction>"`.
+Re-record with `npm run compile:record -w @waysafe/api -- <name> "<instruction>"`.
 
 ---
 
@@ -1872,7 +1872,7 @@ at $1,250 is already denied at $900. The coherence checker flags this
 automatically, and you can see it by running:
 
 ```bash
-npm run compile -w @agentpay/api -- "Get me a good hotel in Miami. Nothing ridiculous."
+npm run compile -w @waysafe/api -- "Get me a good hotel in Miami. Nothing ridiculous."
 ```
 
 The `shopping` fixture deliberately keeps the PRD's numbers so the warning is

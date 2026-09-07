@@ -12,11 +12,21 @@ const decision = await waysafe.authorize({ agent, principal, action });
 **Status: Week 6 of 6, complete.** ✅ Domain model, policy engine, WebAuthn +
 agent keys, payment execution, the TypeScript SDK, and the developer
 dashboard are all in place. Week 6 shipped the dashboard's step-up approval
-UI, the Bles rename (`DECISIONS.md` D-19/D-25), a signed and independently
-verifiable evidence chain (D-26/OQ-8), and a scripted end-to-end demo
-(`npm run demo`, D-27). The product has since been renamed again, to
-Waysafe (`DECISIONS.md` D-28). One open item remains before a real launch:
-OQ-9 -- there is no way to create a `Principal` through the API yet.
+UI, the rename (`DECISIONS.md` D-19/D-25, superseded by D-28), a signed and
+independently verifiable evidence chain (D-26/OQ-8), and a scripted
+end-to-end demo (`npm run demo`, D-27).
+
+Since the sprint closed: the product was renamed to Waysafe (D-28,
+resolving OQ-2), the production WebAuthn RP ID was fixed at
+`dashboard.waysafe.ai` (D-29, resolving OQ-5), `POST /v1/principals` and
+`GET /v1/principals/:id` were added (D-30, resolving OQ-9), and the runtime
+target was set -- dashboard on Vercel, API and worker on Render (D-31,
+resolving OQ-6).
+
+Two open questions remain, both needing a human answer rather than code:
+**OQ-3** (who the first external developer is -- it decides the SDK's
+ergonomics) and **OQ-7** (whether the policy schema needs per-unit limits,
+or whether the PRD's contradictory hotel example should just be corrected).
 
 ---
 
