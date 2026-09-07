@@ -46,6 +46,7 @@ import { probeStripeKey } from "./payments/stripe-key.js";
 import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
 import type { ProviderEventRepository } from "./webhooks/types.js";
 import { handleStripeWebhook } from "./webhooks/service.js";
+import { StripeIssuingAdapter, handleIssuingAuthorizationRequest } from "./enforcement/stripe-issuing.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
 import type { WebauthnRepository } from "./webauthn/types.js";
 import {
@@ -131,6 +132,13 @@ export interface BuildServerOptions {
    * (test-mode key, not the .env.example placeholder). */
   adapters?: Record<string, PaymentAdapter>;
   stripeWebhookSecret?: string;
+  /** D-32: the signing secret for Stripe's Issuing authorization webhook.
+   * Deliberately a separate value from stripeWebhookSecret -- a real Stripe
+   * account issues one signing secret per configured webhook endpoint, and
+   * /v1/webhooks/stripe and /v1/enforcement/stripe-issuing are two
+   * different endpoints; reusing one secret for both would only work by
+   * coincidence (both configured with the same value in the dashboard). */
+  stripeIssuingWebhookSecret?: string;
 }
 
 interface AuthContext {
@@ -153,9 +161,13 @@ declare module "fastify" {
 
 /** Routes that work without any credential -- everything else needs an
  * agent API key or an org credential (Phase 4 auth rule). The Stripe
- * webhook route is exempt for a different reason: it isn't a Waysafe
- * caller presenting a Bearer credential, it's Stripe presenting an HMAC
- * signature over the raw body, checked inside the route itself. The evidence
+ * webhook route (and the Stripe Issuing enforcement route, D-32) are exempt
+ * for the same reason: neither is a Waysafe caller presenting a Bearer
+ * credential -- it's Stripe presenting an HMAC signature over the raw body,
+ * checked inside the route itself. This is precisely D-32's point: the
+ * enforcement route is the one path in this file no Waysafe credential
+ * gates at all, because it must never depend on the agent (or anything
+ * holding an agent's credential) cooperating. The evidence
  * public key is exempt because the whole point of D-26/OQ-8 is that a third
  * party -- who by definition has no Waysafe credential -- can verify a chain
  * independently; gating the key that makes that possible behind a Waysafe
@@ -164,6 +176,7 @@ const PUBLIC_ROUTES = new Set([
   "/health",
   "/v1/reason-codes",
   "/v1/webhooks/stripe",
+  "/v1/enforcement/stripe-issuing",
   "/v1/evidence/public-key",
 ]);
 
@@ -348,6 +361,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   const stripeWebhookSecret =
     options.stripeWebhookSecret ?? process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_dev_placeholder";
   const stripeForWebhooks = new Stripe("sk_test_unused_for_webhook_verification");
+
+  // Same reasoning as stripeForWebhooks above, reused rather than duplicated:
+  // constructEvent/getApiField are local operations, so no real key is
+  // needed just to verify a signature or read the library's API version.
+  const stripeIssuingWebhookSecret =
+    options.stripeIssuingWebhookSecret ??
+    process.env.STRIPE_ISSUING_WEBHOOK_SECRET ??
+    "whsec_dev_placeholder";
+  const stripeIssuingAdapter = new StripeIssuingAdapter();
 
   /**
    * Phase 4 auth rule: every route except /health and /v1/reason-codes
@@ -766,6 +788,64 @@ export function buildServer(options: BuildServerOptions = {}) {
       new Date(),
     );
     return reply.send(result);
+  });
+
+  /**
+   * D-32: Stripe Issuing's synchronous authorization webhook -- the actual
+   * enforcement chokepoint. Stripe waits on this response (~2 second
+   * timeout) before the card network's authorization proceeds; a rogue,
+   * jailbroken, or credential-stealing agent has no `authorize()` call to
+   * skip here, because nothing about this path depends on the agent making
+   * one. Same signature-over-raw-body authentication as
+   * /v1/webhooks/stripe, a different (D-32) signing secret -- see
+   * BuildServerOptions.stripeIssuingWebhookSecret.
+   *
+   * Every response carries the library's configured Stripe-Version header
+   * and a body of exactly `{ approved, reason_codes }`: Stripe reads only
+   * `approved`; `reason_codes` is Waysafe's own addition for observability
+   * (Stripe ignores unknown fields) and is what lets a caller -- including
+   * the bypass test this route is judged by -- see which reason code the
+   * decline actually carried without a second round trip to fetch evidence.
+   */
+  app.post("/v1/enforcement/stripe-issuing", async (request, reply) => {
+    const signature = request.headers["stripe-signature"];
+    if (!signature || typeof signature !== "string") {
+      return reply.code(400).send({ error: "missing_signature" });
+    }
+    if (!request.rawBody) {
+      return reply.code(400).send({ error: "missing_body" });
+    }
+
+    let event: Stripe.Event;
+    try {
+      event = stripeForWebhooks.webhooks.constructEvent(request.rawBody, signature, stripeIssuingWebhookSecret);
+    } catch (err) {
+      return reply.code(400).send({
+        error: "invalid_signature",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    reply.header("Stripe-Version", stripeForWebhooks.getApiField("version"));
+
+    if (event.type !== "issuing_authorization.request") {
+      // Only issuing_authorization.request is a synchronous decision this
+      // route owes a same-request answer to. Anything else delivered here
+      // is a dashboard misconfiguration (this endpoint registered for more
+      // than the one synchronous event type) -- fail closed without
+      // fabricating a reason code for a decision evaluate() never made.
+      app.log.warn(`unexpected event type on /v1/enforcement/stripe-issuing: ${event.type}`);
+      return reply.send({ approved: false, reason_codes: [] });
+    }
+
+    const authorization = event.data.object as Stripe.Issuing.Authorization;
+    const decision = await handleIssuingAuthorizationRequest(
+      { authorization: repos.authorization, evidence: repos.evidence },
+      stripeIssuingAdapter,
+      authorization,
+      new Date(),
+    );
+    return reply.send(decision.response);
   });
 
   app.post("/v1/agents", async (request, reply) => {

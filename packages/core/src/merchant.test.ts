@@ -71,6 +71,18 @@ describe("merchant resolution", () => {
   it("returns UNKNOWN when nothing usable is supplied", () => {
     expect(resolveMerchant({}, directory).trust).toBe(MerchantTrust.UNKNOWN);
   });
+
+  it("D-33: treats a network merchant id as verified, same class as a PSP account", () => {
+    const resolved = resolveMerchant({ network_mid: "visa_mid_123" }, directory);
+    expect(resolved.trust).toBe(MerchantTrust.VERIFIED);
+    expect(resolved.resolution_source).toBe("network");
+  });
+
+  it("D-33: an MCC alongside a network_mid is tagged network-sourced, not a bare assertion", () => {
+    const resolved = resolveMerchant({ network_mid: "visa_mid_123", mcc: "5943" }, directory);
+    expect(resolved.mcc).toBe("5943");
+    expect(resolved.mcc_source).toBe("network");
+  });
 });
 
 describe("allowlist enforcement", () => {
@@ -107,6 +119,24 @@ describe("allowlist enforcement", () => {
   it("matches a subdomain of an allowlisted merchant", () => {
     const resolved = resolveMerchant({ domain: "shop.staples.com" }, directory);
     expect(satisfiesAllowlist(allowlist, resolved).matched).toBe(true);
+  });
+
+  it("D-33: a verified network_mid can satisfy an allowlist entry of the same scheme", () => {
+    const networkAllowlist: MerchantRef[] = [{ scheme: "network_mid", value: "visa_mid_staples" }];
+    const resolved = resolveMerchant({ network_mid: "visa_mid_staples" }, directory);
+    const result = satisfiesAllowlist(networkAllowlist, resolved);
+    expect(result.matched).toBe(true);
+    expect(result.verified).toBe(true);
+  });
+
+  it("THE ATTACK: a network_mid match does not launder an accompanying merchant name claim", () => {
+    // D-3 still applies per-scheme: matching on network_mid must not make an
+    // *unrelated* name-only allowlist entry verified.
+    const nameAllowlist: MerchantRef[] = [{ scheme: "name", value: "Staples" }];
+    const resolved = resolveMerchant({ network_mid: "visa_mid_staples", name: "Staples" }, directory);
+    const result = satisfiesAllowlist(nameAllowlist, resolved);
+    expect(result.matched).toBe(true);
+    expect(result.verified).toBe(false);
   });
 });
 

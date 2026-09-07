@@ -106,10 +106,15 @@ Stripe adapter is not registered and `execute()` on that rail is unavailable.
 
 The six-week sprint is complete (`D-1`…`D-27`). Since then: the rename to
 Waysafe (`D-28`), production RP ID (`D-29`), principal routes (`D-30`), runtime
-target (`D-31`), and the enforcement model (`D-32`). Next is the `D-32` spike:
-`EnforcementAdapter` in core and the Stripe Issuing real-time-authorization
-adapter, judged by the bypass test above. `OQ-7` (per-unit limits vs.
-correcting the PRD's example) is the one open question left.
+target (`D-31`), the enforcement model (`D-32`), and the `D-32` spike itself
+(`D-33`): `EnforcementAdapter` in core plus the Stripe Issuing real-time-
+authorization adapter, judged by the bypass test D-32 named. Known follow-ups
+from building it: card-rail approvals don't yet write a ledger entry, so a
+cumulative cap doesn't yet see card spend (D-33 point 6 — needs a schema
+answer for who "acts" on a rail-initiated decision); the live bypass test's
+account in this environment hasn't completed Stripe's own Issuing setup, so
+it currently self-reports SKIPPED rather than a live pass. `OQ-7` (per-unit
+limits vs. correcting the PRD's example) is the one open question left.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

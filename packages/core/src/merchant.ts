@@ -102,11 +102,11 @@ export interface ResolvedMerchant {
    * disqualifying — but this field records provenance so a receipt can show
    * whether the code came from the agent's claim or a corroborated source.
    */
-  mcc_source?: "psp" | "directory" | "assertion";
+  mcc_source?: "psp" | "directory" | "assertion" | "network";
   /** Display name for receipts. */
   display_name?: string;
   /** How resolution happened, for the evidence record. */
-  resolution_source: "psp" | "directory" | "assertion" | "none";
+  resolution_source: "psp" | "directory" | "assertion" | "network" | "none";
 }
 
 /** Schemes that can, on their own, satisfy an allowlist entry. */
@@ -206,10 +206,16 @@ export function matchesDenylist(
  *
  * MVP resolution order:
  *   1. PSP account id  -> VERIFIED (Week 4 wires the real Stripe lookup)
- *   2. Known-merchant directory hit on domain -> VERIFIED
- *   3. Domain present but unknown -> ASSERTED
- *   4. Name only -> ASSERTED, with no identity ref at all
- *   5. Nothing usable -> UNKNOWN
+ *   2. Network merchant id (network_mid) -> VERIFIED (D-33: acquirer/network-
+ *      assigned, same corroboration class as a PSP account id -- never
+ *      something the agent itself could have typed. This is what makes a
+ *      card-network merchant identifier on a rail's own callback, e.g.
+ *      Stripe Issuing's `merchant_data.network_id`, actually able to satisfy
+ *      an allowlist per D-3's table, instead of forever capping at STEP_UP.)
+ *   3. Known-merchant directory hit on domain -> VERIFIED
+ *   4. Domain present but unknown -> ASSERTED
+ *   5. Name only -> ASSERTED, with no identity ref at all
+ *   6. Nothing usable -> UNKNOWN
  */
 export function resolveMerchant(
   assertion: MerchantAssertion,
@@ -235,6 +241,22 @@ export function resolveMerchant(
       scheme: MerchantScheme.NETWORK_MID,
       value: assertion.network_mid,
     });
+    // D-33: a network_mid is assigned by the card network/acquirer, not
+    // typed by the agent -- the same corroboration class as psp_account,
+    // per D-3's table ("network_mid — yes, acquirer-assigned", no directory
+    // caveat the way domain has one). Previously this branch only pushed a
+    // ref and never touched `trust`, so a bare network_mid assertion (no
+    // domain, no psp_account) left trust at UNKNOWN/ASSERTED and could never
+    // satisfy an allowlist -- silently defeating the one rail (card-network
+    // enforcement, D-32) whose merchant identity is *always* network_mid +
+    // MCC, never a domain.
+    if (trust !== MerchantTrust.VERIFIED) {
+      trust = MerchantTrust.VERIFIED;
+      source = "network";
+    }
+    if (mcc && mccSource === "assertion") {
+      mccSource = "network";
+    }
   }
 
   const domain = assertion.domain ? normalizeDomain(assertion.domain) : null;

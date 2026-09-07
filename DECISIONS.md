@@ -1903,6 +1903,149 @@ to being a consultant an agent can ignore.
 
 ---
 
+## D-33 — Building the D-32 spike: six judgment calls it forced
+
+D-32 recorded the decision and sketched the shape; building it surfaced six
+things that needed an answer nobody had written down yet. None contradicts
+D-32 -- each is a gap the spike's first real implementation ran into.
+
+**1. `network_mid` never actually got VERIFIED trust -- a real, pre-existing
+bug, not a new design point.** D-3's own table has always said a
+network-assigned merchant id is corroborated identity, on a par with a PSP
+account id ("network_mid — yes, acquirer-assigned," no directory caveat the
+way `domain` has one). But `resolveMerchant()` (`packages/core/src/
+merchant.ts`) only ever set `trust = VERIFIED` for `psp_account` or a
+directory-hit `domain`; the `network_mid` branch pushed a ref and stopped,
+leaving trust at whatever it already was. Nothing caught this before now
+because nothing before this spike ever asserted a bare `network_mid` with no
+accompanying domain -- exactly the shape Stripe Issuing's `merchant_data`
+is. Left unfixed, the card rail could never produce an ALLOW at all: every
+transaction, even one from a fully allowlisted merchant, would cap at
+STEP_UP through the D-3 unverified ceiling -- and STEP_UP has no meaning on
+a rail with a ~2-second synchronous decision window (point 4 below), so in
+practice every card transaction would just fail closed forever. Fixed in
+`resolveMerchant`: a `network_mid` assertion now sets `trust = VERIFIED`,
+`resolution_source: "network"` (new value, alongside a matching addition to
+`mcc_source`). Tested in `merchant.test.ts` (four new cases, including one
+proving a network_mid match does not also verify an unrelated `name`-scheme
+allowlist entry -- D-3 still applies per-scheme).
+
+**2. `EnforcementAdapter` reuses `EngineResult` directly rather than
+inventing a parallel "decision" shape.** `packages/core/src/enforcement.ts`
+defines `EnforcementRequest` (an opaque `instrumentRef` plus a
+`ProposedAction`) and `EnforcementAdapter<TCallback, TResponse>` with
+`parseRequest`/`toResponse`. The alternative -- a bespoke `EnforcementDecision`
+type -- would just re-declare `{ decision, reasons }`, which `EngineResult`
+already is; `toResponse` takes the real `EngineResult` `evaluate()` produced,
+so there is exactly one decision shape in the codebase, not two that could
+drift apart. `evaluate()` still never imports `enforcement.ts` (I-9) --
+nothing here makes it a dependency in either direction, only a caller
+(`apps/api/src/enforcement/stripe-issuing.ts`) depends on both.
+
+**3. `instrumentRef` is the mandate id, not the rail's own instrument id.**
+For the card rail, the adapter reads the mandate id back out of the card's
+own metadata (stamped there at provisioning, point 5) and returns *that* as
+`instrumentRef` -- not the Stripe card id. The generic interface's job is
+"the Waysafe-recognized reference for the spend instrument's authority," and
+for a card that *is* a mandate, per D-32 item 3; making the caller
+(`handleIssuingAuthorizationRequest`) re-derive a mandate id from a raw card
+id would just move the same Stripe-specific lookup one file up for no
+benefit, since only the adapter that stamped the metadata knows where to
+read it back from.
+
+**4. STEP_UP fails closed on this rail, same as DENY -- there is no channel
+to put a human in front of a decision inside Stripe's ~2-second window.**
+`StripeIssuingAdapter.toResponse` maps `decision === ALLOW` to
+`approved: true` and everything else, DENY or STEP_UP alike, to
+`approved: false`. The recorded decision and its reasons are unaffected --
+evidence and the response's `reason_codes` still show the real STEP_UP
+reason, e.g. `STEP_UP_MERCHANT_UNVERIFIED` -- only the boolean the network
+actually acts on collapses the two. A synchronous, rail-initiated integration
+trades away the step-up UX entirely; that trade is inherent to the rail, not
+a shortcut this spike took.
+
+**5. A card is provisioned per mandate (item 3), and its Stripe
+`spending_controls` are deliberately left at Stripe's permissive default.**
+`provisionCardForMandate` (`apps/api/src/enforcement/stripe-issuing.ts`)
+stamps `metadata.waysafe_mandate_id` on the *card*, not only the cardholder,
+since the card is the object the webhook payload actually carries. Setting
+restrictive `spending_controls` here would mean two enforcement mechanisms
+disagreeing about the same money -- D-32 already says Stripe-side controls
+are a coarse backstop *below* the engine's decision, never a substitute for
+it; this spike leaves that backstop off entirely so every approval or
+decline in a test genuinely came from `evaluate()`.
+
+**6. Card-rail approvals do not yet write a ledger entry -- D-4's cumulative
+limits do not yet see card spend. Recorded here deliberately, not shipped
+silently.** `AuthorizationRecord.agentId` (`packages/db/prisma/
+schema.prisma`) is a mandatory foreign key to a real `Agent` row. A
+rail-initiated decision has no agent acting -- the card is the mandate's own
+spend authority -- so there is no honest value to put there; fabricating one
+would misattribute spend to whichever agent happened to be picked, exactly
+the kind of provenance-losing shortcut D-14 already teaches this codebase
+not to take. `handleIssuingAuthorizationRequest` therefore evaluates the
+policy fully (per-transaction limits, merchant/category rules, expiry) and
+records an `EvidenceEvent` of the outcome, but does not call
+`saveAuthorization` and writes no `RESERVATION`/`CAPTURE`. The gap this
+leaves: a monthly cumulative cap is not protected against repeated card
+spend specifically, since nothing about a card authorization ever lands in
+the ledger `getSpendSnapshot` sums over. Per-transaction limits, merchant
+and category rules, and mandate lifecycle are fully enforced regardless.
+Tested directly in `stripe-issuing.test.ts` -- not hidden, a test named for
+exactly this proves two card authorizations that together exceed a monthly
+cap are both still approved. Closing this needs a real product/schema
+answer (a nullable `agentId`, or a synthetic per-mandate "instrument actor"
+row) before card spend can count against a cumulative cap; flagged for a
+follow-up alongside OQ-7's per-unit-limits question, not solved here.
+
+**The mandate gate for a rail-initiated decision is narrower than
+`resolveMandateGate` by design, not by oversight.** `gateMandateStatus`
+(`stripe-issuing.ts`) checks only the mandate's own status (ACTIVE vs.
+expired/revoked/superseded/unauthenticated) -- there is no agent to bind or
+suspend on this rail, since the card carries the mandate's authority
+directly rather than delegating through a specific agent's key (D-18 has no
+equivalent here, deliberately: D-18 exists because an agent's own claim of
+its identity can't be trusted, and this rail has no agent claim to
+distrust in the first place). `evaluate()` still separately checks
+`policy.expires_at` once this gate passes, same as every other path into it.
+
+**The bypass test has two distinct, honestly-reported SKIP paths, not one.**
+Building `stripe-issuing.bypass.test.ts` against a real (freshly-created)
+Stripe test account surfaced a precondition nobody anticipated in D-32: card
+creation itself can fail with "the v2 financial account id must be
+specified" when an account hasn't completed Issuing's own setup flow --
+unrelated to whether a webhook endpoint is registered, and undiagnosable
+further from a Cards-write-scoped restricted key. The test now treats a
+provisioning failure and a "Stripe never invoked our webhook" outcome as two
+separate, clearly-labeled SKIP reasons, per the same testing-posture rule
+CLAUDE.md already states: a decline (or here, a precondition failure) with
+no corresponding evidence event reports SKIPPED with the reason, never a
+false pass. In this session's own environment, the suite hits the
+card-provisioning SKIP; the webhook-not-reachable SKIP path is exercised
+whenever provisioning succeeds but no tunnel (e.g. `stripe listen
+--forward-to`) is running.
+
+Implemented in `packages/core/src/enforcement.ts` (new),
+`packages/core/src/merchant.ts` (`resolveMerchant`'s `network_mid` branch,
+`resolution_source`/`mcc_source` widened), `apps/api/src/enforcement/
+stripe-issuing.ts` (new: `StripeIssuingAdapter`, `provisionCardForMandate`,
+`probeStripeIssuingKey`, `handleIssuingAuthorizationRequest`,
+`gateMandateStatus`), `apps/api/src/enforcement/test-support/
+stripe-issuing-gate.ts` (new), and `apps/api/src/server.ts` (`POST
+/v1/enforcement/stripe-issuing`, added to `PUBLIC_ROUTES`,
+`stripeIssuingWebhookSecret` on `BuildServerOptions`). New env vars in
+`.env.example`: `STRIPE_ISSUING_SECRET_KEY`, `STRIPE_ISSUING_WEBHOOK_SECRET`.
+Tested in `packages/core/src/merchant.test.ts` (network_mid trust),
+`apps/api/src/enforcement/stripe-issuing.test.ts` (offline: adapter mapping,
+D-3 name-blindness, mandate-lifecycle gating, per-transaction limits, the
+documented ledger gap, and route-level signature verification -- all against
+recorded payloads, no key required), and `apps/api/src/enforcement/
+stripe-issuing.bypass.test.ts` (the live bypass test D-32 said this spike
+would be judged by; gated on `STRIPE_ISSUING_SECRET_KEY` exactly as
+`stripe-adapter.test.ts` gates itself on `STRIPE_SECRET_KEY`).
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
