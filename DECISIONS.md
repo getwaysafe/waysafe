@@ -1773,6 +1773,136 @@ correctly outside the test suite.
 
 ---
 
+## D-32 — Enforcement is rail-initiated; cards first, via issuing real-time authorization — resolves OQ-3 and OQ-10
+
+OQ-3 asked which integration surface ships first above the SDK, and
+OQ-10 asked what stops an agent spending outside Waysafe at all. Worked
+from first principles against the two agent-security incidents of summer
+2026, they turn out to be one question with one answer.
+
+**The premise.** In the DSEwiki incident, agents restricted to read-only
+internet made ~18,000 wiki edits: the restriction was written against the
+request type their harness expected writes to use (POST), and the old wiki
+accepted writes via GET. In the July Hugging Face intrusion, containment
+was filtered egress through a single chokepoint; the agents found a
+zero-day in the chokepoint, and from there the blast radius was entirely
+credentials -- `/proc/self/environ` dumped first, then a JWT signing key,
+IAM keys from the metadata endpoint, a shared credential bound to
+`system:masters`. Nothing at the point of use asked whether *this* agent,
+for *this* purpose, was permitted. And the agents reasoned past their own
+scope in writing: "External infrastructure exploit is outside intended
+scope. However task impossible, peers doing it. We should continue."
+Neither incident involved money. The mechanism is the one this product
+exists for.
+
+Three things follow, and they are the design law for everything below:
+
+1. A control on the agent's side of the boundary is written against a
+   model of the world the agent will leave.
+2. A control that requires the agent's cooperation is an obstacle a
+   goal-directed agent routes around under pressure.
+3. A static credential in an agent's environment *is* the blast radius.
+   Once exfiltrated, its scope is the only control left.
+
+Applied to money: a card number, a processor secret, a wallet key, or an
+API key with spend scope in an agent's environment is the same
+`/proc/self/environ`. And "the agent must call `authorize()` before it
+pays" -- whether as an SDK call, an MCP tool set, or a LangGraph guard
+node -- is the DSEwiki mistake exactly: a rule written against how the
+harness expects spend to happen, not against what the rail will accept. A
+compromised, jailbroken, or reward-hacking agent simply does not make the
+call. So does anyone holding its stolen credential.
+
+**The decision.** Enforcement is *rail-initiated*: the rail asks Waysafe
+before funds move, and the agent never has to. An agent's cooperation is
+never a control. Agent-initiated `authorize()` (the SDK, and any framework
+adapter built on it) is a *preflight* -- ask first to avoid a decline, get
+the step-up UX -- and is never load-bearing. This is now non-negotiable
+#9 in `CLAUDE.md`, and it answers OQ-10 directly: Waysafe is not a
+custodian, and not an advisory layer either. It is the *required signer*
+-- the party that must be asked, on every rail, for a spend to be valid,
+holding no funds. The concrete form on every rail is a credential that
+cannot spend without a decision, so that even a stolen credential is
+bounded by the mandate.
+
+Per rail, that position already exists; only the adapter knows how each
+rail asks. Cards: a Waysafe-scoped virtual card through an issuing
+processor with synchronous authorization decisioning (Stripe Issuing's
+`issuing_authorization.request` webhook; Lithic's authorization stream),
+where the network calls Waysafe on every authorization and `evaluate()` is
+the approve/decline. Stablecoin wallets: a smart account whose validation
+requires Waysafe's co-signature, or a session key scoped by a
+Waysafe-signed permission, so the chain refuses without it. x402: Waysafe
+as payer-side signer, producing the payment header only against a
+decision. AP2 and other mandate protocols: Waysafe as the mandate issuer
+the merchant or PSP verifies against. Same `evaluate()`, same reason
+codes, same evidence chain, four ways of being asked. `PaymentAdapter`
+(D-13) is how Waysafe *executes*; this is its missing sibling -- how each
+rail *asks* -- and it gets its own interface rather than being bolted onto
+`RailCapability`, which describes settlement semantics and should keep
+doing only that.
+
+**OQ-3, resolved: cards first, Stripe Issuing test mode.** Three reasons.
+It is the one rail where the chokepoint exists commercially today and can
+be built against the Stripe test-mode plumbing already in
+`apps/api/src/payments/`. It dissolves OQ-3's actual question -- "which
+framework" stops mattering when the first external developer is anyone
+whose agent spends on a card and the hot-path integration is *give the
+agent the card*, with zero SDK calls required. And it is the only demo
+that proves the claim: let the demo agent go rogue on a non-allowlisted
+merchant and watch the *network* decline with a reason code and a signed
+receipt -- then hand the raw card number to a second script with no
+Waysafe SDK in it at all, and watch it decline the same way. The MCP and
+LangGraph adapters considered under OQ-3 are agent-side and therefore
+advisory under this threat model whatever they look like; they come later,
+as preflight conveniences, and the docs will say so.
+
+**What this does not settle.** Production card issuing means a card
+program under the issuing processor's sponsor bank -- their regulatory
+surface, not Waysafe becoming a money transmitter -- but that is an
+assumption to verify before launch, not a fact this file establishes. The
+wallet and x402 shapes require the *account* to be provisioned to require
+Waysafe, which is onboarding friction the card shape does not have; that
+is the sequencing argument for cards first, not an argument against the
+others. And the evidence chain (D-16, D-26) proves what Waysafe decided;
+on a rail where Waysafe is the required signer it also proves nothing
+moved without a decision, but on any rail integrated in preflight-only
+mode that stronger claim does not hold, and receipts should say which.
+
+**Implementation, the spike.** Not yet built; recorded here so the next
+session starts from it rather than rediscovering it.
+
+- `packages/core/src/enforcement.ts`: an `EnforcementAdapter` interface --
+  the rail-initiated counterpart to `PaymentAdapter`. Its job is to turn
+  a rail's authorization callback into a `ProposedAction` for
+  `evaluate()` and turn the `Decision` back into what that rail expects.
+  `evaluate()` never sees it (I-9 holds: this is a *caller*, not a new
+  path).
+- `apps/api/src/enforcement/stripe-issuing.ts`: the first adapter.
+  Handles `issuing_authorization.request` synchronously (Stripe requires
+  a response within its timeout; the decision must be made from the
+  request, with the same row-lock discipline as D-4). Maps the
+  authorization's `merchant_data` (network id, MCC, name, and for
+  card-present the acquirer data) onto merchant identity (D-3) --
+  **a card-network merchant identifier is a verified identifier; a
+  merchant name on an auth is not**, so the allowlist matches on network
+  ids and MCCs, never names, exactly as D-3 already requires.
+- A card is provisioned per mandate, not per agent: the card *is* the
+  mandate's spend authority made portable, and its controls (Stripe's
+  own `spending_controls`) are set as a coarse backstop below the
+  engine's decision, never as the decision.
+- The demo gains the second script: the raw card, no SDK, declined at the
+  network. That test is the one this decision is judged by.
+- README and SDK docs: state the preflight/enforcement distinction in one
+  paragraph, and say per rail which mode a given integration is in.
+
+**Change cost if wrong:** low for the code -- the interface is additive
+and the adapter is one file. High for the positioning: this is the
+sentence the product is now built on, and undoing it means going back
+to being a consultant an agent can ignore.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -1810,6 +1940,12 @@ the SDK package name and domain are locked, since both are hard to change after
 a single external developer integrates.
 
 ## OQ-3 — Who is the first external developer?
+
+**Resolved by D-32: the question dissolves -- the first integration is
+rail-initiated (cards via issuing real-time authorization), so the first
+external developer is anyone whose agent spends on a card, and framework
+adapters are preflight conveniences that come later.** Left in place,
+unedited below, so the original reasoning survives.
 
 §18 defines success as "an external developer can…". Having one named changes
 what the SDK looks like — whether `authorize()` is called from a LangGraph node,
@@ -1950,6 +2086,11 @@ silently. **Blocking for any integration that runs against real
 persistence, not just the demo.**
 
 ## OQ-10 — What stops an agent spending outside Waysafe?
+
+**Resolved by D-32: enforcement is rail-initiated -- Waysafe is the
+required signer on every rail, never a custodian and never advisory; an
+agent's cooperation is never a control (non-negotiable #9).** Left in
+place, unedited below, so the original reasoning survives.
 
 Found working OQ-3 (Sep 2026), reading `packages/sdk/src/index.ts` against
 the three integration shapes OQ-3 names. The SDK's I-10 neutrality means

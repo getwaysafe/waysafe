@@ -23,10 +23,16 @@ resolving OQ-2), the production WebAuthn RP ID was fixed at
 target was set -- dashboard on Vercel, API and worker on Render (D-31,
 resolving OQ-6).
 
-Two open questions remain, both needing a human answer rather than code:
-**OQ-3** (who the first external developer is -- it decides the SDK's
-ergonomics) and **OQ-7** (whether the policy schema needs per-unit limits,
-or whether the PRD's contradictory hotel example should just be corrected).
+D-32 then settled the enforcement model, resolving OQ-3 and OQ-10 together:
+enforcement is *rail-initiated* -- the rail asks Waysafe before funds move,
+and the agent never has to. The SDK and any framework adapter are preflight,
+never the thing that stops money moving. Cards come first, via issuing
+real-time authorization (Stripe Issuing test mode); that spike is the next
+piece of work and is specified in `DECISIONS.md` D-32.
+
+One open question remains, needing a human answer rather than code: **OQ-7**
+(whether the policy schema needs per-unit limits, or whether the PRD's
+contradictory hotel example should just be corrected).
 
 ---
 
@@ -164,6 +170,9 @@ in plain language, for the principal to check before they authenticate. (`D-6`)
 
 - No card credential ever enters a model prompt, trace, or log.
 - A model interprets intent. A model never authorizes a transaction.
+- An agent's cooperation is never a control. Enforcement is rail-initiated:
+  the rail asks Waysafe before funds move. Anything that relies on the agent
+  calling `authorize()` first is a preflight, and is documented as one. (`D-32`)
 - Every mandate and policy change is versioned; nothing is edited in place.
 - Every execution cites the exact policy hash that authorized it.
 - Passkeys prove authorization without Waysafe storing biometric data.
