@@ -2380,6 +2380,76 @@ proof). `npm run typecheck`, the full `npm test` (399 passed, 1 skipped --
 only the already-documented D-33 bypass SKIP, no failures at all now), and
 `npm run build` all ran clean.
 
+## D-37 — `provisionCardForMandate` requires a v2 Money Management financial account; the bypass test's SKIP taxonomy now has three distinct reasons
+
+**Checked directly against this account, same discipline as D-36.**
+`GET /v2/money_management/financial_accounts` (Stripe CLI, `Stripe-Version:
+<pinned>.preview` -- Money Management is still preview-gated: any
+non-`.preview` version 404s on this path with "you must explicitly specify
+a `.preview` Stripe-Version") showed this sandbox already has one
+(`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`), `status:
+"pending"`. That explained the bypass test's prior generic SKIP ("The v2
+financial account id must be specified.") -- this account has no legacy
+Issuing balance to fall back to at all; card creation always requires one.
+
+Wiring it in surfaced two more real-Stripe-behavior facts, found the same
+way D-36 found its own (a direct `node -e` call against the live API, not
+assumed from the SDK's types):
+
+- The field is `financial_account_v2`, not `financial_account` --
+  stripe-node 22.5.0's shipped types (`Issuing/Cards.d.ts`) still call it
+  `financial_account`, and sending that name gets `parameter_unknown:
+  Received unknown parameter: financial_account. Did you mean
+  financial_account_v2?` straight from Stripe. Same lesson as D-36: the
+  code's assumption was stale, not the field itself.
+- A card can't attach to *any* v2 financial account unless its cardholder
+  has a `phone_number` on file (3DS) -- `cardholder_phone_number_required`,
+  a precondition this account's old default-balance path never had.
+  Without fixing this too, the bypass test would only ever reach that
+  error and never the one this task actually asked to distinguish
+  (financial-account status).
+
+Once both were fixed, Stripe's own card-creation error for a non-active
+financial account turned out to already say exactly what's wrong: "You
+cannot create a new card for FinancialAccount ... because its status is
+pending. Please try again with an open FinancialAccount." No separate
+status-read call was attempted -- and one couldn't have worked anyway:
+`STRIPE_ISSUING_SECRET_KEY` is deliberately restricted to Cards/Cardholders
+write and Authorizations read (see `.env.example`), and probing
+`GET .../financial_accounts/:id` with it returned "Permission denied ...
+API Key does not have permission to access account," confirming that scope
+holds. `financialAccountStatusFromError` parses the status straight out of
+the create-card error message instead, which needs no extra permission and
+degrades to `null` (a different SKIP bucket) if Stripe ever rewords it.
+
+**Judgment call: three SKIP reasons, not a suite-level `describe.skipIf`
+gate.** `STRIPE_ISSUING_FINANCIAL_ACCOUNT` unset, financial account status
+!= active, and Stripe never invoking the webhook are kept as three
+separately-worded `ctx.skip()` branches inside the one test (plus a
+fourth, pre-existing catch-all for any other provisioning precondition),
+rather than three separate `it.skip`-style tests or a top-level gate like
+`reachable`'s. The whole point of D-33's SKIP posture is that a reader of
+`npm test`'s output can tell *which* precondition is missing without
+reading the test source -- collapsing these into one generic "could not
+provision a card" message (the pre-D-37 behavior) hid that the financial
+account was the actual blocker for anyone who hadn't just read this file.
+**Never fund or activate the account from code or CI to turn this
+green** -- that's a manual Stripe-side step for whoever owns this sandbox,
+and the whole design point of this SKIP is that a pending account reports
+as SKIPPED with its status, never as a false pass.
+
+Implemented in `apps/api/src/enforcement/stripe-issuing.ts`
+(`requireIssuingFinancialAccount`, `MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE`,
+`financialAccountStatusFromError`, `CardCreateParamsWithFinancialAccountV2`;
+`provisionCardForMandate` gained a required `cardholderPhone` param). New
+env var `STRIPE_ISSUING_FINANCIAL_ACCOUNT`, documented in `.env.example`.
+Bypass test updated in
+`apps/api/src/enforcement/stripe-issuing.bypass.test.ts` to branch on the
+two new SKIP reasons before falling through to the pre-existing generic
+one. `npm run typecheck` and the full `npm test` (399 passed, 1 skipped --
+now labeled "status \"pending\", not \"active\"" instead of the old
+generic message) both ran clean.
+
 ---
 
 # Open questions

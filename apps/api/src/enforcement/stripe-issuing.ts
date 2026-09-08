@@ -57,6 +57,47 @@ export interface ProvisionedCard {
   instrumentId: string;
 }
 
+/** stripe-node's shipped types don't know about `financial_account_v2` yet
+ * (D-37) -- this account's real API rejects the typed `financial_account`
+ * field outright (`parameter_unknown`). Cast past the stale typing rather
+ * than wait on an SDK update. */
+type CardCreateParamsWithFinancialAccountV2 = Stripe.Issuing.CardCreateParams & {
+  financial_account_v2: string;
+};
+
+export const MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE = "STRIPE_ISSUING_FINANCIAL_ACCOUNT is not set";
+
+/** Read at provisioning time, not import time, so a missing value fails only
+ * the one call that needs it (D-37). Fails loudly and specifically -- never
+ * a silent fallback to some other balance, since there is no other balance
+ * on this account to fall back to. */
+function requireIssuingFinancialAccount(): string {
+  const financialAccount = process.env.STRIPE_ISSUING_FINANCIAL_ACCOUNT;
+  if (!financialAccount) {
+    throw new Error(
+      `${MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE} -- Stripe Issuing card creation on this account requires ` +
+        "a v2 Money Management financial account id (D-37). Set it to an fa_... id; see .env.example.",
+    );
+  }
+  return financialAccount;
+}
+
+const FINANCIAL_ACCOUNT_STATUS_PATTERN = /because its status is (\w+)/;
+
+/**
+ * Extracts the FinancialAccount's status from Stripe's own card-creation
+ * error message ("...because its status is pending. Please try again with
+ * an open FinancialAccount."), so callers can report exactly what Stripe
+ * said rather than guessing. Returns null for any other error, including
+ * `requireIssuingFinancialAccount`'s own thrown error (that one fails
+ * before Stripe is ever called, so it can never carry a status).
+ */
+export function financialAccountStatusFromError(err: unknown): string | null {
+  const message = err instanceof Error ? err.message : String(err);
+  const match = message.match(FINANCIAL_ACCOUNT_STATUS_PATTERN);
+  return match?.[1] ?? null;
+}
+
 /**
  * Creates a Stripe Issuing cardholder and card whose spend authority *is*
  * the named mandate, and the Instrument row (D-35) that makes that spend
@@ -74,6 +115,16 @@ export interface ProvisionedCard {
  * for it, and this spike leaves them at Stripe's permissive default so every
  * decision genuinely comes from `evaluate()`, not from a control this file
  * quietly also enforced.
+ *
+ * D-37: this account has no legacy Issuing balance -- card creation requires
+ * a v2 Money Management financial account, read from
+ * `STRIPE_ISSUING_FINANCIAL_ACCOUNT` (see `requireIssuingFinancialAccount`),
+ * and Stripe's own field for it is `financial_account_v2`, not
+ * `financial_account` as stripe-node's shipped types still call it -- same
+ * lesson as D-36, checked directly against this account rather than assumed
+ * from the SDK's types. A financial account also needs a phone number on
+ * the cardholder before Stripe will attach a card to it at all (3DS), which
+ * this account's default path never required -- hence `cardholderPhone`.
  */
 export async function provisionCardForMandate(
   stripe: Stripe,
@@ -82,13 +133,17 @@ export async function provisionCardForMandate(
     organizationId: string;
     mandateId: string;
     cardholderName: string;
+    cardholderPhone: string;
     currency: Currency;
     billingAddress: Stripe.Issuing.CardholderCreateParams.Billing.Address;
   },
   now: Date,
 ): Promise<ProvisionedCard> {
+  const financialAccount = requireIssuingFinancialAccount();
+
   const cardholder = await stripe.issuing.cardholders.create({
     name: params.cardholderName,
+    phone_number: params.cardholderPhone,
     billing: { address: params.billingAddress },
     metadata: { waysafe_mandate_id: params.mandateId },
   });
@@ -97,8 +152,9 @@ export async function provisionCardForMandate(
     cardholder: cardholder.id,
     currency: params.currency.toLowerCase(),
     type: "virtual",
+    financial_account_v2: financialAccount,
     metadata: { waysafe_mandate_id: params.mandateId },
-  });
+  } as CardCreateParamsWithFinancialAccountV2);
 
   const instrument = await instruments.createInstrument(
     {

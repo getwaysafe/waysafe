@@ -133,11 +133,23 @@ real-Stripe-behavior fix (`D-36`: Stripe now attaches a charge's
 `balance_transaction` asynchronously, a few seconds after the PaymentIntent
 confirms, not synchronously as `StripeAdapter.execute()` assumed --
 `execute()` now polls briefly for the real fee instead of reporting a false
-`0`). The full suite is green: `npm test` has no failing tests as of `D-36`.
-The live bypass test's account in this environment hasn't completed
-Stripe's own Issuing setup, so it still self-reports SKIPPED rather than a
-live pass — that is expected, not a failure. `OQ-7` (per-unit limits vs.
-correcting the PRD's example) is the one open question left.
+`0`), and the provisioning-contract fix that followed from actually wiring
+a financial account in (`D-37`: Stripe Issuing on this account has no
+legacy balance — card creation requires a v2 Money Management financial
+account via `financial_account_v2`, not the `financial_account` field
+stripe-node's shipped types still name, read from the new
+`STRIPE_ISSUING_FINANCIAL_ACCOUNT` env var and required at provisioning
+time; the bypass test's SKIP now distinguishes a missing financial-account
+id, a financial account whose status isn't `"active"`, and Stripe never
+invoking the webhook, as three separately-labeled reasons instead of one
+generic message). The full suite is green: `npm test` has no failing tests
+as of `D-37`. This environment's financial account
+(`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
+`status: "pending"`, so the live bypass test self-reports SKIPPED with that
+status rather than a live pass — that is expected, not a failure, and
+nothing in this codebase funds or activates it automatically. `OQ-7`
+(per-unit limits vs. correcting the PRD's example) is the one open
+question left.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

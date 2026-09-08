@@ -49,7 +49,12 @@ import { InMemoryPrincipalRepository } from "../principals/in-memory-repository.
 import { InMemoryInstrumentRepository } from "../instruments/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "../webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "../webhooks/in-memory-repository.js";
-import { probeStripeIssuingKey, provisionCardForMandate } from "./stripe-issuing.js";
+import {
+  MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE,
+  financialAccountStatusFromError,
+  probeStripeIssuingKey,
+  provisionCardForMandate,
+} from "./stripe-issuing.js";
 import { requireStripeIssuingOrExplainSkip } from "./test-support/stripe-issuing-gate.js";
 
 const reachable = probeStripeIssuingKey();
@@ -161,6 +166,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
             organizationId: ORG,
             mandateId,
             cardholderName: "Waysafe Bypass Test",
+            cardholderPhone: "+15555550100",
             currency: "USD",
             billingAddress: {
               line1: "123 Market St",
@@ -173,17 +179,41 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
           new Date(),
         ));
       } catch (err) {
-        // A real, but separate, precondition from "is a webhook wired up":
-        // this Stripe test account itself may never have completed Issuing
-        // setup (e.g. no default Issuing balance/financial account
-        // provisioned), which a Cards-write-scoped restricted key can
-        // neither diagnose further nor fix. Not this codebase's bug --
-        // report SKIPPED rather than fail the suite over account
-        // provisioning this test cannot perform.
+        const message = err instanceof Error ? err.message : String(err);
+
+        // Reason 1 (D-37): the env var this suite (and real provisioning)
+        // depends on was never set -- fails before Stripe is ever called.
+        if (message.startsWith(MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE)) {
+          console.warn(`SKIPPED: ${message}`);
+          ctx.skip();
+          return;
+        }
+
+        // Reason 2 (D-37): the financial account exists but Stripe itself
+        // refuses to attach a card to it until its status is "active" --
+        // this suite deliberately does not fund or activate it, so a
+        // pending (or otherwise non-active) account is an expected SKIP,
+        // never a pass or a failure, and reports the exact status Stripe gave.
+        const status = financialAccountStatusFromError(err);
+        if (status) {
+          console.warn(
+            `SKIPPED: the v2 Money Management financial account (STRIPE_ISSUING_FINANCIAL_ACCOUNT) has ` +
+              `status "${status}", not "active" -- Stripe refuses to create a card against it until it is. ` +
+              `This suite does not fund or activate accounts; see ` +
+              `https://docs.stripe.com/api/v2/money-management/financial-accounts for how one reaches "active".`,
+          );
+          ctx.skip();
+          return;
+        }
+
+        // Any other provisioning precondition this test cannot diagnose or
+        // fix -- e.g. this Stripe test account never completed Issuing
+        // setup at all. Report SKIPPED rather than fail the suite over
+        // account provisioning this test cannot perform.
         console.warn(
-          `SKIPPED: could not provision a test Issuing card (${err instanceof Error ? err.message : String(err)}) -- ` +
-            `this Stripe test account may not have completed Issuing setup. See ` +
-            `https://stripe.com/docs/issuing/set-up-issuing for what an account needs before cards can be created.`,
+          `SKIPPED: could not provision a test Issuing card (${message}) -- this Stripe test account may not ` +
+            `have completed Issuing setup. See https://stripe.com/docs/issuing/set-up-issuing for what an ` +
+            `account needs before cards can be created.`,
         );
         ctx.skip();
         return;
