@@ -2323,6 +2323,65 @@ before this session), and `npm run build` all ran clean.
 
 ---
 
+## D-36 — `StripeAdapter.execute()` polls for the real provider fee: Stripe now attaches a charge's balance_transaction asynchronously
+
+**The diagnosis, not assumed -- checked directly against this account.**
+`stripe-adapter.test.ts`'s one failing assertion (`providerFee` was `0`, not
+`> 0`) was the same on `main` before D-33/D-34/D-35 touched anything
+nearby, so it predates all three. Ran the adapter's exact
+`paymentIntents.create` call directly (`node -e`, real
+`STRIPE_SECRET_KEY`, not a mock) and inspected the raw response:
+`paymentIntent.latest_charge.balance_transaction` is `null` immediately
+after the PaymentIntent confirms `succeeded` -- even with
+`expand: ["latest_charge.balance_transaction"]` requested on the create
+call itself, exactly what `extractFee()` was already reading. Polling the
+same PaymentIntent by id every 500ms showed the balance_transaction appear
+consistently around 3.4-3.9 seconds later (three separate runs, `fee: 175`/
+`271`/etc. -- real, correct test-mode fee values, ~2.9% + $0.30). **This is
+Stripe's behavior changing, not the adapter reading the wrong field:** the
+field (`balance_transaction.fee`) was always right; the assumption that
+it's populated synchronously at charge-confirmation time no longer holds.
+
+**Fixed the adapter, not the test's expectation -- the task's own framing:
+fix whichever one is actually wrong.** Weakening
+`expect(result.providerFee).toBeGreaterThan(0)` to accept `0` would have
+been the same class of defect this codebase's own testing posture exists to
+catch: D-13 says a receipt that can't show what a rail charged for itself
+isn't provable as neutral, so shipping `providerFee: 0` forever in
+production (not just in the test) would have been a real, silent
+regression, not a test artifact to shrug off. `execute()` now polls up to
+`FEE_POLL_ATTEMPTS` (10) times at `FEE_POLL_INTERVAL_MS` (500ms) -- up to 5
+extra seconds, comfortable margin above the ~3.9s observed worst case --
+before falling back to `0` only if the fee still hasn't attached. The test
+itself is otherwise unchanged (same assertion, still `toBeGreaterThan(0)`,
+never weakened); its real ~3.5s duration is now the visible evidence the
+polling path is what's making it pass, not that the fee happened to already
+be there, and a comment in the test says so.
+
+**Judgment call, recorded because nobody decided this trade-off before:**
+`POST /v1/authorizations/:id/execute` -- a synchronous, money-moving HTTP
+route -- now typically takes an extra several seconds whenever the fee
+isn't immediately available, which is effectively every real call. The
+alternative (return immediately with `providerFee: 0`, backfill it later
+via a new webhook-driven path once Stripe attaches it) would keep the route
+fast but requires new infrastructure this fix deliberately didn't build --
+out of scope for a one-file adapter fix, and not clearly better: it trades
+a bounded, visible latency cost for an unbounded window where every
+receipt's `providerFee` is wrong. Bounded polling was judged the smaller,
+more honest cost for this codebase's stated scope ("smallest credible
+implementation," not production-scale infrastructure) -- revisit if
+`execute()`'s latency ever actually matters to a caller.
+
+Implemented in `apps/api/src/payments/stripe-adapter.ts`
+(`resolveFee`, `FEE_POLL_ATTEMPTS`, `FEE_POLL_INTERVAL_MS`). Tested in
+`apps/api/src/payments/stripe-adapter.test.ts` (unchanged assertion, new
+comment recording the D-36 diagnosis and why the test's duration is now the
+proof). `npm run typecheck`, the full `npm test` (399 passed, 1 skipped --
+only the already-documented D-33 bypass SKIP, no failures at all now), and
+`npm run build` all ran clean.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

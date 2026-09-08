@@ -24,6 +24,15 @@ function uniqueId(prefix: string): string {
 
 describe.skipIf(!reachable)(SUITE_NAME, () => {
   it("executes a real test-mode PaymentIntent and reports a genuine provider fee", async () => {
+    // D-36: this genuinely takes a few seconds now, not milliseconds.
+    // Confirmed empirically against this account: Stripe creates a charge's
+    // balance_transaction asynchronously -- it's reliably null immediately
+    // after the PaymentIntent confirms `succeeded` (even with
+    // `expand: ["latest_charge.balance_transaction"]` on the create call
+    // itself) and appears ~3.5-4s later. The adapter (stripe-adapter.ts)
+    // polls for it rather than reporting a false 0; this test's real
+    // duration is the visible proof that polling is what's making it pass,
+    // not that the fee happened to already be there.
     const adapter = new StripeAdapter(process.env.STRIPE_SECRET_KEY!);
 
     const result = await adapter.execute({

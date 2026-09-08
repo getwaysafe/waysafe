@@ -128,11 +128,16 @@ actor on a rail-initiated authorization is a new `Instrument` entity, never
 an Agent and never null — card-rail spend now writes a real `RESERVATION`
 and counts against D-4's cumulative limits; `Authorization` gained
 `actorKind`/`instrumentId`, enforced by a DB CHECK constraint applied via
-the new `npm run db:constraints`, since `db push` can't express it). The
-live bypass test's account in this environment hasn't completed Stripe's own
-Issuing setup, so it currently self-reports SKIPPED rather than a live pass.
-`OQ-7` (per-unit limits vs. correcting the PRD's example) is the one open
-question left.
+the new `npm run db:constraints`, since `db push` can't express it), and a
+real-Stripe-behavior fix (`D-36`: Stripe now attaches a charge's
+`balance_transaction` asynchronously, a few seconds after the PaymentIntent
+confirms, not synchronously as `StripeAdapter.execute()` assumed --
+`execute()` now polls briefly for the real fee instead of reporting a false
+`0`). The full suite is green: `npm test` has no failing tests as of `D-36`.
+The live bypass test's account in this environment hasn't completed
+Stripe's own Issuing setup, so it still self-reports SKIPPED rather than a
+live pass — that is expected, not a failure. `OQ-7` (per-unit limits vs.
+correcting the PRD's example) is the one open question left.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
