@@ -66,6 +66,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
   );
   const { InMemoryEvidenceRepository } = await import("../apps/api/src/evidence/in-memory-repository.js");
   const { InMemoryPrincipalRepository } = await import("../apps/api/src/principals/in-memory-repository.js");
+  const { InMemoryInstrumentRepository } = await import("../apps/api/src/instruments/in-memory-repository.js");
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
@@ -89,6 +90,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),
+      instruments: new InMemoryInstrumentRepository(),
     },
     webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
     adapters: { demo_rail: new FakeAdapter({ providerFee: 25 }) },

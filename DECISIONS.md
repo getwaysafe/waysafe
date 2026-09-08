@@ -1992,7 +1992,10 @@ decline in a test genuinely came from `evaluate()`.
 
 **6. Card-rail approvals do not yet write a ledger entry -- D-4's cumulative
 limits do not yet see card spend. Recorded here deliberately, not shipped
-silently.** `AuthorizationRecord.agentId` (`packages/db/prisma/
+silently. Resolved by D-35: the actor on a rail-initiated authorization is
+the Instrument, never a null -- `saveAuthorization` is now called for every
+card-rail decision, and an ALLOW genuinely reserves budget.**
+`AuthorizationRecord.agentId` (`packages/db/prisma/
 schema.prisma`) is a mandatory foreign key to a real `Agent` row. A
 rail-initiated decision has no agent acting -- the card is the mandate's own
 spend authority -- so there is no honest value to put there; fabricating one
@@ -2170,6 +2173,153 @@ ran clean (388 passed, 1 skipped -- the D-33 live bypass test's own,
 unrelated, already-documented SKIP; one pre-existing, unrelated failure in
 `payments/stripe-adapter.test.ts` -- a real-Stripe-test-mode fee assertion --
 confirmed present on `main` before this change too, via `git stash`).
+
+---
+
+## D-35 — Card-rail spend counts against cumulative limits: the Instrument actor (closes D-33 point 6)
+
+**The decision.** The actor on a rail-initiated authorization is the
+Instrument, not an Agent, and never a null. D-33 point 6 left this
+unresolved because `Authorization.agentId` was a mandatory foreign key to a
+real `Agent` row and a rail-initiated decision has no agent acting -- rather
+than fabricate one (misattributing spend, the exact provenance-losing
+shortcut D-14 already forbids) or leave the column requirements unmet, this
+gives the domain model a real, honest answer: a new `Instrument` entity
+(D-32 item 3's "a card is provisioned per mandate" made into a first-class
+row, one per mandate for now) and an `actorKind` discriminator
+(`"agent" | "instrument"`) on `Authorization`, with `agentId` now nullable
+and a new nullable `instrumentId` alongside it.
+
+**Exactly one of agentId/instrumentId, matching actorKind -- enforced twice,
+at two different layers, deliberately.** Application-level: both
+`AuthorizationRepository` implementations call a shared
+`assertValidActor()` (`apps/api/src/authorization/actor.ts`, extracted
+rather than duplicated, the same call `util/mutex.ts` made for D-16) before
+ever writing a row. Database-level, the guarantee that actually matters:
+`packages/db/prisma/manual-constraints.sql`'s `authorizations_actor_kind_check`
+CHECK constraint, since the application-level guard is trivially bypassable
+by anything that writes to the table directly (a migration, a script, a bug
+in a future third repository implementation) and a security invariant
+that's only true because every caller happens to be well-behaved isn't
+actually true. Both are tested -- see below -- because either one alone
+would leave a real gap the other closes.
+
+**The schema DSL can't express that CHECK constraint, so `db push` and
+migration-application become two steps, not one -- a genuine change to this
+project's DB workflow, recorded because it wasn't one before.** This
+project has never used `prisma migrate` -- no `prisma/migrations` directory
+existed before this decision, `db push` was the only documented DB command
+(`CLAUDE.md`). Prisma's schema DSL has no way to declare a multi-column
+CHECK constraint at all, migrations or not -- so adopting `prisma migrate`
+wouldn't have solved this by itself either. The pragmatic, smallest-scope
+fix: `packages/db/prisma/manual-constraints.sql`, a small, idempotent
+(`DO $$ ... IF NOT EXISTS ...`) raw-SQL file applied by hand via a new
+`npm run db:constraints` (`prisma db execute --file ...`), documented in
+`CLAUDE.md`'s command list as a required step after every `db:push` that
+touches these columns. This is a workflow gap, not a one-time fix: any
+future constraint the schema DSL can't express joins this same file: This
+was applied against this session's real `DATABASE_URL` (`db:push` then
+`db:constraints`) and verified directly (`pg_constraint`) before any test
+ran against it.
+
+**`EnforcementAdapter.instrumentRef` (D-32) now means what its own doc
+comment always said it should.** `parseRequest` reads
+`waysafe_instrument_id` from the card's metadata (not `waysafe_mandate_id`,
+which D-32/D-33 had used as a stand-in before a real Instrument entity
+existed) and returns the Instrument's own id as `instrumentRef` --
+"the Waysafe-recognized reference for the spend instrument's authority" is
+now literally true, not a mandate id doing double duty. The handler resolves
+the mandate *from* the Instrument row (`instrument.mandate_id`), not from
+anything Stripe's metadata claims about it directly -- the DB row is the
+source of truth, the metadata field is the join key to find it.
+`provisionCardForMandate` creates the card first (carrying only
+`waysafe_mandate_id`, since the Instrument's id doesn't exist yet), creates
+the Instrument row referencing the card's id as `externalRef`, then updates
+the card's metadata to add `waysafe_instrument_id` -- the only field
+`parseRequest` reads on every subsequent authorization. Both ids are stamped
+on the card, per the task's own framing, but only one is load-bearing;
+`waysafe_mandate_id` is left for a human reading Stripe's dashboard, not
+trusted by any code path.
+
+**An ALLOW now writes a real `RESERVATION`, attributed to the instrument,
+inside the same `withMandateLock` that reads the spend snapshot -- D-4's
+row lock now genuinely serializes card-rail spend, not just agent-rail
+spend.** `handleIssuingAuthorizationRequest`'s gate check, `evaluate()` call,
+and `saveAuthorization` call all happen inside one lock acquisition per
+request, mirroring `authorize()`'s own structure exactly. A DENY, or a
+STEP_UP that fails closed (D-33 point 4 -- no channel for a human within
+Stripe's synchronous window), writes no ledger entry: nothing moved, nothing
+to reserve against. The persisted `status` collapses STEP_UP into `DENIED`
+for the same reason D-33 point 4 already established -- there is no
+`PENDING_STEP_UP` state possible on this rail -- while `decision`/`reasons`
+still carry the real outcome for an accurate receipt.
+
+**Capture arrives through the existing webhook path, not a new one.**
+`webhooks/service.ts` gains one branch for `issuing_authorization.updated`:
+when Stripe reports the authorization `closed` and `approved`, it looks the
+row up by the new `Authorization.externalRef` column (the Stripe issuing
+authorization id, stamped at decision time) and calls
+`recordExecution` -- the exact same repository method D-22's
+`execution/service.ts` already calls for a `PaymentAdapter`-executed
+authorization -- directly, the same way this file's existing refund branch
+already calls `recordRefund` directly rather than routing back through a
+service layer built for a different call shape. `ProviderEventRepository`'s
+existing `(provider, externalId)` idempotency (D-22) covers a redelivered
+capture event for free -- no new dedup mechanism needed, since it's the same
+`handleStripeWebhook` entry point every other Stripe event already goes
+through.
+
+**Receipts and the SDK expose `actor_kind`/`instrument_id` additively
+(D-11): `agent_id` is now nullable in both, nothing renamed, nothing
+removed.** The dashboard's existing receipt page renders `agent_id`
+unchanged (blank for an instrument-actor authorization, since React renders
+`null` as nothing) -- it does not yet show which instrument acted. Left as a
+cosmetic follow-up, not solved here: the task's scope was exposing the
+fields, not redesigning the receipt page's layout around a second actor
+shape.
+
+**Tests, at every layer the task named, plus the two the schema change
+itself demanded.** `apps/api/src/enforcement/stripe-issuing.test.ts`'s D-33
+"documented limitation" test -- the one that proved two $300 card
+authorizations both passed a $500/month cap -- is replaced with its
+opposite: two $300 authorizations against a raised per-transaction cap (so
+only the cumulative cap can be the reason) now show the second declined with
+`DENY_CUMULATIVE_LIMIT_EXCEEDED` and a matching evidence event.
+`apps/api/src/authorization/prisma-repository.test.ts` gained three cases
+against real Postgres: the D-4 race (two card authorizations, $450 + $60
+against a $500 cap, only one survives), its negative control
+(`disableLockForTesting`, both survive -- proving the positive test would
+actually catch a regression), and the CHECK constraint itself (all three
+invalid actor combinations rejected, using a real agent and a real
+instrument as the FK targets so the rejection can only be the CHECK
+constraint, never a dangling foreign key proving nothing).
+`apps/api/src/authorization/service.test.ts` gained the same actor-invariant
+coverage at the in-memory layer (`assertValidActor`, all three bad
+combinations plus one valid instrument-actor save). `webhooks/service.test.ts`
+gained the capture path: applies once, ignores a not-yet-closed
+authorization, and the same double-delivery-is-a-no-op proof every other
+event type in that file already has.
+
+Implemented in `packages/db/prisma/schema.prisma` (`Instrument`,
+`InstrumentStatus`, `ActorKind`, `Authorization.actorKind/instrumentId/externalRef`),
+`packages/db/prisma/manual-constraints.sql` (new), `packages/db/package.json`
+/ root `package.json` (`db:constraints`), `packages/core/src/domain.ts`
+(`ActorKind`, `InstrumentStatus`, `Instrument`, `ID_PREFIX.instrument`),
+`apps/api/src/instruments/` (new: `types.ts`, `in-memory-repository.ts`,
+`prisma-repository.ts`), `apps/api/src/authorization/actor.ts` (new,
+`assertValidActor`), `apps/api/src/authorization/types.ts`
+(`StoredAuthorization`/`SaveAuthorizationInput` actor fields,
+`findByExternalRef`), both `AuthorizationRepository` implementations,
+`apps/api/src/enforcement/stripe-issuing.ts` (`provisionCardForMandate`,
+`parseRequest`, `handleIssuingAuthorizationRequest` all rewritten),
+`apps/api/src/webhooks/service.ts` (`handleIssuingCapture`),
+`apps/api/src/server.ts` (`ServerRepos.instruments`), `apps/api/src/index.ts`
+(Prisma wiring), `packages/sdk/src/index.ts` (`AuthorizationDecision`
+additive fields), and `CLAUDE.md` (`db:constraints` command, status line).
+Tested as described above; `npm run typecheck`, the full `npm test` (398
+passed, 1 skipped -- the D-33 bypass test's own pre-existing SKIP; the one
+pre-existing, unrelated `stripe-adapter.test.ts` failure, unchanged from
+before this session), and `npm run build` all ran clean.
 
 ---
 

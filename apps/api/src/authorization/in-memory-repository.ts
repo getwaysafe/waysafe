@@ -46,6 +46,7 @@ import type {
   StoredAuthorization,
 } from "./types.js";
 import { Mutex } from "../util/mutex.js";
+import { assertValidActor } from "./actor.js";
 
 interface AgentRow {
   id: string;
@@ -312,6 +313,13 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return this.authorizations.get(id) ?? null;
   }
 
+  async findByExternalRef(externalRef: string): Promise<StoredAuthorization | null> {
+    for (const auth of this.authorizations.values()) {
+      if (auth.external_ref === externalRef) return auth;
+    }
+    return null;
+  }
+
   async withMandateLock<T>(mandateId: string, fn: () => Promise<T>): Promise<T> {
     let mutex = this.locks.get(mandateId);
     if (!mutex) {
@@ -322,6 +330,8 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
   }
 
   async saveAuthorization(input: SaveAuthorizationInput): Promise<StoredAuthorization> {
+    assertValidActor(input);
+
     if (input.idempotencyKey) {
       const existing = this.idempotencyIndex.get(`${input.organizationId}:${input.idempotencyKey}`);
       if (existing) {
@@ -358,7 +368,9 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       id: input.id,
       organizationId: input.organizationId,
       organization_id: input.organizationId,
+      actor_kind: input.actorKind,
       agent_id: input.agentId,
+      instrument_id: input.instrumentId,
       principal_id: input.principalId,
       mandate_id: input.mandateId,
       mandate_version_id: input.mandateVersionId,
@@ -370,6 +382,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       merchant: input.merchant,
       idempotency_key: input.idempotencyKey,
       request_hash: input.requestHash,
+      external_ref: input.externalRef ?? null,
       step_up_expires_at: input.stepUpExpiresAt?.toISOString() ?? null,
       created_at: input.now.toISOString(),
       decided_at: input.now.toISOString(),

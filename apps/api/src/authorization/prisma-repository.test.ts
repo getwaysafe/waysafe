@@ -23,6 +23,7 @@
  */
 
 import { PrismaClient, type Prisma } from "@prisma/client";
+import type Stripe from "stripe";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   Decision,
@@ -40,6 +41,8 @@ import {
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
+import { PrismaInstrumentRepository } from "../instruments/prisma-repository.js";
+import { handleIssuingAuthorizationRequest, StripeIssuingAdapter } from "../enforcement/stripe-issuing.js";
 import { PrismaAuthorizationRepository } from "./prisma-repository.js";
 import { authorize, sweepExpiredStepUps, type AuthorizeRepos } from "./service.js";
 
@@ -147,6 +150,98 @@ async function seedMandate(policy: Policy, options: SeedOptions = {}) {
     policyHash,
     apiKey: key.fullKey,
   };
+}
+
+/**
+ * D-35: a mandate with an Instrument row instead of a bound agent -- the
+ * card *is* the mandate's spend authority (D-32 item 3), so this seeds
+ * exactly what a rail-initiated authorization needs and nothing an
+ * agent-actor path would (no ApiKey, no MandateAgent binding).
+ */
+async function seedInstrumentMandate(policy: Policy, options: SeedOptions = {}) {
+  const organizationId = generateId(ID_PREFIX.organization);
+  const principalId = generateId(ID_PREFIX.principal);
+  const mandateId = generateId(ID_PREFIX.mandate);
+  const mandateVersionId = generateId(ID_PREFIX.mandate_version);
+  const policyHash = "test-hash";
+  createdOrgIds.push(organizationId);
+
+  await prisma.organization.create({ data: { id: organizationId, name: "Test Org (instrument)" } });
+  await prisma.principal.create({
+    data: { id: principalId, organizationId, displayName: "Test Principal" },
+  });
+  await prisma.mandate.create({
+    data: { id: mandateId, organizationId, principalId, status: options.status ?? "ACTIVE" },
+  });
+  await prisma.mandateVersion.create({
+    data: {
+      id: mandateVersionId,
+      mandateId,
+      version: 1,
+      intentText: "test",
+      policy: policy as unknown as Prisma.InputJsonValue,
+      policyHash,
+      compilerName: "test",
+      assumptions: [],
+      authenticatedAt: options.authenticatedAt === undefined ? new Date() : options.authenticatedAt,
+    },
+  });
+  await prisma.mandate.update({
+    where: { id: mandateId },
+    data: { currentVersionId: mandateVersionId },
+  });
+
+  const instrument = await prisma.instrument.create({
+    data: {
+      id: generateId(ID_PREFIX.instrument),
+      organizationId,
+      mandateId,
+      rail: "stripe_issuing",
+      externalRef: `ic_test_${mandateId}`,
+    },
+  });
+
+  return { organizationId, principalId, mandateId, mandateVersionId, policyHash, instrumentId: instrument.id };
+}
+
+/** A recorded issuing_authorization.request payload's `data.object`, trimmed
+ * to the fields `handleIssuingAuthorizationRequest` actually reads. */
+function issuingAuthorization(params: {
+  instrumentId: string;
+  amount: number;
+  networkId: string;
+  authorizationId: string;
+}): Stripe.Issuing.Authorization {
+  return {
+    id: params.authorizationId,
+    object: "issuing.authorization",
+    amount: params.amount,
+    approved: false,
+    currency: "usd",
+    merchant_data: {
+      category: "office_supplies",
+      category_code: "5943",
+      name: "Staples",
+      network_id: params.networkId,
+      city: null,
+      country: null,
+      postal_code: null,
+      state: null,
+      tax_id: null,
+      terminal_id: null,
+      url: null,
+    },
+    card: { id: `ic_test_${params.instrumentId}`, metadata: { waysafe_instrument_id: params.instrumentId } },
+    pending_request: {
+      amount: params.amount,
+      amount_details: null,
+      currency: "usd",
+      is_amount_controllable: false,
+      merchant_amount: params.amount,
+      merchant_currency: "usd",
+      network_risk_score: null,
+    },
+  } as unknown as Stripe.Issuing.Authorization;
 }
 
 function request(organizationId: string, agentId: string, principalId: string, amount: number) {
@@ -380,4 +475,171 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     });
     expect(ledgerNet._sum.amount).toBe(0);
   }, 30_000);
+
+  it(
+    "D-35: serializes two racing CARD (instrument-actor) authorizations on the same mandate row lock, " +
+      "same as it already does for agent-actor ones",
+    async () => {
+      const NETWORK_MID = "visa_network_id_d35_race";
+      const { organizationId, instrumentId } = await seedInstrumentMandate(
+        policyFrom({
+          merchants: { allow: [{ scheme: "network_mid", value: NETWORK_MID }], deny: [], unlisted: "STEP_UP" },
+        }),
+      );
+      const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+      const instruments = new PrismaInstrumentRepository(prisma);
+      const adapter = new StripeIssuingAdapter();
+
+      // $450 and $60 each pass alone against a fresh $500 monthly cap, but
+      // together they're $510 -- over the limit. Same scenario the
+      // agent-actor test above proves, now for the actor D-35 added.
+      const [a, b] = await Promise.all([
+        handleIssuingAuthorizationRequest(
+          { authorization: repo, evidence, instruments },
+          adapter,
+          issuingAuthorization({
+            instrumentId,
+            amount: toMinorUnits(450, "USD"),
+            networkId: NETWORK_MID,
+            authorizationId: "iauth_d35_race_a",
+          }),
+          NOW,
+        ),
+        handleIssuingAuthorizationRequest(
+          { authorization: repo, evidence, instruments },
+          adapter,
+          issuingAuthorization({
+            instrumentId,
+            amount: toMinorUnits(60, "USD"),
+            networkId: NETWORK_MID,
+            authorizationId: "iauth_d35_race_b",
+          }),
+          NOW,
+        ),
+      ]);
+
+      const approvals = [a, b].filter((r) => r.response.approved);
+      expect(approvals).toHaveLength(1);
+
+      const authorizations = await repo.listAuthorizations(organizationId, 10);
+      expect(authorizations.every((auth) => auth.actor_kind === "instrument")).toBe(true);
+      expect(authorizations.every((auth) => auth.agent_id === null)).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    "D-35 negative control: WITHOUT the row lock, both racing card authorizations land ALLOW -- " +
+      "the same bug D-4 exists to prevent, now proven for the instrument actor too",
+    async () => {
+      const NETWORK_MID = "visa_network_id_d35_negative";
+      const { instrumentId } = await seedInstrumentMandate(
+        policyFrom({
+          merchants: { allow: [{ scheme: "network_mid", value: NETWORK_MID }], deny: [], unlisted: "STEP_UP" },
+        }),
+      );
+      const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY, { disableLockForTesting: true });
+      const instruments = new PrismaInstrumentRepository(prisma);
+      const adapter = new StripeIssuingAdapter();
+
+      const [a, b] = await Promise.all([
+        handleIssuingAuthorizationRequest(
+          { authorization: repo, evidence, instruments },
+          adapter,
+          issuingAuthorization({
+            instrumentId,
+            amount: toMinorUnits(450, "USD"),
+            networkId: NETWORK_MID,
+            authorizationId: "iauth_d35_neg_a",
+          }),
+          NOW,
+        ),
+        handleIssuingAuthorizationRequest(
+          { authorization: repo, evidence, instruments },
+          adapter,
+          issuingAuthorization({
+            instrumentId,
+            amount: toMinorUnits(60, "USD"),
+            networkId: NETWORK_MID,
+            authorizationId: "iauth_d35_neg_b",
+          }),
+          NOW,
+        ),
+      ]);
+
+      // Both read the same $0 starting balance before either commits, so
+      // both pass the $500 cap independently -- $510 total gets through.
+      expect([a, b].filter((r) => r.response.approved)).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("THE ATTACK: an authorization can never be saved with both or neither actor set -- the DB rejects it", async () => {
+    // Both a real agent and a real instrument exist for this mandate, so
+    // every case below fails ONLY on the CHECK constraint -- never on a
+    // dangling foreign key, which would prove nothing about the constraint
+    // this test exists to check.
+    const { organizationId, principalId, mandateId, mandateVersionId, policyHash, agentId } =
+      await seedMandate(policyFrom());
+    const instrument = await prisma.instrument.create({
+      data: {
+        id: generateId(ID_PREFIX.instrument),
+        organizationId,
+        mandateId,
+        rail: "stripe_issuing",
+        externalRef: "ic_test_actor_invariant",
+      },
+    });
+
+    const base = {
+      organizationId,
+      principalId,
+      mandateId,
+      mandateVersionId,
+      policyHash,
+      decision: "ALLOW" as const,
+      status: "AUTHORIZED" as const,
+      reasonCodes: ["ALLOW_WITHIN_MANDATE"],
+      reasons: [{ code: "ALLOW_WITHIN_MANDATE", message: "ok" }] as unknown as Prisma.InputJsonValue,
+      action: { amount: 100, currency: "USD", merchant: {}, attestations: {} } as unknown as Prisma.InputJsonValue,
+      amount: 100,
+      currency: "USD",
+      merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" } as unknown as Prisma.InputJsonValue,
+      createdAt: NOW,
+      decidedAt: NOW,
+    };
+
+    async function expectConstraintViolation(data: Prisma.AuthorizationUncheckedCreateInput) {
+      const error = await prisma.authorization.create({ data }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("authorizations_actor_kind_check");
+    }
+
+    // Neither agentId nor instrumentId set, actorKind claims "agent".
+    await expectConstraintViolation({
+      id: generateId(ID_PREFIX.authorization),
+      actorKind: "agent",
+      agentId: null,
+      instrumentId: null,
+      ...base,
+    });
+
+    // Both set at once, actorKind claims "instrument".
+    await expectConstraintViolation({
+      id: generateId(ID_PREFIX.authorization),
+      actorKind: "instrument",
+      agentId,
+      instrumentId: instrument.id,
+      ...base,
+    });
+
+    // actorKind says "agent" but only instrumentId is set.
+    await expectConstraintViolation({
+      id: generateId(ID_PREFIX.authorization),
+      actorKind: "agent",
+      agentId: null,
+      instrumentId: instrument.id,
+      ...base,
+    });
+  });
 });

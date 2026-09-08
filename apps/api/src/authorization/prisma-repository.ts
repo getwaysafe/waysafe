@@ -25,6 +25,7 @@ import {
   merchantRefKey,
   windowKeys,
   type Accounting,
+  type ActorKind,
   type AuthorizationStatus,
   type Decision,
   type MerchantDirectory,
@@ -52,6 +53,7 @@ import type {
   SaveAuthorizationInput,
   StoredAuthorization,
 } from "./types.js";
+import { assertValidActor } from "./actor.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -252,6 +254,11 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return row ? toStoredAuthorization(row) : null;
   }
 
+  async findByExternalRef(externalRef: string): Promise<StoredAuthorization | null> {
+    const row = await this.client.authorization.findFirst({ where: { externalRef } });
+    return row ? toStoredAuthorization(row) : null;
+  }
+
   async withMandateLock<T>(mandateId: string, fn: () => Promise<T>): Promise<T> {
     return this.prisma.$transaction(async (tx) => {
       if (!this.disableLockForTesting) {
@@ -262,6 +269,8 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
   }
 
   async saveAuthorization(input: SaveAuthorizationInput): Promise<StoredAuthorization> {
+    assertValidActor(input);
+
     const client = this.client;
     const timezone = await this.timezoneFor(input.mandateId);
     const keys = windowKeys(input.now, timezone);
@@ -271,7 +280,9 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
         data: {
           id: input.id,
           organizationId: input.organizationId,
+          actorKind: input.actorKind,
           agentId: input.agentId,
+          instrumentId: input.instrumentId,
           principalId: input.principalId,
           mandateId: input.mandateId,
           mandateVersionId: input.mandateVersionId,
@@ -286,6 +297,7 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
           merchant: input.merchant as unknown as Prisma.InputJsonValue,
           idempotencyKey: input.idempotencyKey,
           requestHash: input.requestHash,
+          externalRef: input.externalRef ?? null,
           stepUpExpiresAt: input.stepUpExpiresAt,
           createdAt: input.now,
           decidedAt: input.now,
@@ -653,7 +665,9 @@ function reason(code: ReasonCode, message: string): Reason {
 interface AuthorizationRow {
   id: string;
   organizationId: string;
-  agentId: string;
+  actorKind: string;
+  agentId: string | null;
+  instrumentId: string | null;
   principalId: string;
   mandateId: string;
   mandateVersionId: string;
@@ -665,6 +679,7 @@ interface AuthorizationRow {
   merchant: Prisma.JsonValue;
   idempotencyKey: string | null;
   requestHash: string | null;
+  externalRef: string | null;
   stepUpExpiresAt: Date | null;
   createdAt: Date;
   decidedAt: Date;
@@ -674,7 +689,9 @@ function toStoredAuthorization(row: AuthorizationRow): StoredAuthorization {
   return {
     id: row.id,
     organization_id: row.organizationId,
+    actor_kind: row.actorKind as ActorKind,
     agent_id: row.agentId,
+    instrument_id: row.instrumentId,
     principal_id: row.principalId,
     mandate_id: row.mandateId,
     mandate_version_id: row.mandateVersionId,
@@ -686,6 +703,7 @@ function toStoredAuthorization(row: AuthorizationRow): StoredAuthorization {
     merchant: row.merchant as unknown as ResolvedMerchant,
     idempotency_key: row.idempotencyKey,
     request_hash: row.requestHash,
+    external_ref: row.externalRef,
     step_up_expires_at: row.stepUpExpiresAt ? row.stepUpExpiresAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
     decided_at: row.decidedAt.toISOString(),

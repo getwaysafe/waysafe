@@ -1,5 +1,5 @@
 /**
- * D-32/D-33: runs entirely offline, against recorded issuing_authorization.
+ * D-32/D-33/D-35: runs entirely offline, against recorded issuing_authorization.
  * request-shaped payloads -- no STRIPE_ISSUING_SECRET_KEY required, same
  * spirit as the compiler's FixtureIntentCompiler tests (D-12). The live
  * bypass test that proves the same enforcement against a genuine Stripe
@@ -24,6 +24,7 @@ import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.j
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
 import { InMemoryPrincipalRepository } from "../principals/in-memory-repository.js";
+import { InMemoryInstrumentRepository } from "../instruments/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "../webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "../webhooks/in-memory-repository.js";
 import { handleIssuingAuthorizationRequest, StripeIssuingAdapter } from "./stripe-issuing.js";
@@ -61,7 +62,7 @@ function policyFrom(overrides: Record<string, unknown> = {}): Policy {
  * many more fields; nothing here depends on any of them. */
 function buildAuthorization(
   overrides: {
-    mandateId?: string | null;
+    instrumentId?: string | null;
     amount?: number;
     pendingAmount?: number;
     currency?: string;
@@ -97,9 +98,9 @@ function buildAuthorization(
     card: {
       id: cardId,
       metadata:
-        overrides.mandateId === null
+        overrides.instrumentId === null
           ? {}
-          : { waysafe_mandate_id: overrides.mandateId ?? "mdt_placeholder" },
+          : { waysafe_instrument_id: overrides.instrumentId ?? "inst_placeholder" },
     } as Stripe.Issuing.Card,
     pending_request: {
       amount: overrides.pendingAmount ?? overrides.amount ?? toMinorUnits(60, "USD"),
@@ -113,9 +114,10 @@ function buildAuthorization(
   } as unknown as Stripe.Issuing.Authorization;
 }
 
-function setup() {
+async function setup() {
   const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
   const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const instruments = new InMemoryInstrumentRepository();
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
     principalId: PRINCIPAL,
@@ -123,27 +125,33 @@ function setup() {
     policy: policyFrom(),
     policyHash: "hash",
   });
-  return { authorization, evidence, mandateId };
+  const instrument = await instruments.createInstrument(
+    { organizationId: ORG, mandateId, rail: "stripe_issuing", externalRef: "ic_test_card_1" },
+    NOW,
+  );
+  return { authorization, evidence, instruments, mandateId, instrumentId: instrument.id };
 }
 
 describe("StripeIssuingAdapter.parseRequest", () => {
   const adapter = new StripeIssuingAdapter();
 
   it("maps network_id and category_code, never merchant_data.name (D-3)", () => {
-    const parsed = adapter.parseRequest(buildAuthorization({ mandateId: "mdt_x", merchantName: "Staples" }));
+    const parsed = adapter.parseRequest(
+      buildAuthorization({ instrumentId: "inst_x", merchantName: "Staples" }),
+    );
     expect(parsed).not.toBeNull();
     expect(parsed!.action.merchant).toEqual({ network_mid: NETWORK_MID, mcc: "5943" });
     expect(parsed!.action.merchant).not.toHaveProperty("name");
   });
 
-  it("returns null when the card carries no Waysafe mandate reference", () => {
-    const parsed = adapter.parseRequest(buildAuthorization({ mandateId: null }));
+  it("returns null when the card carries no Waysafe instrument reference", () => {
+    const parsed = adapter.parseRequest(buildAuthorization({ instrumentId: null }));
     expect(parsed).toBeNull();
   });
 
   it("prefers pending_request.amount over the top-level (pre-decision) amount", () => {
     const parsed = adapter.parseRequest(
-      buildAuthorization({ mandateId: "mdt_x", amount: 0, pendingAmount: toMinorUnits(42, "USD") }),
+      buildAuthorization({ instrumentId: "inst_x", amount: 0, pendingAmount: toMinorUnits(42, "USD") }),
     );
     expect(parsed!.action.amount).toBe(toMinorUnits(42, "USD"));
   });
@@ -151,7 +159,7 @@ describe("StripeIssuingAdapter.parseRequest", () => {
 
 describe("StripeIssuingAdapter.toResponse", () => {
   const adapter = new StripeIssuingAdapter();
-  const authorization = buildAuthorization({ mandateId: "mdt_x" });
+  const authorization = buildAuthorization({ instrumentId: "inst_x" });
 
   it("approves only ALLOW", () => {
     const response = adapter.toResponse(
@@ -189,11 +197,11 @@ describe("handleIssuingAuthorizationRequest", () => {
     "D-34: approves a network_mid the policy allowlists, within its limits -- rail-attested, " +
       "so unlike the same value arriving via authorize() (service.test.ts), this one genuinely verifies",
     async () => {
-      const { authorization, evidence, mandateId } = setup();
+      const { authorization, evidence, instruments, instrumentId } = await setup();
       const decision = await handleIssuingAuthorizationRequest(
-        { authorization, evidence },
+        { authorization, evidence, instruments },
         adapter,
-        buildAuthorization({ mandateId, amount: toMinorUnits(60, "USD") }),
+        buildAuthorization({ instrumentId, amount: toMinorUnits(60, "USD") }),
         NOW,
       );
 
@@ -203,17 +211,26 @@ describe("handleIssuingAuthorizationRequest", () => {
       const events = await evidence.listForOrganization(ORG);
       const event = events.find((e) => e.type === "enforcement.stripe_issuing.decision");
       expect(event).toBeDefined();
-      expect(event!.subject_id).toBe(mandateId);
+      expect((event!.payload as { instrument_id: string }).instrument_id).toBe(instrumentId);
       expect((event!.payload as { decision: string }).decision).toBe("ALLOW");
+
+      // D-35: this is the whole point -- the ALLOW actually reserved budget.
+      const [auth] = await authorization.listAuthorizations(ORG, 10);
+      expect(auth!.actor_kind).toBe("instrument");
+      expect(auth!.instrument_id).toBe(instrumentId);
+      expect(auth!.agent_id).toBeNull();
+      expect(authorization.ledgerEntriesFor(decision.mandateId!)).toEqual([
+        expect.objectContaining({ type: "RESERVATION", amount: toMinorUnits(60, "USD") }),
+      ]);
     },
   );
 
   it("declines a merchant the policy does not allowlist, and records why in evidence", async () => {
-    const { authorization, evidence, mandateId } = setup();
+    const { authorization, evidence, instruments, instrumentId } = await setup();
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
-      buildAuthorization({ mandateId, networkId: "some_other_network_id" }),
+      buildAuthorization({ instrumentId, networkId: "some_other_network_id" }),
       NOW,
     );
 
@@ -225,15 +242,17 @@ describe("handleIssuingAuthorizationRequest", () => {
     expect((event!.payload as { reason_codes: string[] }).reason_codes).toContain(
       ReasonCode.STEP_UP_MERCHANT_NOT_ALLOWLISTED,
     );
+    // No ledger effect from a decline (D-35 item 4).
+    expect(authorization.ledgerEntriesFor(decision.mandateId!)).toEqual([]);
   });
 
   it("THE ATTACK: a merchant_data.name claiming the allowlisted brand does not launder a mismatched network_id", async () => {
-    const { authorization, evidence, mandateId } = setup();
+    const { authorization, evidence, instruments, instrumentId } = await setup();
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
       buildAuthorization({
-        mandateId,
+        instrumentId,
         networkId: "attacker_controlled_network_id",
         merchantName: "Staples (network)", // matches the allowlist label, not its value
       }),
@@ -244,11 +263,11 @@ describe("handleIssuingAuthorizationRequest", () => {
   });
 
   it("enforces the per-transaction limit", async () => {
-    const { authorization, evidence, mandateId } = setup();
+    const { authorization, evidence, instruments, instrumentId } = await setup();
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
-      buildAuthorization({ mandateId, amount: toMinorUnits(300, "USD") }),
+      buildAuthorization({ instrumentId, amount: toMinorUnits(300, "USD") }),
       NOW,
     );
 
@@ -256,12 +275,71 @@ describe("handleIssuingAuthorizationRequest", () => {
     expect(decision.response.reason_codes).toContain(ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED);
   });
 
-  it("declines when the card carries no mandate reference at all, with no evidence to attach it to", async () => {
-    const { authorization, evidence } = setup();
+  it(
+    "D-35 (closes D-33 point 6): two card authorizations that individually pass the per-transaction " +
+      "cap but together exceed the monthly cumulative cap -- the second is declined, not both approved",
+    async () => {
+      const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+      const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+      const instruments = new InMemoryInstrumentRepository();
+      // A per-transaction cap high enough that $300 individually always
+      // passes -- the $500/month cumulative cap is the only thing that can
+      // decline the second of two $300 charges.
+      const { mandateId } = authorization.seedMandate({
+        organizationId: ORG,
+        principalId: PRINCIPAL,
+        agentId: AGENT,
+        policy: policyFrom({ per_transaction_max: toMinorUnits(400, "USD") }),
+        policyHash: "hash",
+      });
+      const instrument = await instruments.createInstrument(
+        { organizationId: ORG, mandateId, rail: "stripe_issuing", externalRef: "ic_test_card_2" },
+        NOW,
+      );
+
+      const first = await handleIssuingAuthorizationRequest(
+        { authorization, evidence, instruments },
+        adapter,
+        buildAuthorization({
+          instrumentId: instrument.id,
+          amount: toMinorUnits(300, "USD"),
+          authorizationId: "iauth_a",
+        }),
+        NOW,
+      );
+      const second = await handleIssuingAuthorizationRequest(
+        { authorization, evidence, instruments },
+        adapter,
+        buildAuthorization({
+          instrumentId: instrument.id,
+          amount: toMinorUnits(300, "USD"),
+          authorizationId: "iauth_b",
+        }),
+        new Date(NOW.getTime() + 1000),
+      );
+
+      expect(first.response.approved).toBe(true);
+      expect(second.response.approved).toBe(false);
+      expect(second.response.reason_codes).toContain(ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED);
+
+      const events = await evidence.listForOrganization(ORG);
+      const declineEvent = events.find(
+        (e) =>
+          e.type === "enforcement.stripe_issuing.decision" &&
+          (e.payload as { reason_codes: string[] }).reason_codes.includes(
+            ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED,
+          ),
+      );
+      expect(declineEvent).toBeDefined();
+    },
+  );
+
+  it("declines when the card carries no instrument reference at all, with no evidence to attach it to", async () => {
+    const { authorization, evidence, instruments } = await setup();
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
-      buildAuthorization({ mandateId: null }),
+      buildAuthorization({ instrumentId: null }),
       NOW,
     );
 
@@ -270,17 +348,18 @@ describe("handleIssuingAuthorizationRequest", () => {
     expect(await evidence.listForOrganization(ORG)).toHaveLength(0);
   });
 
-  it("declines when the mandate id on the card matches nothing Waysafe knows about", async () => {
-    const { authorization, evidence } = setup();
+  it("declines when the instrument id on the card matches nothing Waysafe knows about", async () => {
+    const { authorization, evidence, instruments } = await setup();
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
-      buildAuthorization({ mandateId: "mdt_does_not_exist" }),
+      buildAuthorization({ instrumentId: "inst_does_not_exist" }),
       NOW,
     );
 
     expect(decision.response.approved).toBe(false);
     expect(decision.response.reason_codes).toEqual([ReasonCode.DENY_NO_ACTIVE_MANDATE]);
+    expect(await evidence.listForOrganization(ORG)).toHaveLength(0);
   });
 
   it.each([
@@ -291,6 +370,7 @@ describe("handleIssuingAuthorizationRequest", () => {
   ])("declines a %s mandate with %s, and records it in evidence", async (status, expectedCode) => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
     const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,
       principalId: PRINCIPAL,
@@ -299,11 +379,15 @@ describe("handleIssuingAuthorizationRequest", () => {
       policyHash: "hash",
       status,
     });
+    const instrument = await instruments.createInstrument(
+      { organizationId: ORG, mandateId, rail: "stripe_issuing", externalRef: "ic_test_card_x" },
+      NOW,
+    );
 
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization, evidence },
+      { authorization, evidence, instruments },
       adapter,
-      buildAuthorization({ mandateId }),
+      buildAuthorization({ instrumentId: instrument.id }),
       NOW,
     );
 
@@ -312,37 +396,6 @@ describe("handleIssuingAuthorizationRequest", () => {
     const events = await evidence.listForOrganization(ORG);
     expect((events[0]!.payload as { reason_codes: string[] }).reason_codes).toEqual([expectedCode]);
   });
-
-  it(
-    "D-33 (documented limitation): approved card spend is not yet reserved against the ledger, " +
-      "so a cumulative cap does not yet see repeated card authorizations",
-    async () => {
-      const { authorization, evidence, mandateId } = setup();
-      // Two authorizations of $300 each, both individually within the
-      // $150-per-transaction... no -- each *individually* under the $500
-      // monthly cap, but together ($600) over it. If ledger reservation
-      // were wired up, the second would DENY_CUMULATIVE_LIMIT_EXCEEDED.
-      const first = await handleIssuingAuthorizationRequest(
-        { authorization, evidence },
-        adapter,
-        buildAuthorization({ mandateId, amount: toMinorUnits(120, "USD") }),
-        NOW,
-      );
-      const second = await handleIssuingAuthorizationRequest(
-        { authorization, evidence },
-        adapter,
-        buildAuthorization({ mandateId, amount: toMinorUnits(120, "USD") }),
-        new Date(NOW.getTime() + 1000),
-      );
-
-      // Both approved -- neither exceeds the $150 per-transaction cap, and
-      // the $500/month cumulative cap never saw either one land in the
-      // ledger. This is the known gap D-33 records, proven here rather than
-      // silently assumed away.
-      expect(first.response.approved).toBe(true);
-      expect(second.response.approved).toBe(true);
-    },
-  );
 });
 
 describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", () => {
@@ -350,10 +403,11 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
   const stripeForSigning = new Stripe("sk_test_unused_for_signing");
   let app: ReturnType<typeof buildServer>;
   let repos: ServerRepos;
-  let mandateId: string;
+  let instrumentId: string;
 
   beforeAll(async () => {
     const authorizationRepo = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+    const instruments = new InMemoryInstrumentRepository();
     repos = {
       authorization: authorizationRepo,
       agentKeys: new InMemoryAgentKeyRepository(),
@@ -361,14 +415,20 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),
+      instruments,
     };
-    ({ mandateId } = authorizationRepo.seedMandate({
+    const { mandateId } = authorizationRepo.seedMandate({
       organizationId: ORG,
       principalId: PRINCIPAL,
       agentId: AGENT,
       policy: policyFrom(),
       policyHash: "hash",
-    }));
+    });
+    const instrument = await instruments.createInstrument(
+      { organizationId: ORG, mandateId, rail: "stripe_issuing", externalRef: "ic_test_card_route" },
+      NOW,
+    );
+    instrumentId = instrument.id;
 
     app = buildServer({
       logger: false,
@@ -388,7 +448,7 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
   }
 
   it("does not require a Bearer credential, and responds with a Stripe-Version header", async () => {
-    const payload = eventPayload(buildAuthorization({ mandateId, amount: toMinorUnits(60, "USD") }));
+    const payload = eventPayload(buildAuthorization({ instrumentId, amount: toMinorUnits(60, "USD") }));
     const signature = stripeForSigning.webhooks.generateTestHeaderString({
       payload,
       secret: ISSUING_WEBHOOK_SECRET,
@@ -407,7 +467,7 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
   });
 
   it("THE ATTACK: a forged signature is rejected outright, fails closed with no decision made", async () => {
-    const payload = eventPayload(buildAuthorization({ mandateId }));
+    const payload = eventPayload(buildAuthorization({ instrumentId }));
 
     const response = await app.inject({
       method: "POST",
@@ -420,7 +480,7 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
   });
 
   it("rejects a request with no signature at all", async () => {
-    const payload = eventPayload(buildAuthorization({ mandateId }));
+    const payload = eventPayload(buildAuthorization({ instrumentId }));
     const response = await app.inject({
       method: "POST",
       url: "/v1/enforcement/stripe-issuing",
@@ -435,7 +495,7 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
       id: `evt_${Date.now()}`,
       object: "event",
       type: "issuing_authorization.created",
-      data: { object: buildAuthorization({ mandateId }) },
+      data: { object: buildAuthorization({ instrumentId }) },
     });
     const signature = stripeForSigning.webhooks.generateTestHeaderString({
       payload,

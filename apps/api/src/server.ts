@@ -26,6 +26,8 @@ import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js
 import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
 import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.js";
 import type { PrincipalRecord, PrincipalRepository } from "./principals/types.js";
+import { InMemoryInstrumentRepository } from "./instruments/in-memory-repository.js";
+import type { InstrumentRepository } from "./instruments/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import type {
@@ -120,6 +122,7 @@ export interface ServerRepos {
   webauthn: WebauthnRepository;
   providerEvents: ProviderEventRepository;
   principals: PrincipalRepository;
+  instruments: InstrumentRepository;
 }
 
 export interface BuildServerOptions {
@@ -188,7 +191,12 @@ function toReceiptJSON(auth: StoredAuthorization) {
   return {
     id: auth.id,
     organization_id: auth.organization_id,
+    // D-35: additive (D-11) -- who acted. agent_id/instrument_id are
+    // unchanged in shape (still whichever one was already there for an
+    // agent-actor authorization); actor_kind and instrument_id are new.
+    actor_kind: auth.actor_kind,
     agent_id: auth.agent_id,
+    instrument_id: auth.instrument_id,
     principal_id: auth.principal_id,
     mandate_id: auth.mandate_id,
     mandate_version_id: auth.mandate_version_id,
@@ -330,6 +338,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
     principals: new InMemoryPrincipalRepository(),
+    instruments: new InMemoryInstrumentRepository(),
   };
 
   const webauthnConfig: WebauthnConfig = options.webauthnConfig ?? {
@@ -840,7 +849,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     const authorization = event.data.object as Stripe.Issuing.Authorization;
     const decision = await handleIssuingAuthorizationRequest(
-      { authorization: repos.authorization, evidence: repos.evidence },
+      { authorization: repos.authorization, evidence: repos.evidence, instruments: repos.instruments },
       stripeIssuingAdapter,
       authorization,
       new Date(),

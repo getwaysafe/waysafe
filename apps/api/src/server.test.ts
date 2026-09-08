@@ -13,6 +13,7 @@ import { InMemoryAgentKeyRepository } from "./agent-keys/in-memory-repository.js
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.js";
+import { InMemoryInstrumentRepository } from "./instruments/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository.js";
 import {
@@ -47,6 +48,7 @@ beforeAll(async () => {
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
     principals: new InMemoryPrincipalRepository(),
+    instruments: new InMemoryInstrumentRepository(),
   };
 
   app = buildServer({

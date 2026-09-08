@@ -105,6 +105,7 @@ async function startServer(): Promise<{
   );
   const { InMemoryEvidenceRepository } = await import("../apps/api/src/evidence/in-memory-repository.js");
   const { InMemoryPrincipalRepository } = await import("../apps/api/src/principals/in-memory-repository.js");
+  const { InMemoryInstrumentRepository } = await import("../apps/api/src/instruments/in-memory-repository.js");
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
@@ -136,6 +137,7 @@ async function startServer(): Promise<{
     );
     const { PrismaEvidenceRepository } = await import("../apps/api/src/evidence/prisma-repository.js");
     const { PrismaPrincipalRepository } = await import("../apps/api/src/principals/prisma-repository.js");
+    const { PrismaInstrumentRepository } = await import("../apps/api/src/instruments/prisma-repository.js");
     const { PrismaWebauthnRepository } = await import("../apps/api/src/webauthn/prisma-repository.js");
     const { PrismaProviderEventRepository } = await import("../apps/api/src/webhooks/prisma-repository.js");
 
@@ -161,6 +163,7 @@ async function startServer(): Promise<{
         webauthn: new PrismaWebauthnRepository(prisma),
         providerEvents: new PrismaProviderEventRepository(prisma),
         principals: new PrismaPrincipalRepository(prisma),
+        instruments: new PrismaInstrumentRepository(prisma),
       },
       webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
       adapters,
@@ -183,6 +186,7 @@ async function startServer(): Promise<{
         webauthn: new InMemoryWebauthnRepository(),
         providerEvents: new InMemoryProviderEventRepository(),
         principals: new InMemoryPrincipalRepository(),
+        instruments: new InMemoryInstrumentRepository(),
       },
       webauthnConfig: { rpId: "localhost", origin: "http://localhost:3000" },
       adapters,

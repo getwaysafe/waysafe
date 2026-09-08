@@ -6,6 +6,7 @@
   "scripts": {
     "generate": "prisma generate",
     "push": "prisma db push",
+    "constraints": "prisma db execute --file prisma/manual-constraints.sql --schema prisma/schema.prisma",
     "migrate": "prisma migrate dev",
     "studio": "prisma studio"
   },

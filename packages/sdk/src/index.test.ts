@@ -268,7 +268,9 @@ describe("asExecutable() / execute()", () => {
     return {
       authorization_id: "auth_test",
       organization_id: "org_test",
+      actor_kind: "agent",
       agent_id: "agt_test",
+      instrument_id: null,
       principal_id: "prin_test",
       mandate_id: "mdt_test",
       mandate_version_id: "mdv_test",

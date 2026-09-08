@@ -81,6 +81,9 @@ fixtures/compiler recorded compiler output, replayed deterministically in tests
 npm install
 npm run db:generate                    # prisma generate
 npm run db:push                        # prisma db push (needs DATABASE_URL)
+npm run db:constraints                 # applies packages/db/prisma/manual-constraints.sql
+                                        # (CHECK constraints db push can't express -- D-35;
+                                        # run once after every db:push)
 npm test                               # vitest, all workspaces
 npm run typecheck                      # tsc -b, plus the test tsconfig
 npm run dev:api                        # api on :3001
@@ -120,13 +123,16 @@ non-negotiable #3 that D-33 exposed (`D-34`: merchant trust now depends on
 who attested an identifier, not merely which field it's in — an agent could
 previously assert an allowlisted `psp_account`/`network_mid` on
 `POST /v1/authorizations` and get ALLOW, exactly the attack D-3 exists to
-stop, just on a different field). Known follow-ups: card-rail approvals
-don't yet write a ledger entry, so a cumulative cap doesn't yet see card
-spend (D-33 point 6 — needs a schema answer for who "acts" on a
-rail-initiated decision); the live bypass test's account in this environment
-hasn't completed Stripe's own Issuing setup, so it currently self-reports
-SKIPPED rather than a live pass. `OQ-7` (per-unit limits vs. correcting the
-PRD's example) is the one open question left.
+stop, just on a different field), and the fix to D-33 point 6 (`D-35`: the
+actor on a rail-initiated authorization is a new `Instrument` entity, never
+an Agent and never null — card-rail spend now writes a real `RESERVATION`
+and counts against D-4's cumulative limits; `Authorization` gained
+`actorKind`/`instrumentId`, enforced by a DB CHECK constraint applied via
+the new `npm run db:constraints`, since `db push` can't express it). The
+live bypass test's account in this environment hasn't completed Stripe's own
+Issuing setup, so it currently self-reports SKIPPED rather than a live pass.
+`OQ-7` (per-unit limits vs. correcting the PRD's example) is the one open
+question left.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

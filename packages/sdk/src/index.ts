@@ -21,6 +21,7 @@
  */
 
 import type {
+  ActorKind,
   AgentStatus,
   AuthorizationStatus,
   Decision,
@@ -293,7 +294,12 @@ export interface AuthorizeRequest {
 export interface AuthorizationDecision {
   authorization_id: string;
   organization_id: string;
-  agent_id: string;
+  /** Who acted (D-35): "agent" for an SDK-driven authorize() call,
+   * "instrument" for a rail-initiated one (e.g. a Stripe Issuing card, D-32)
+   * -- exactly one of agent_id/instrument_id is set, matching this. */
+  actor_kind: ActorKind;
+  agent_id: string | null;
+  instrument_id: string | null;
   principal_id: string;
   mandate_id: string;
   mandate_version_id: string;
@@ -497,7 +503,9 @@ export function verifyEvidenceIndependently(
 interface ReceiptWire {
   id: string;
   organization_id: string;
-  agent_id: string;
+  actor_kind: ActorKind;
+  agent_id: string | null;
+  instrument_id: string | null;
   principal_id: string;
   mandate_id: string;
   mandate_version_id: string;
@@ -517,7 +525,9 @@ function toDecision(receipt: ReceiptWire, replayed: boolean): AuthorizationDecis
   return {
     authorization_id: receipt.id,
     organization_id: receipt.organization_id,
+    actor_kind: receipt.actor_kind,
     agent_id: receipt.agent_id,
+    instrument_id: receipt.instrument_id,
     principal_id: receipt.principal_id,
     mandate_id: receipt.mandate_id,
     mandate_version_id: receipt.mandate_version_id,

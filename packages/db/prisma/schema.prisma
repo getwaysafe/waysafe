@@ -30,6 +30,7 @@ model Organization {
   principals     Principal[]
   mandates       Mandate[]
   apiKeys        ApiKey[]
+  instruments    Instrument[]
   authorizations Authorization[]
   transactions   Transaction[]
   ledgerEntries  LedgerEntry[]
@@ -176,6 +177,7 @@ model Mandate {
   principal      Principal       @relation(fields: [principalId], references: [id], onDelete: Cascade)
   versions       MandateVersion[] @relation("MandateVersions")
   currentVersion MandateVersion?  @relation("CurrentVersion", fields: [currentVersionId], references: [id])
+  instrument     Instrument?
   authorizations Authorization[]
 
   @@index([organizationId, status])
@@ -234,6 +236,38 @@ model MandateAgent {
 }
 
 // ---------------------------------------------------------------------------
+// Instruments (D-32, D-35)
+// ---------------------------------------------------------------------------
+
+enum InstrumentStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// A rail-specific spend instrument (e.g. a Stripe Issuing virtual card)
+/// whose authority *is* a mandate's, made portable onto that rail (D-32 item
+/// 3). One per mandate for now -- mandateId is unique. This is the actor
+/// D-35 gives a rail-initiated Authorization: not an Agent, and never null.
+model Instrument {
+  id             String           @id
+  organizationId String
+  mandateId      String           @unique
+  /// Adapter name, matching EnforcementAdapter.name -- "stripe_issuing" for now.
+  rail           String
+  /// The rail's own reference for this instrument, e.g. a Stripe card id.
+  externalRef    String
+  status         InstrumentStatus @default(ACTIVE)
+  createdAt      DateTime         @default(now())
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  mandate        Mandate         @relation(fields: [mandateId], references: [id], onDelete: Cascade)
+  authorizations Authorization[]
+
+  @@index([organizationId])
+  @@map("instruments")
+}
+
+// ---------------------------------------------------------------------------
 // Authorization
 // ---------------------------------------------------------------------------
 
@@ -241,6 +275,16 @@ enum Decision {
   ALLOW
   DENY
   STEP_UP
+}
+
+/// Who acted on an authorization decision (D-35). Exactly one of
+/// Authorization.agentId / instrumentId is set, matching this discriminator
+/// -- enforced by a CHECK constraint applied outside `db push`; see
+/// packages/db/prisma/manual-constraints.sql, since the schema DSL itself
+/// has no way to declare a multi-column CHECK constraint.
+enum ActorKind {
+  agent
+  instrument
 }
 
 enum AuthorizationStatus {
@@ -256,7 +300,13 @@ enum AuthorizationStatus {
 model Authorization {
   id             String @id
   organizationId String
-  agentId        String
+
+  /// Who acted (D-35). Exactly one of agentId/instrumentId is set, matching
+  /// this value -- see the CHECK constraint note on the ActorKind enum above.
+  actorKind    ActorKind @default(agent)
+  agentId      String?
+  instrumentId String?
+
   principalId    String
   mandateId      String
 
@@ -284,6 +334,11 @@ model Authorization {
   /// Hash of the request body, so a reused key with a different body is rejected.
   requestHash    String?
 
+  /// A rail's own reference for this decision, e.g. a Stripe Issuing
+  /// authorization id (D-35) -- the join key a later webhook event (capture)
+  /// uses to find this row back. Null for an agent-actor authorization.
+  externalRef String?
+
   stepUpExpiresAt DateTime?
   stepUpEvidenceId String?
 
@@ -291,7 +346,8 @@ model Authorization {
   decidedAt DateTime @default(now())
 
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  agent          Agent          @relation(fields: [agentId], references: [id])
+  agent          Agent?         @relation(fields: [agentId], references: [id])
+  instrument     Instrument?    @relation(fields: [instrumentId], references: [id])
   principal      Principal      @relation(fields: [principalId], references: [id])
   mandate        Mandate        @relation(fields: [mandateId], references: [id])
   mandateVersion MandateVersion @relation(fields: [mandateVersionId], references: [id])
@@ -302,6 +358,7 @@ model Authorization {
   @@index([organizationId, createdAt])
   @@index([mandateId, createdAt])
   @@index([status])
+  @@index([externalRef])
   @@map("authorizations")
 }
 

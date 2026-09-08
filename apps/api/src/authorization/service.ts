@@ -112,7 +112,9 @@ export async function authorize(
       const authorization = await repo.saveAuthorization({
         id: params.id ?? generateId(ID_PREFIX.authorization),
         organizationId,
+        actorKind: "agent",
         agentId: request.agent_id,
+        instrumentId: null,
         principalId: request.principal_id,
         mandateId: gate.mandateId!,
         mandateVersionId: gate.mandateVersionId ?? "",
@@ -142,7 +144,9 @@ export async function authorize(
       const authorization = await repo.saveAuthorization({
         id: params.id ?? generateId(ID_PREFIX.authorization),
         organizationId,
+        actorKind: "agent",
         agentId: request.agent_id,
+        instrumentId: null,
         principalId: request.principal_id,
         mandateId: gate.mandateId,
         mandateVersionId: gate.mandateVersionId,
@@ -195,7 +199,9 @@ export async function authorize(
     const authorization = await repo.saveAuthorization({
       id: params.id ?? generateId(ID_PREFIX.authorization),
       organizationId,
+      actorKind: "agent",
       agentId: request.agent_id,
+      instrumentId: null,
       principalId: request.principal_id,
       mandateId: gate.mandateId,
       mandateVersionId: gate.mandateVersionId,

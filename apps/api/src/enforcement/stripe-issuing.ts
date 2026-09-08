@@ -19,19 +19,24 @@
  * name on this payload is exactly as unverified as one an agent typed, and
  * D-3's whole point is that a name never gets to satisfy an allowlist.
  *
- * D-32, item 3: a card is provisioned per *mandate*, not per agent --
- * `provisionCardForMandate` stamps the mandate id into the card's own
- * metadata, which is the join key `parseRequest` reads back out. There is
- * no per-agent identity on this rail at all; see D-33 for what that means
- * for ledger accounting.
+ * D-32, item 3 / D-35: a card is provisioned per *mandate*, not per agent,
+ * and the actor a rail-initiated decision is attributed to is the
+ * Instrument that card *is* -- never an agent, and never null.
+ * `provisionCardForMandate` creates that Instrument row and stamps its own
+ * id into the card's metadata, which is the join key `parseRequest` reads
+ * back out. See D-35 for why this closes D-33 point 6 (card spend now
+ * counts against D-4's cumulative limits).
  */
 
 import Stripe from "stripe";
 import {
   Decision,
+  ID_PREFIX,
   ReasonCode,
   evaluate,
+  generateId,
   resolveMerchant,
+  type AuthorizationStatus,
   type Currency,
   type EnforcementAdapter,
   type EnforcementRequest,
@@ -40,21 +45,30 @@ import {
   type MerchantAssertion,
   type Reason,
 } from "@waysafe/core";
-import type { AuthorizationRepository, MandateDetail } from "../authorization/types.js";
+import type { AuthorizationRepository, MandateDetail, NewLedgerEntry } from "../authorization/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
+import type { InstrumentRepository } from "../instruments/types.js";
 
-// --- Provisioning (D-32 item 3) -----------------------------------------
+// --- Provisioning (D-32 item 3, D-35) ---------------------------------------
 
 export interface ProvisionedCard {
   cardholderId: string;
   cardId: string;
+  instrumentId: string;
 }
 
 /**
  * Creates a Stripe Issuing cardholder and card whose spend authority *is*
- * the named mandate -- the mandate id is stamped into the card's own
- * metadata, never the cardholder's alone, since that's the object
- * `parseRequest` below actually reads back from the webhook payload.
+ * the named mandate, and the Instrument row (D-35) that makes that spend
+ * attributable and countable against D-4's cumulative limits.
+ *
+ * Ordering is deliberate: the Instrument's own id doesn't exist until its
+ * row is created, and its row wants the card's id as `externalRef` -- so the
+ * card is created first (carrying only `waysafe_mandate_id`), the Instrument
+ * row is created referencing it, and only then is the card's metadata
+ * updated to also carry `waysafe_instrument_id`, the field `parseRequest`
+ * actually reads back out on every subsequent authorization.
+ *
  * Stripe's own `spending_controls` are deliberately not set here: per D-32,
  * they're a coarse backstop below the engine's decision, never a substitute
  * for it, and this spike leaves them at Stripe's permissive default so every
@@ -63,12 +77,15 @@ export interface ProvisionedCard {
  */
 export async function provisionCardForMandate(
   stripe: Stripe,
+  instruments: InstrumentRepository,
   params: {
+    organizationId: string;
     mandateId: string;
     cardholderName: string;
     currency: Currency;
     billingAddress: Stripe.Issuing.CardholderCreateParams.Billing.Address;
   },
+  now: Date,
 ): Promise<ProvisionedCard> {
   const cardholder = await stripe.issuing.cardholders.create({
     name: params.cardholderName,
@@ -83,7 +100,21 @@ export async function provisionCardForMandate(
     metadata: { waysafe_mandate_id: params.mandateId },
   });
 
-  return { cardholderId: cardholder.id, cardId: card.id };
+  const instrument = await instruments.createInstrument(
+    {
+      organizationId: params.organizationId,
+      mandateId: params.mandateId,
+      rail: "stripe_issuing",
+      externalRef: card.id,
+    },
+    now,
+  );
+
+  await stripe.issuing.cards.update(card.id, {
+    metadata: { waysafe_mandate_id: params.mandateId, waysafe_instrument_id: instrument.id },
+  });
+
+  return { cardholderId: cardholder.id, cardId: card.id, instrumentId: instrument.id };
 }
 
 /** True only for a real-looking test-mode key -- not unset, and not the
@@ -124,13 +155,19 @@ export class StripeIssuingAdapter
   readonly name = "stripe_issuing";
 
   parseRequest(authorization: Stripe.Issuing.Authorization): EnforcementRequest | null {
-    const mandateId = authorization.card.metadata?.waysafe_mandate_id;
-    if (!mandateId) return null;
+    // D-35: the Instrument's own id, not the mandate id -- `instrumentRef`
+    // is "the Waysafe-recognized reference for the spend instrument's
+    // authority" (packages/core/src/enforcement.ts), and now that a real
+    // Instrument entity exists, its id *is* that reference. The handler
+    // resolves the mandate from the Instrument row, not from anything
+    // Stripe's metadata claims about it directly.
+    const instrumentId = authorization.card.metadata?.waysafe_instrument_id;
+    if (!instrumentId) return null;
 
     const amount = authorization.pending_request?.amount ?? authorization.amount;
 
     return {
-      instrumentRef: mandateId,
+      instrumentRef: instrumentId,
       action: {
         amount,
         // MVP is USD-only (money.ts) -- a non-USD authorization is cast
@@ -162,6 +199,7 @@ export class StripeIssuingAdapter
 export interface IssuingEnforcementRepos {
   authorization: AuthorizationRepository;
   evidence: EvidenceRepository;
+  instruments: InstrumentRepository;
 }
 
 /**
@@ -176,7 +214,7 @@ function gateMandateStatus(detail: MandateDetail | null): Reason[] | null {
     return [
       {
         code: ReasonCode.DENY_NO_ACTIVE_MANDATE,
-        message: "No mandate is associated with the card presented for this authorization.",
+        message: "No mandate is associated with the instrument presented for this authorization.",
       },
     ];
   }
@@ -211,31 +249,29 @@ function gateMandateStatus(detail: MandateDetail | null): Reason[] | null {
 
 export interface IssuingDecision {
   response: StripeIssuingResponse;
-  /** Null when no mandate could be attributed at all -- nothing to write
-   * evidence against (see handleIssuingAuthorizationRequest). */
+  /** Null when no instrument could be resolved at all -- nothing to write
+   * evidence or an authorization row against (see
+   * handleIssuingAuthorizationRequest). */
   mandateId: string | null;
 }
 
 /**
- * Runs one `issuing_authorization.request` end to end: resolve the mandate
- * from the card's metadata, gate its lifecycle status, evaluate the policy
+ * Runs one `issuing_authorization.request` end to end: resolve the
+ * Instrument from the card's metadata, look up its mandate, gate the
+ * mandate's lifecycle status, evaluate the policy and persist the decision
  * under the mandate lock (D-4 discipline -- serialized against any
  * concurrent authorize() call or another enforcement decision on the same
  * mandate), and record an EvidenceEvent of the outcome.
  *
- * D-33 (recorded, not silently skipped): this does **not** write a ledger
- * entry (RESERVATION/CAPTURE) for an approved card authorization.
- * `AuthorizationRecord.agentId` is a mandatory foreign key to a real Agent
- * row (packages/db/prisma/schema.prisma), and a rail-initiated decision has
- * no agent acting -- the card is the mandate's own spend authority, per item
- * 3. Fabricating an agent id to satisfy the schema would misattribute the
- * spend to whichever agent happened to be picked. Until the domain model
- * has a real answer for "who acted" on this rail (a nullable agentId, or a
- * synthetic per-mandate instrument actor), D-4's cumulative limits do not
- * yet see card-rail spend -- per-transaction limits and merchant/category
- * rules are fully enforced by this evaluate() call; a monthly cumulative cap
- * is not yet protected against card spend specifically. Flagged for a
- * follow-up, not silently shipped as if it were solved.
+ * D-35 (closes D-33 point 6): an ALLOW writes a real RESERVATION ledger
+ * entry, attributed to the Instrument (`actorKind: "instrument"`) --
+ * `getSpendSnapshot`'s SUM now sees card-rail spend, so a cumulative limit
+ * genuinely protects against it. A DENY, or a STEP_UP that fails closed
+ * (D-33 point 4: no channel for a human within Stripe's synchronous window),
+ * writes no ledger entry -- nothing moved, nothing to reserve against.
+ * Capture (releasing the RESERVATION into a CAPTURE once Stripe actually
+ * settles the transaction) happens later, via the existing webhook path --
+ * see webhooks/service.ts's `issuing_authorization.updated` handling.
  */
 export async function handleIssuingAuthorizationRequest(
   repos: IssuingEnforcementRepos,
@@ -246,67 +282,121 @@ export async function handleIssuingAuthorizationRequest(
   const parsed = adapter.parseRequest(authorization);
 
   if (!parsed) {
-    // No mandate id in the card's metadata at all -- a card issued outside
-    // provisionCardForMandate, or with metadata since cleared. Nothing to
-    // attach evidence to; fail closed and say why in the response only.
+    // No instrument id in the card's metadata at all -- a card issued
+    // outside provisionCardForMandate, or with metadata since cleared.
+    // Nothing to attach evidence or an authorization row to; fail closed
+    // and say why in the response only.
     const result: EngineResult = {
       decision: Decision.DENY,
       reasons: [
         {
           code: ReasonCode.DENY_NO_ACTIVE_MANDATE,
-          message: "The card presented carries no Waysafe mandate reference.",
+          message: "The card presented carries no Waysafe instrument reference.",
         },
       ],
     };
     return { response: adapter.toResponse(result, authorization), mandateId: null };
   }
 
-  const mandateId = parsed.instrumentRef;
+  const instrument = await repos.instruments.getInstrument(parsed.instrumentRef);
+  if (!instrument) {
+    const result: EngineResult = {
+      decision: Decision.DENY,
+      reasons: [
+        {
+          code: ReasonCode.DENY_NO_ACTIVE_MANDATE,
+          message: "No instrument is registered for the card presented.",
+        },
+      ],
+    };
+    return { response: adapter.toResponse(result, authorization), mandateId: null };
+  }
+
+  const mandateId = instrument.mandate_id;
   const detail = await repos.authorization.getMandateDetail(mandateId);
   const gateReasons = gateMandateStatus(detail);
 
-  let result: EngineResult;
+  // D-34: this is the one rail-attested resolveMerchant() call in the
+  // codebase -- merchant_data.network_id came from Stripe's own webhook
+  // payload, not from anything the agent (or whoever holds the card) could
+  // fabricate, so "rail" is the only source that's ever honest here.
+  // Resolved unconditionally, even on a gate failure, so the persisted
+  // receipt always shows what merchant was involved (same convention
+  // authorize()'s own gate-fail branch uses).
+  const merchant = resolveMerchant(
+    parsed.action.merchant,
+    repos.authorization.getMerchantDirectory(),
+    "rail",
+  );
 
-  if (gateReasons) {
-    result = { decision: Decision.DENY, reasons: gateReasons };
-  } else {
-    // detail is non-null here: gateMandateStatus only returns null when it is.
-    const mandate = detail as MandateDetail;
-    // D-34: this is the one rail-attested resolveMerchant() call in the
-    // codebase -- merchant_data.network_id came from Stripe's own webhook
-    // payload, not from anything the agent (or whoever holds the card)
-    // could fabricate, so "rail" is the only source that's ever honest here.
-    const merchant = resolveMerchant(
-      parsed.action.merchant,
-      repos.authorization.getMerchantDirectory(),
-      "rail",
-    );
-    result = await repos.authorization.withMandateLock(mandateId, async () => {
+  const stored = await repos.authorization.withMandateLock(mandateId, async () => {
+    let result: EngineResult;
+    const ledgerEntries: NewLedgerEntry[] = [];
+
+    if (gateReasons) {
+      result = { decision: Decision.DENY, reasons: gateReasons };
+    } else {
+      const mandate = detail as MandateDetail;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
-      return evaluate({ policy: mandate.policy, action: parsed.action, merchant, spend, now });
+      result = evaluate({ policy: mandate.policy, action: parsed.action, merchant, spend, now });
+      if (result.decision === Decision.ALLOW) {
+        ledgerEntries.push({ type: "RESERVATION", amount: parsed.action.amount });
+      }
+    }
+
+    // D-33 point 4 / D-35: STEP_UP has no channel to reach a human within
+    // Stripe's synchronous window, so it fails closed exactly like DENY --
+    // there is no PENDING_STEP_UP state on this rail, ever. Persisted status
+    // reflects that: only ALLOW is AUTHORIZED, everything else is DENIED,
+    // even though `decision`/`reasons` still record the real outcome
+    // (including STEP_UP's own reasons) for an accurate receipt.
+    const status: AuthorizationStatus = result.decision === Decision.ALLOW ? "AUTHORIZED" : "DENIED";
+
+    const authorization_ = await repos.authorization.saveAuthorization({
+      id: generateId(ID_PREFIX.authorization),
+      organizationId: instrument.organization_id,
+      actorKind: "instrument",
+      agentId: null,
+      instrumentId: instrument.id,
+      principalId: detail?.principalId ?? "",
+      mandateId,
+      mandateVersionId: detail?.mandateVersionId ?? "",
+      policyHash: detail?.policyHash ?? "",
+      decision: result.decision,
+      status,
+      reasons: result.reasons,
+      action: parsed.action,
+      merchant,
+      idempotencyKey: null,
+      requestHash: null,
+      externalRef: authorization.id,
+      stepUpExpiresAt: null,
+      now,
+      ledgerEntries,
     });
-  }
 
-  if (detail) {
-    await repos.evidence.withOrganizationLock(detail.organizationId, () =>
-      repos.evidence.appendEvent({
-        organizationId: detail.organizationId,
-        type: "enforcement.stripe_issuing.decision",
-        subjectType: "mandate",
-        subjectId: mandateId,
-        payload: {
-          decision: result.decision,
-          reason_codes: result.reasons.map((r) => r.code),
-          amount: parsed.action.amount,
-          currency: parsed.action.currency,
-          merchant: parsed.action.merchant,
-          stripe_authorization_id: authorization.id,
-          card_id: authorization.card.id,
-        },
-        now,
-      }),
-    );
-  }
+    return { result, authorization: authorization_ };
+  });
 
-  return { response: adapter.toResponse(result, authorization), mandateId };
+  await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
+    repos.evidence.appendEvent({
+      organizationId: instrument.organization_id,
+      type: "enforcement.stripe_issuing.decision",
+      subjectType: "authorization",
+      subjectId: stored.authorization.id,
+      payload: {
+        decision: stored.result.decision,
+        reason_codes: stored.result.reasons.map((r) => r.code),
+        amount: parsed.action.amount,
+        currency: parsed.action.currency,
+        merchant: parsed.action.merchant,
+        stripe_authorization_id: authorization.id,
+        card_id: authorization.card.id,
+        instrument_id: instrument.id,
+      },
+      now,
+    }),
+  );
+
+  return { response: adapter.toResponse(stored.result, authorization), mandateId };
 }

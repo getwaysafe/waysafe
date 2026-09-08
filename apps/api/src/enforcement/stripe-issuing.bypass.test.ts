@@ -46,6 +46,7 @@ import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.j
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
 import { InMemoryPrincipalRepository } from "../principals/in-memory-repository.js";
+import { InMemoryInstrumentRepository } from "../instruments/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "../webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "../webhooks/in-memory-repository.js";
 import { probeStripeIssuingKey, provisionCardForMandate } from "./stripe-issuing.js";
@@ -105,9 +106,11 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
   let app: ReturnType<typeof buildServer>;
   let stripe: Stripe;
   let mandateId: string;
+  let instruments: InMemoryInstrumentRepository;
 
   beforeAll(async () => {
     const authorizationRepo = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+    instruments = new InMemoryInstrumentRepository();
     repos = {
       authorization: authorizationRepo,
       agentKeys: new InMemoryAgentKeyRepository(),
@@ -115,6 +118,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),
+      instruments,
     };
     ({ mandateId } = authorizationRepo.seedMandate({
       organizationId: ORG,
@@ -150,18 +154,24 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     async (ctx) => {
       let cardId: string;
       try {
-        ({ cardId } = await provisionCardForMandate(stripe, {
-          mandateId,
-          cardholderName: "Waysafe Bypass Test",
-          currency: "USD",
-          billingAddress: {
-            line1: "123 Market St",
-            city: "San Francisco",
-            state: "CA",
-            postal_code: "94105",
-            country: "US",
+        ({ cardId } = await provisionCardForMandate(
+          stripe,
+          instruments,
+          {
+            organizationId: ORG,
+            mandateId,
+            cardholderName: "Waysafe Bypass Test",
+            currency: "USD",
+            billingAddress: {
+              line1: "123 Market St",
+              city: "San Francisco",
+              state: "CA",
+              postal_code: "94105",
+              country: "US",
+            },
           },
-        }));
+          new Date(),
+        ));
       } catch (err) {
         // A real, but separate, precondition from "is a webhook wired up":
         // this Stripe test account itself may never have completed Issuing

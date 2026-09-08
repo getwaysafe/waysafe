@@ -7,7 +7,9 @@ function authorizationWith(status: AuthorizationStatus): StoredAuthorization {
   return {
     id: "auth_test",
     organization_id: "org_test",
+    actor_kind: "agent",
     agent_id: "agt_test",
+    instrument_id: null,
     principal_id: "prin_test",
     mandate_id: "mdt_test",
     mandate_version_id: "mdv_test",
@@ -24,6 +26,7 @@ function authorizationWith(status: AuthorizationStatus): StoredAuthorization {
     merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" },
     idempotency_key: null,
     request_hash: null,
+    external_ref: null,
     step_up_expires_at: null,
     created_at: new Date().toISOString(),
     decided_at: new Date().toISOString(),

@@ -21,7 +21,8 @@
     "quickstart": "tsx --env-file-if-exists=.env examples/quickstart.ts",
     "demo": "tsx --env-file-if-exists=.env examples/demo.ts",
     "db:generate": "npm run generate -w @waysafe/db",
-    "db:push": "npm run push -w @waysafe/db"
+    "db:push": "npm run push -w @waysafe/db",
+    "db:constraints": "npm run constraints -w @waysafe/db"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

@@ -36,6 +36,7 @@ export const ID_PREFIX = {
   api_key: "key",
   webauthn_challenge: "wch",
   passkey_credential: "pkc",
+  instrument: "inst",
 } as const;
 
 export type IdPrefix = (typeof ID_PREFIX)[keyof typeof ID_PREFIX];
@@ -92,6 +93,33 @@ export const PrincipalType = {
 } as const;
 
 export type PrincipalType = (typeof PrincipalType)[keyof typeof PrincipalType];
+
+export const InstrumentStatus = {
+  ACTIVE: "ACTIVE",
+  REVOKED: "REVOKED",
+} as const;
+
+export type InstrumentStatus = (typeof InstrumentStatus)[keyof typeof InstrumentStatus];
+
+/**
+ * Who acted on an authorization decision (D-35). The actor-state gate
+ * (D-13/D-18) and D-3's merchant-trust attestation source (D-34) both ask
+ * "who is on the other end of this request" -- this is the same question for
+ * *who the authorization itself is attributed to*. An agent-initiated
+ * decision (`authorize()`, D-13) is attributed to the Agent whose key was
+ * verified. A rail-initiated decision (D-32) has no agent at all -- the
+ * instrument itself (a card, D-32 item 3) carries the mandate's authority --
+ * so the actor is the Instrument, never a null. Exactly one of
+ * `agent_id`/`instrument_id` is ever set, matching this discriminator; see
+ * the DB CHECK constraint noted on `packages/db/prisma/schema.prisma`'s
+ * `ActorKind` enum.
+ */
+export const ActorKind = {
+  AGENT: "agent",
+  INSTRUMENT: "instrument",
+} as const;
+
+export type ActorKind = (typeof ActorKind)[keyof typeof ActorKind];
 
 export const AuthorizationStatus = {
   /** Terminal: ALLOW was returned and the authorization can be executed. */
@@ -193,6 +221,24 @@ export interface Agent {
 }
 
 /**
+ * A rail-specific spend instrument (D-32 item 3, D-35) -- e.g. a Stripe
+ * Issuing virtual card -- whose authority *is* a mandate's, made portable
+ * onto that rail. One per mandate for now. This is the actor a
+ * rail-initiated `AuthorizationRecord` is attributed to (`ActorKind.INSTRUMENT`).
+ */
+export interface Instrument {
+  id: string;
+  organization_id: string;
+  mandate_id: string;
+  /** Adapter name, matching EnforcementAdapter.name -- "stripe_issuing" for now. */
+  rail: string;
+  /** The rail's own reference for this instrument, e.g. a Stripe card id. */
+  external_ref: string;
+  status: InstrumentStatus;
+  created_at: Date;
+}
+
+/**
  * A Mandate is a stable handle. Its *content* lives in immutable
  * MandateVersions, so an authorization can always cite the exact bytes that
  * authorized it even after the principal edits the mandate.
@@ -228,7 +274,11 @@ export interface MandateVersion {
 export interface AuthorizationRecord {
   id: string;
   organization_id: string;
-  agent_id: string;
+  /** Who acted (D-35). Exactly one of agent_id/instrument_id is set,
+   * matching this discriminator -- see ActorKind. */
+  actor_kind: ActorKind;
+  agent_id: string | null;
+  instrument_id: string | null;
   principal_id: string;
   mandate_id: string;
   mandate_version_id: string;
@@ -239,6 +289,9 @@ export interface AuthorizationRecord {
   reason_codes: string[];
   action: ProposedAction;
   idempotency_key: string | null;
+  /** A rail's own reference for this decision, e.g. a Stripe Issuing
+   * authorization id (D-35) -- null for an agent-actor authorization. */
+  external_ref: string | null;
   step_up_expires_at: Date | null;
   created_at: Date;
   decided_at: Date;

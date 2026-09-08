@@ -248,6 +248,117 @@ describe("D-34: merchant trust is a function of who attested it, not which field
   );
 });
 
+describe("D-35: an authorization can never be saved with both or neither actor set", () => {
+  it("THE ATTACK: rejects neither agentId nor instrumentId set", async () => {
+    const { repo, mandateId, mandateVersionId, policyHash } = await repoWithMandate(policyFrom({}));
+    await expect(
+      repo.saveAuthorization({
+        id: "auth_bad_1",
+        organizationId: ORG,
+        actorKind: "agent",
+        agentId: null,
+        instrumentId: null,
+        principalId: PRINCIPAL,
+        mandateId,
+        mandateVersionId,
+        policyHash,
+        decision: Decision.ALLOW,
+        status: "AUTHORIZED",
+        reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }],
+        action: request().action,
+        merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" },
+        idempotencyKey: null,
+        requestHash: null,
+        stepUpExpiresAt: null,
+        now: NOW,
+        ledgerEntries: [],
+      }),
+    ).rejects.toThrow(/invalid actor/);
+  });
+
+  it("THE ATTACK: rejects both agentId and instrumentId set", async () => {
+    const { repo, mandateId, mandateVersionId, policyHash } = await repoWithMandate(policyFrom({}));
+    await expect(
+      repo.saveAuthorization({
+        id: "auth_bad_2",
+        organizationId: ORG,
+        actorKind: "instrument",
+        agentId: AGENT,
+        instrumentId: "inst_test",
+        principalId: PRINCIPAL,
+        mandateId,
+        mandateVersionId,
+        policyHash,
+        decision: Decision.ALLOW,
+        status: "AUTHORIZED",
+        reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }],
+        action: request().action,
+        merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" },
+        idempotencyKey: null,
+        requestHash: null,
+        stepUpExpiresAt: null,
+        now: NOW,
+        ledgerEntries: [],
+      }),
+    ).rejects.toThrow(/invalid actor/);
+  });
+
+  it("THE ATTACK: rejects actorKind disagreeing with which field is set", async () => {
+    const { repo, mandateId, mandateVersionId, policyHash } = await repoWithMandate(policyFrom({}));
+    await expect(
+      repo.saveAuthorization({
+        id: "auth_bad_3",
+        organizationId: ORG,
+        actorKind: "agent",
+        agentId: null,
+        instrumentId: "inst_test",
+        principalId: PRINCIPAL,
+        mandateId,
+        mandateVersionId,
+        policyHash,
+        decision: Decision.ALLOW,
+        status: "AUTHORIZED",
+        reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }],
+        action: request().action,
+        merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" },
+        idempotencyKey: null,
+        requestHash: null,
+        stepUpExpiresAt: null,
+        now: NOW,
+        ledgerEntries: [],
+      }),
+    ).rejects.toThrow(/invalid actor/);
+  });
+
+  it("accepts a valid instrument actor", async () => {
+    const { repo, mandateId, mandateVersionId, policyHash } = await repoWithMandate(policyFrom({}));
+    const saved = await repo.saveAuthorization({
+      id: "auth_good_instrument",
+      organizationId: ORG,
+      actorKind: "instrument",
+      agentId: null,
+      instrumentId: "inst_test",
+      principalId: PRINCIPAL,
+      mandateId,
+      mandateVersionId,
+      policyHash,
+      decision: Decision.ALLOW,
+      status: "AUTHORIZED",
+      reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }],
+      action: request().action,
+      merchant: { trust: "VERIFIED", refs: [], resolution_source: "directory" },
+      idempotencyKey: null,
+      requestHash: null,
+      stepUpExpiresAt: null,
+      now: NOW,
+      ledgerEntries: [],
+    });
+    expect(saved.actor_kind).toBe("instrument");
+    expect(saved.instrument_id).toBe("inst_test");
+    expect(saved.agent_id).toBeNull();
+  });
+});
+
 describe("the actor-state gate (outside the pure engine)", () => {
   it("denies when no mandate matches and does not persist anything", async () => {
     const repo = new InMemoryAuthorizationRepository(DIRECTORY);

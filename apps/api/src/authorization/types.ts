@@ -17,6 +17,7 @@
 
 import type {
   Accounting,
+  ActorKind,
   AgentStatus,
   AuthorizationStatus,
   Decision,
@@ -45,7 +46,12 @@ export interface NewLedgerEntry {
 export interface StoredAuthorization {
   id: string;
   organization_id: string;
-  agent_id: string;
+  /** Who acted (D-35). Exactly one of agent_id/instrument_id is set,
+   * matching this discriminator -- enforced by a DB CHECK constraint, see
+   * packages/db/prisma/manual-constraints.sql. */
+  actor_kind: ActorKind;
+  agent_id: string | null;
+  instrument_id: string | null;
   principal_id: string;
   mandate_id: string;
   mandate_version_id: string;
@@ -57,6 +63,10 @@ export interface StoredAuthorization {
   merchant: ResolvedMerchant;
   idempotency_key: string | null;
   request_hash: string | null;
+  /** A rail's own reference for this decision, e.g. a Stripe Issuing
+   * authorization id (D-35) -- the join key a later webhook event (capture)
+   * uses to find this row back. Null for an agent-actor authorization. */
+  external_ref: string | null;
   step_up_expires_at: string | null;
   created_at: string;
   decided_at: string;
@@ -91,7 +101,12 @@ export type MandateGateResult = MandateGateOk | MandateGateFail;
 export interface SaveAuthorizationInput {
   id: string;
   organizationId: string;
-  agentId: string;
+  /** Who acted (D-35). Exactly one of agentId/instrumentId must be set,
+   * matching this value -- both implementations reject anything else, and
+   * the Prisma one is additionally backstopped by a DB CHECK constraint. */
+  actorKind: ActorKind;
+  agentId: string | null;
+  instrumentId: string | null;
   principalId: string;
   mandateId: string;
   mandateVersionId: string;
@@ -103,6 +118,9 @@ export interface SaveAuthorizationInput {
   merchant: ResolvedMerchant;
   idempotencyKey: string | null;
   requestHash: string | null;
+  /** A rail's own reference for this decision (D-35), e.g. a Stripe Issuing
+   * authorization id. Null for an agent-actor authorization. */
+  externalRef?: string | null;
   stepUpExpiresAt: Date | null;
   now: Date;
   /** Written atomically with the authorization row, inside the same mandate lock. */
@@ -218,6 +236,13 @@ export interface AuthorizationRepository {
     organizationId: string,
     key: string,
   ): Promise<StoredAuthorization | null>;
+
+  /** Global lookup by a rail's own reference for the decision (D-35), e.g.
+   * a Stripe Issuing authorization id -- how a later capture webhook event
+   * finds the row it needs to release/capture. Not org-scoped, same
+   * reasoning as `getAuthorization`: the caller doesn't know the
+   * organization until this resolves it. */
+  findByExternalRef(externalRef: string): Promise<StoredAuthorization | null>;
 
   /**
    * Serializes everything the callback does against this mandate: two
