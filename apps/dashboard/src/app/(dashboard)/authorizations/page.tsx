@@ -21,6 +21,7 @@ export default async function AuthorizationsPage() {
               <th>Authorization</th>
               <th>Decision</th>
               <th>Status</th>
+              <th>Actor</th>
               <th>Amount</th>
               <th>Merchant</th>
               <th>Reason codes</th>
@@ -40,6 +41,18 @@ export default async function AuthorizationsPage() {
                 </td>
                 <td>
                   <Badge value={auth.status} />
+                </td>
+                <td>
+                  {/* D-35: who acted. The rail and masked card ref are only
+                      shown on the detail page (one extra lookup there is
+                      cheap; doing it per row here would be N+1). */}
+                  <Badge value={auth.actor_kind} />{" "}
+                  <span className="mono" style={{ color: "var(--muted)" }}>
+                    {truncateId(
+                      (auth.actor_kind === "instrument" ? auth.instrument_id : auth.agent_id) ?? "",
+                      12,
+                    )}
+                  </span>
                 </td>
                 <td>{formatMoney({ amount: auth.action.amount, currency: auth.action.currency })}</td>
                 <td>{auth.merchant.refs[0]?.value ?? "—"}</td>

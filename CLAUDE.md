@@ -153,8 +153,14 @@ persists the request IP on the `MandateVersion` alongside
 refuses to provision — before ever calling Stripe — when a mandate was
 never authenticated; a successful provisioning records the acceptance as
 its own evidence event, `mandate.card_issuing_terms_accepted`, distinct
-from `mandate.authenticated`). The full suite is green: `npm test` has no
-failing tests as of `D-38`. This environment's financial account
+from `mandate.authenticated`), and the dashboard fix D-35 always implied but
+never shipped (`D-39`: authorization receipts now show who acted — the
+detail page renders `actor_kind`, and for an instrument actor, its rail
+and a masked `external_ref` via a new org-scoped `GET /v1/instruments/:id`
+and `Waysafe.getInstrument`; the list page shows `actor_kind` and a
+truncated reference without the per-row lookup that showing rail there
+would cost). The full suite is green: `npm test` has no
+failing tests as of `D-39`. This environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
 `status: "pending"`, so the live bypass test self-reports SKIPPED with that
 status rather than a live pass — that is expected, not a failure, and

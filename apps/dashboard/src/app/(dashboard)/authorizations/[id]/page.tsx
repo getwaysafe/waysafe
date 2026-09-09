@@ -5,6 +5,7 @@ import { requireSessionClient } from "../../../../lib/waysafe";
 import { Badge, formatDate } from "../../../../lib/format";
 import { formatDetail } from "../../../../lib/reasons";
 import { approveStepUp, declineStepUp } from "./actions";
+import { ActorFields } from "./actor-fields";
 
 export default async function AuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -18,6 +19,18 @@ export default async function AuthorizationDetailPage({ params }: { params: Prom
     waysafe.listReasonCodes(),
   ]);
   if (!receipt) notFound();
+
+  // D-35: only fetched for an instrument actor -- an agent-actor receipt has
+  // nothing to look up, and this is a single extra request per page view,
+  // not a per-row cost (the authorizations list page shows actor_kind/the
+  // instrument id without this lookup, deliberately, to avoid N+1 fetches).
+  const instrument =
+    receipt.actor_kind === "instrument" && receipt.instrument_id
+      ? await waysafe.getInstrument(receipt.instrument_id).catch((error) => {
+          if (error instanceof NotFoundError) return null;
+          throw error;
+        })
+      : null;
 
   const descriptionFor = (code: string) => reasonCodes.find((r) => r.code === code)?.description;
 
@@ -70,8 +83,7 @@ export default async function AuthorizationDetailPage({ params }: { params: Prom
 
       <div className="card">
         <dl className="field-grid">
-          <dt>Agent</dt>
-          <dd className="mono">{receipt.agent_id}</dd>
+          <ActorFields receipt={receipt} instrument={instrument} />
           <dt>Principal</dt>
           <dd className="mono">{receipt.principal_id}</dd>
           <dt>Mandate</dt>

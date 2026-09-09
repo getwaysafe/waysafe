@@ -25,6 +25,7 @@ import type {
   AgentStatus,
   AuthorizationStatus,
   Decision,
+  InstrumentStatus,
   MandateStatus,
   Policy,
   PrincipalType,
@@ -418,6 +419,24 @@ export interface AgentKeySummary {
   created_at: string;
 }
 
+// --- instruments (dashboard reads, D-35) --------------------------------------
+
+/** A rail-specific spend instrument (e.g. a Stripe Issuing virtual card,
+ * D-32/D-35) whose authority is a mandate's -- the actor a rail-initiated
+ * `AuthorizationDecision` is attributed to when `actor_kind` is
+ * `"instrument"`. `external_ref` is the rail's own reference (e.g. a Stripe
+ * card id) -- treat it the way you'd treat a card number: mask it in any UI,
+ * never display it in full. */
+export interface InstrumentDetail {
+  instrument_id: string;
+  organization_id: string;
+  mandate_id: string;
+  rail: string;
+  external_ref: string;
+  status: InstrumentStatus;
+  created_at: string;
+}
+
 // --- mandates (dashboard reads) ----------------------------------------------
 
 export interface MandateListItem {
@@ -705,6 +724,15 @@ export class Waysafe {
       limit: options.limit,
     });
     return mandates;
+  }
+
+  /** So a dashboard receipt can show who acted (D-35) for an
+   * `actor_kind: "instrument"` decision -- rail and a maskable
+   * `external_ref`. Throws `NotFoundError` for an instrument that doesn't
+   * exist or belongs to another organization; the server never distinguishes
+   * the two (org-scoped, same as `getMandate`). */
+  async getInstrument(instrumentId: string): Promise<InstrumentDetail> {
+    return this.get<InstrumentDetail>(`/v1/instruments/${instrumentId}`);
   }
 
   /**

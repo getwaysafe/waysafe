@@ -331,6 +331,18 @@ describe("the full journey through the SDK against a real server", () => {
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) expect(key.prefix).toBeDefined();
 
+    // D-35: getInstrument's wire shape round-trips real JSON too, not just
+    // a mocked fetch's fixture.
+    const instrument = await repos.instruments.createInstrument(
+      { organizationId: ORG, mandateId: mandate.mandate_id, rail: "stripe_issuing", externalRef: "ic_test_sdk_integration_9999" },
+      new Date(),
+    );
+    const instrumentDetail = await orgClient.getInstrument(instrument.id);
+    expect(instrumentDetail.instrument_id).toBe(instrument.id);
+    expect(instrumentDetail.mandate_id).toBe(mandate.mandate_id);
+    expect(instrumentDetail.rail).toBe("stripe_issuing");
+    expect(instrumentDetail.external_ref).toBe("ic_test_sdk_integration_9999");
+
     // "mandate.authenticated" is recorded against the mandate *version*
     // (subject_type "mandate_version"), not the mandate itself.
     const evidence = await orgClient.listEvidence({ subject: mandate.mandate_version_id });

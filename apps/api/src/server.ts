@@ -27,7 +27,7 @@ import type { AgentKeyRecord, AgentKeyRepository } from "./agent-keys/types.js";
 import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.js";
 import type { PrincipalRecord, PrincipalRepository } from "./principals/types.js";
 import { InMemoryInstrumentRepository } from "./instruments/in-memory-repository.js";
-import type { InstrumentRepository } from "./instruments/types.js";
+import type { Instrument, InstrumentRepository } from "./instruments/types.js";
 import { authorize, resolveStepUp } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
 import type {
@@ -271,6 +271,18 @@ function toPrincipalJSON(principal: PrincipalRecord) {
     email: principal.email,
     type: principal.type,
     created_at: principal.createdAt.toISOString(),
+  };
+}
+
+function toInstrumentJSON(instrument: Instrument) {
+  return {
+    instrument_id: instrument.id,
+    organization_id: instrument.organization_id,
+    mandate_id: instrument.mandate_id,
+    rail: instrument.rail,
+    external_ref: instrument.external_ref,
+    status: instrument.status,
+    created_at: instrument.created_at.toISOString(),
   };
 }
 
@@ -962,6 +974,19 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.code(404).send({ error: "not_found" });
     }
     return reply.send(toMandateDetailJSON(mandate));
+  });
+
+  /** So a dashboard receipt can show who acted (D-35): `getInstrument` is a
+   * global lookup by design (see `InstrumentRepository`'s doc comment), so
+   * the org check happens here, same pattern as `GET /v1/mandates/:id` --
+   * an instrument belonging to another organization 404s, never leaks. */
+  app.get("/v1/instruments/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const instrument = await repos.instruments.getInstrument(id);
+    if (!instrument || instrument.organization_id !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    return reply.send(toInstrumentJSON(instrument));
   });
 
   /** The authorization log. Most-recent-first, org-scoped (D-1). */

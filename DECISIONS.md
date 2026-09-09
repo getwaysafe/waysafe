@@ -2571,6 +2571,82 @@ second parameter is now the same `IssuingEnforcementRepos` shape
 passed, 1 skipped -- the same D-37 financial-account-pending SKIP, still
 expected) both ran clean.
 
+## D-39 — Dashboard receipts show who acted (D-35); the authorizations list shows actor_kind and a reference, not the instrument's rail/masked card -- avoiding a per-row lookup
+
+**What was asked:** the authorization detail and list pages render
+`actor_kind`, and for an instrument actor, the instrument's rail and a
+masked `external_ref` (last 4 only, never the full card id), alongside the
+existing agent display for agent actors.
+
+**Judgment call, recorded because the instruction reads as applying
+identically to both pages and this implementation doesn't:** rail and
+`external_ref` don't exist on `AuthorizationDecision`/the list endpoint's
+rows at all -- only `instrument_id` does. Showing them on the list page
+would mean one `GET /v1/instruments/:id` per row, up to 200 extra requests
+for `listAuthorizations({ limit: 200 })`'s existing page size. The detail
+page fetches the one instrument its one receipt names -- a single extra
+request per page view, the same cost class as `getMandate` already pays
+elsewhere in this codebase. So: **detail page** gets the full picture
+(`actor_kind` badge, plus rail and `maskExternalRef(external_ref)` for an
+instrument actor, fetched via the new `GET /v1/instruments/:id`); **list
+page** gets `actor_kind` badge plus the truncated `instrument_id` (or
+`agent_id`) already on hand, no new fetch. If a future list view genuinely
+needs rail/card on every row, the honest fix is a batched lookup
+(`GET /v1/instruments?ids=...`) or denormalizing rail onto
+`AuthorizationRecord` itself -- not N+1.
+
+**Masking is a dashboard concern, not an API one.** `GET /v1/instruments/:id`
+returns the real `external_ref` -- it's an opaque rail-assigned object
+reference (e.g. a Stripe Issuing card id), not a credential non-negotiable
+#4 governs, and other API responses already return comparably-sensitive-
+looking ids in full (`policy_hash`, `mandate_id`). `maskExternalRef`
+(`apps/dashboard/src/lib/format.tsx`) does the "last 4 only" masking at
+render time; the API contract stays complete for any other consumer with a
+legitimate reason to see it.
+
+**`GET /v1/instruments/:id`** mirrors `GET /v1/mandates/:id`'s exact
+pattern, not `GET /v1/agents/:id` (the task named that as the precedent,
+but no such route exists in this codebase -- `/v1/agents` only lists).
+`InstrumentRepository.getInstrument` is a global lookup by design (same
+reasoning as `getMandateDetail`/`getAuthorization`), so the org check --
+`instrument.organization_id !== request.auth!.organizationId` → 404 --
+lives in the route, proven by
+`apps/api/src/server.test.ts`'s cross-organization isolation suite: an
+instrument seeded for `org_other_dashboard` 404s for `ORG`'s credential,
+and a genuinely-owned one round-trips its `rail`/`external_ref` correctly.
+
+**Tests, three layers, each proving something the others can't:**
+- `apps/api/src/server.test.ts`: org-scoped 404 (never a leak) and a
+  same-org round-trip, HTTP-level, real routing and auth middleware.
+- `packages/sdk/src/integration.test.ts`: `getInstrument`'s wire JSON
+  against the real server (not a mocked fetch) -- the wire-compatibility
+  gap this file exists to close, same as its `getMandate` coverage.
+- `apps/dashboard/src/app/(dashboard)/authorizations/[id]/actor-fields.test.tsx`:
+  the actual rendered markup, for both actor kinds, using
+  `renderToStaticMarkup` -- no jsdom or React Testing Library added; `react-dom`
+  was already a dependency. `ActorFields` was deliberately split into its own
+  file (`actor-fields.tsx`) with zero imports of `server-only`/`next/headers`/
+  `next/navigation` specifically so it could be rendered directly in a plain
+  Vitest test -- importing it from `page.tsx` instead throws immediately
+  (`server-only` throws unconditionally outside a Next server-component
+  context, confirmed by trying it first). One assertion is the whole point of
+  "never the full card id": the rendered HTML is asserted to **not** contain
+  the raw `external_ref`, and a deliberate mutation (unmasking
+  `maskExternalRef` to return its input) was confirmed to fail that exact
+  assertion before being reverted -- not passing vacuously. `vitest.config.ts`'s
+  `include` gained `apps/**/*.test.tsx` (previously `.test.ts` only) to pick
+  this file up.
+
+Implemented in: `apps/api/src/server.ts` (`toInstrumentJSON`,
+`GET /v1/instruments/:id`), `packages/sdk/src/index.ts`
+(`InstrumentDetail`, `getInstrument`), `apps/dashboard/src/lib/format.tsx`
+(`maskExternalRef`), `apps/dashboard/src/app/(dashboard)/authorizations/
+[id]/actor-fields.tsx` (new), `.../page.tsx` (fetches the instrument only
+for an instrument actor, delegates rendering to `ActorFields`),
+`.../authorizations/page.tsx` (new Actor column, no new fetch). `npm run
+typecheck`, `npm run build -w @waysafe/dashboard`, and the full `npm test`
+(409 passed, 1 skipped -- the same D-37 SKIP) all ran clean.
+
 ---
 
 # Open questions

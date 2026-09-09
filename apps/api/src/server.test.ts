@@ -1113,6 +1113,36 @@ describe("dashboard reads (Week 5)", () => {
     expect(response.statusCode).toBe(404);
   });
 
+  it("returns instrument detail -- rail and external_ref -- for the caller's own organization (D-35)", async () => {
+    const { mandateId } = await createMandateFor(ORG, orgKey);
+    const instrument = await repos.instruments.createInstrument(
+      { organizationId: ORG, mandateId, rail: "stripe_issuing", externalRef: "ic_test_own_org_card_5678" },
+      new Date(),
+    );
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/v1/instruments/${instrument.id}`,
+      headers: authed(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.instrument_id).toBe(instrument.id);
+    expect(body.organization_id).toBe(ORG);
+    expect(body.mandate_id).toBe(mandateId);
+    expect(body.rail).toBe("stripe_issuing");
+    expect(body.external_ref).toBe("ic_test_own_org_card_5678");
+  });
+
+  it("404s an instrument lookup for an id that doesn't exist", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/instruments/inst_does_not_exist",
+      headers: authed(),
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
   it("lists agents for the caller's organization", async () => {
     const { agentId } = await createMandateFor(ORG, orgKey);
 
@@ -1237,6 +1267,26 @@ describe("dashboard reads (Week 5)", () => {
       const response = await app.inject({ method: "GET", url: "/v1/agents", headers: authed() });
       const agents = response.json().agents as Array<Record<string, unknown>>;
       expect(agents.some((a) => a.agent_id === agentId)).toBe(false);
+    });
+
+    it("an instrument belonging to another organization 404s, never a leak", async () => {
+      const { mandateId } = await createMandateFor("org_other_dashboard", otherOrgKey);
+      const instrument = await repos.instruments.createInstrument(
+        {
+          organizationId: "org_other_dashboard",
+          mandateId,
+          rail: "stripe_issuing",
+          externalRef: "ic_test_other_org_card_1234",
+        },
+        new Date(),
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/instruments/${instrument.id}`,
+        headers: authed(),
+      });
+      expect(response.statusCode).toBe(404);
     });
 
     it("keys from another organization do not appear in this organization's key list", async () => {
