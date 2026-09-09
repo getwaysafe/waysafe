@@ -267,6 +267,11 @@ export interface MandateVersion {
   agent_ids: string[];
   /** Populated when the principal authenticates this version with a passkey. */
   authenticated_at: Date | null;
+  /** The request IP the principal authenticated from (D-38). Set once,
+   * alongside authenticated_at, never backfilled or defaulted afterward --
+   * this is what a rail's own "user accepted these terms" field is
+   * legitimately sourced from, and only from. */
+  authentication_ip: string | null;
   authentication_evidence_id: string | null;
   created_at: Date;
 }

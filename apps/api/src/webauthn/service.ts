@@ -150,6 +150,13 @@ export interface AuthenticateMandateInput {
    * mismatch here means no matching challenge was ever issued. */
   policyHash: string;
   response: AuthenticationResponseJSON;
+  /** The real request IP of this ceremony (D-38) -- the caller (the
+   * `/authenticate/verify` route handler) must pass `request.ip`, never a
+   * placeholder. This is the only legitimate source for a rail's own
+   * "the cardholder accepted these terms from this IP" field; synthesizing
+   * it here would make Waysafe the one asserting a principal's consent
+   * instead of the principal. */
+  ip: string;
 }
 
 /**
@@ -191,7 +198,7 @@ export async function completeMandateAuthentication(
           verification.value.newCounter,
           now,
         );
-        await repos.authorization.activateMandate(input.mandateId, input.mandateVersionId, now);
+        await repos.authorization.activateMandate(input.mandateId, input.mandateVersionId, input.ip, now);
         result = { kind: "activated" };
       }
     }

@@ -7,7 +7,7 @@
  * stripe-issuing.bypass.test.ts, gated on that key.
  */
 
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import Stripe from "stripe";
 import {
   createStaticDirectory,
@@ -27,7 +27,12 @@ import { InMemoryPrincipalRepository } from "../principals/in-memory-repository.
 import { InMemoryInstrumentRepository } from "../instruments/in-memory-repository.js";
 import { InMemoryWebauthnRepository } from "../webauthn/in-memory-repository.js";
 import { InMemoryProviderEventRepository } from "../webhooks/in-memory-repository.js";
-import { handleIssuingAuthorizationRequest, StripeIssuingAdapter } from "./stripe-issuing.js";
+import {
+  NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX,
+  handleIssuingAuthorizationRequest,
+  provisionCardForMandate,
+  StripeIssuingAdapter,
+} from "./stripe-issuing.js";
 
 const ORG = "org_enforcement_test";
 const PRINCIPAL = "prin_test";
@@ -395,6 +400,150 @@ describe("handleIssuingAuthorizationRequest", () => {
     expect(decision.response.reason_codes).toEqual([expectedCode]);
     const events = await evidence.listForOrganization(ORG);
     expect((events[0]!.payload as { reason_codes: string[] }).reason_codes).toEqual([expectedCode]);
+  });
+});
+
+describe("provisionCardForMandate (D-37/D-38)", () => {
+  const ORIGINAL_FINANCIAL_ACCOUNT = process.env.STRIPE_ISSUING_FINANCIAL_ACCOUNT;
+
+  beforeEach(() => {
+    process.env.STRIPE_ISSUING_FINANCIAL_ACCOUNT = "fa_test_fake_account";
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_FINANCIAL_ACCOUNT === undefined) {
+      delete process.env.STRIPE_ISSUING_FINANCIAL_ACCOUNT;
+    } else {
+      process.env.STRIPE_ISSUING_FINANCIAL_ACCOUNT = ORIGINAL_FINANCIAL_ACCOUNT;
+    }
+  });
+
+  /** A fake Stripe client that never leaves the process -- these tests are
+   * about D-38's consent-provenance contract, not about Stripe's own API,
+   * so no live key or network call is involved. Captures exactly what each
+   * call was invoked with, for the "matches what was captured at
+   * authentication" assertion below. */
+  function fakeStripe() {
+    const cardholderCreate = vi.fn(async (params: Record<string, unknown>) => ({
+      id: "ich_fake",
+      ...params,
+    }));
+    const cardCreate = vi.fn(async (params: Record<string, unknown>) => ({ id: "ic_fake", ...params }));
+    const cardUpdate = vi.fn(async (id: string, params: Record<string, unknown>) => ({ id, ...params }));
+    const stripe = {
+      issuing: {
+        cardholders: { create: cardholderCreate },
+        cards: { create: cardCreate, update: cardUpdate },
+      },
+    } as unknown as Stripe;
+    return { stripe, cardholderCreate, cardCreate, cardUpdate };
+  }
+
+  function baseParams(mandateId: string) {
+    return {
+      organizationId: ORG,
+      mandateId,
+      cardholderName: "Waysafe Test",
+      cardholderPhone: "+15555550100",
+      currency: "USD" as const,
+      billingAddress: {
+        line1: "123 Market St",
+        city: "San Francisco",
+        state: "CA",
+        postal_code: "94105",
+        country: "US",
+      },
+    };
+  }
+
+  it("THE ATTACK: refuses to provision -- and never touches Stripe at all -- when the mandate was never authenticated", async () => {
+    const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const instruments = new InMemoryInstrumentRepository();
+    const { mandateId } = authorization.seedMandate({
+      organizationId: ORG,
+      principalId: PRINCIPAL,
+      agentId: AGENT,
+      policy: policyFrom(),
+      policyHash: "hash",
+      authenticatedAt: null,
+    });
+    const { stripe, cardholderCreate } = fakeStripe();
+
+    await expect(
+      provisionCardForMandate(stripe, { authorization, instruments, evidence }, baseParams(mandateId), NOW),
+    ).rejects.toThrow(NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX);
+
+    expect(cardholderCreate).not.toHaveBeenCalled();
+    expect(await evidence.listForOrganization(ORG)).toHaveLength(0);
+  });
+
+  it("records the acceptance as its own evidence event, distinct from mandate.authenticated", async () => {
+    const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const instruments = new InMemoryInstrumentRepository();
+    const authenticatedAt = new Date("2026-08-01T09:30:00.000Z");
+    const { mandateId, mandateVersionId } = authorization.seedMandate({
+      organizationId: ORG,
+      principalId: PRINCIPAL,
+      agentId: AGENT,
+      policy: policyFrom(),
+      policyHash: "hash",
+      authenticatedAt,
+      authenticationIp: "198.51.100.7",
+    });
+    const { stripe } = fakeStripe();
+
+    await provisionCardForMandate(stripe, { authorization, instruments, evidence }, baseParams(mandateId), NOW);
+
+    const events = await evidence.listForOrganization(ORG);
+    const event = events.find((e) => e.type === "mandate.card_issuing_terms_accepted");
+    expect(event).toBeDefined();
+    expect(event!.subject_type).toBe("mandate_version");
+    expect(event!.subject_id).toBe(mandateVersionId);
+    expect((event!.payload as { ip: string }).ip).toBe("198.51.100.7");
+    expect((event!.payload as { accepted_at: string }).accepted_at).toBe(authenticatedAt.toISOString());
+  });
+
+  it("THE ATTACK: sends Stripe the moment the principal actually authenticated, never a fresh timestamp taken at provisioning time", async () => {
+    const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
+    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const instruments = new InMemoryInstrumentRepository();
+    // Authenticated ten days before provisioning ever runs -- if
+    // provisionCardForMandate took `now` (or Date.now()) as the acceptance
+    // time instead of reading the mandate's own authenticatedAt, this would
+    // catch it immediately.
+    const authenticatedAt = new Date("2026-08-28T00:00:00.000Z");
+    const provisionedAt = new Date("2026-09-07T12:00:00.000Z");
+    const { mandateId } = authorization.seedMandate({
+      organizationId: ORG,
+      principalId: PRINCIPAL,
+      agentId: AGENT,
+      policy: policyFrom(),
+      policyHash: "hash",
+      authenticatedAt,
+      authenticationIp: "198.51.100.7",
+    });
+    const { stripe, cardholderCreate } = fakeStripe();
+
+    await provisionCardForMandate(
+      stripe,
+      { authorization, instruments, evidence },
+      baseParams(mandateId),
+      provisionedAt,
+    );
+
+    expect(cardholderCreate).toHaveBeenCalledTimes(1);
+    const sent = cardholderCreate.mock.calls[0]![0] as {
+      individual: { card_issuing: { user_terms_acceptance: { ip: string; date: number } } };
+    };
+    expect(sent.individual.card_issuing.user_terms_acceptance.ip).toBe("198.51.100.7");
+    expect(sent.individual.card_issuing.user_terms_acceptance.date).toBe(
+      Math.floor(authenticatedAt.getTime() / 1000),
+    );
+    expect(sent.individual.card_issuing.user_terms_acceptance.date).not.toBe(
+      Math.floor(provisionedAt.getTime() / 1000),
+    );
   });
 });
 

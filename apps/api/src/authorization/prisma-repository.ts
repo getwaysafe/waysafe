@@ -389,11 +389,11 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return rows.map((row) => ({ mandateId: row.mandateId, authorizationId: row.id }));
   }
 
-  async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
+  async activateMandate(mandateId: string, mandateVersionId: string, ip: string, now: Date): Promise<void> {
     const client = this.client;
     const result = await client.mandateVersion.updateMany({
       where: { id: mandateVersionId, mandateId },
-      data: { authenticatedAt: now },
+      data: { authenticatedAt: now, authenticationIp: ip },
     });
     if (result.count === 0) {
       throw new Error(`mandate version ${mandateVersionId} does not belong to mandate ${mandateId}`);
@@ -605,6 +605,7 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       authenticatedAt: mandate.currentVersion.authenticatedAt
         ? mandate.currentVersion.authenticatedAt.toISOString()
         : null,
+      authenticationIp: mandate.currentVersion.authenticationIp,
       createdAt: mandate.createdAt.toISOString(),
     };
   }

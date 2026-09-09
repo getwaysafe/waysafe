@@ -446,6 +446,21 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     expect(agents[0]!.name).toBe("Test Agent");
   }, 30_000);
 
+  it("D-38: activateMandate persists authenticationIp alongside authenticatedAt, and getMandateDetail round-trips both from real Postgres", async () => {
+    const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+    const { mandateId, mandateVersionId } = await seedMandate(policyFrom(), { authenticatedAt: null });
+
+    const before = await repo.getMandateDetail(mandateId);
+    expect(before!.authenticatedAt).toBeNull();
+    expect(before!.authenticationIp).toBeNull();
+
+    await repo.activateMandate(mandateId, mandateVersionId, "198.51.100.7", NOW);
+
+    const after = await repo.getMandateDetail(mandateId);
+    expect(after!.authenticatedAt).toBe(NOW.toISOString());
+    expect(after!.authenticationIp).toBe("198.51.100.7");
+  });
+
   it("D-31/OQ-6: sweepExpiredStepUps releases a reservation nobody ever asked about again, against real Postgres", async () => {
     const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
     const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };

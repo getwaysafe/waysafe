@@ -142,8 +142,19 @@ stripe-node's shipped types still name, read from the new
 time; the bypass test's SKIP now distinguishes a missing financial-account
 id, a financial account whose status isn't `"active"`, and Stripe never
 invoking the webhook, as three separately-labeled reasons instead of one
-generic message). The full suite is green: `npm test` has no failing tests
-as of `D-37`. This environment's financial account
+generic message), and the consent-provenance fix D-37 surfaced next
+(`D-38`: Stripe Issuing also requires
+`individual.card_issuing.user_terms_acceptance` — the cardholder's own
+legal acceptance of Stripe's terms — and Waysafe never synthesizes it;
+`provisionCardForMandate` now sources it only from the principal's real
+WebAuthn mandate-authentication ceremony (D-20), which now captures and
+persists the request IP on the `MandateVersion` alongside
+`authenticatedAt` via a new required `ip` param on `activateMandate`, and
+refuses to provision — before ever calling Stripe — when a mandate was
+never authenticated; a successful provisioning records the acceptance as
+its own evidence event, `mandate.card_issuing_terms_accepted`, distinct
+from `mandate.authenticated`). The full suite is green: `npm test` has no
+failing tests as of `D-38`. This environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
 `status: "pending"`, so the live bypass test self-reports SKIPPED with that
 status rather than a live pass — that is expected, not a failure, and

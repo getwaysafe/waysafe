@@ -2450,6 +2450,127 @@ one. `npm run typecheck` and the full `npm test` (399 passed, 1 skipped --
 now labeled "status \"pending\", not \"active\"" instead of the old
 generic message) both ran clean.
 
+## D-38 — `individual.card_issuing.user_terms_acceptance` is sourced only from the principal's own WebAuthn authentication (D-20), never synthesized
+
+**How this surfaced.** Probing D-37's remaining blocker (the financial
+account's own `pending` status) with a direct `curl` against
+`POST /v1/issuing/cardholders` -- no Waysafe code involved, just checking
+what this Stripe account actually requires -- created a real test-mode
+cardholder, `ich_1UDbLJRpUmlKK8kKSwPMuPMJ`, and its `requirements` came
+back:
+```json
+"disabled_reason": "requirements.past_due",
+"past_due": ["individual.card_issuing.user_terms_acceptance.ip", "individual.card_issuing.user_terms_acceptance.date"]
+```
+A second real-Stripe fact, same discipline as D-36/D-37 (checked directly,
+not assumed): once a cardholder has that acceptance and a card is created
+against a *pending* financial account, Stripe's error message is about the
+financial account's status, not the acceptance -- so the two blockers are
+independent and this one would otherwise surface later, invisibly, the
+moment D-37's account activates. Better to close it now than ship a
+provisioning path that works right up until the first real financial
+account, then fails on a field nobody wired.
+
+**Why this is a consent-provenance question, not a missing parameter.**
+`user_terms_acceptance.ip`/`.date` is Stripe's record of *the cardholder*
+legally accepting Stripe's own Issuing terms -- a claim about a specific
+person's specific act, at a specific place and time. The naive fix
+(`ip: request.ip, date: Math.floor(Date.now() / 1000)` computed wherever
+`provisionCardForMandate` happens to run) would make Waysafe the one
+asserting that acceptance, on the server's own clock and the server's own
+request, which is either meaningless (if provisioning runs on a timer, cron
+job, or backfill with no request at all) or actively false (attributing a
+legal acceptance to whichever HTTP request happened to trigger
+provisioning, not to any act the principal took). Non-negotiable #1 exists
+for the same reason in a different shape: some acts have to trace back to
+the actual party who took them, not to whichever system component last
+touched the data.
+
+**The only real acceptance already in this system is D-20's WebAuthn
+ceremony.** A principal signing a challenge over their mandate's
+`policy_hash`, from their own browser, verified by real
+`@simplewebauthn/server` cryptography, *is* a genuine, timestamped, located
+act of consent -- just not originally captured with Stripe's specific
+field names in mind. Rather than build a second, parallel "accept Stripe's
+terms" ceremony (a UX and legal surface this codebase has no PRD for),
+D-38 sources the acceptance from the one ceremony that already exists:
+`webauthn/service.ts`'s `completeMandateAuthentication` now takes the
+route handler's real `request.ip` and passes it, alongside the `now` it
+already threaded through, to
+`AuthorizationRepository.activateMandate(mandateId, mandateVersionId, ip,
+now)`, which stamps both `authenticatedAt` and a new `authenticationIp`
+onto the `MandateVersion` -- set together, exactly once, never
+independently, same invariant D-20 already established for
+`authenticatedAt` alone. `provisionCardForMandate` reads both back via
+`getMandateDetail` (`requireCardIssuingTermsAcceptance`) and refuses --
+throws before ever calling Stripe, `NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX`
+-- if either is null. No default, no `Date.now()` fallback, no placeholder
+IP: a mandate that was never authenticated has no acceptance to send, full
+stop.
+
+**Judgment call, recorded because nobody decided this before:** treating a
+WebAuthn signature over `policy_hash` as *also* satisfying Stripe's
+Issuing-terms acceptance stretches what that signature was originally
+scoped to mean. It is defensible -- the principal's passkey ceremony is a
+strictly stronger proof of presence and intent than the checkbox-click
+Stripe's own hosted onboarding would collect -- but it is a product/legal
+judgment call about what a principal is agreeing to when they authenticate
+a mandate, not a fact this codebase can derive on its own. Revisit if
+Stripe's Issuing terms ever need their own explicit, separately-worded
+consent screen rather than riding on the mandate-authentication ceremony.
+
+**The acceptance is recorded as its own evidence event.** A successful
+`provisionCardForMandate` call now appends
+`mandate.card_issuing_terms_accepted` (`subjectType: "mandate_version"`,
+payload `{ ip, accepted_at, cardholder_id }`) -- distinct from
+`mandate.authenticated`, so a receipt can show specifically when and from
+where the *Stripe acceptance* was asserted, separately from when the
+mandate itself was authenticated, even though today they're sourced from
+the same captured moment.
+
+**Tests, written to prove the contract rather than just its happy path:**
+- `apps/api/src/enforcement/stripe-issuing.test.ts`'s new
+  `describe("provisionCardForMandate (D-37/D-38)")`: refuses (and never
+  calls Stripe at all -- asserted via a spy on the fake client's
+  `cardholders.create`) when the mandate has no `authenticatedAt`/
+  `authenticationIp`; on success, the `mandate.card_issuing_terms_accepted`
+  evidence event exists with the right subject and payload; and, the one
+  most likely to silently regress, a mutation test proving the timestamp
+  sent to Stripe is the *authentication* moment, not the *provisioning*
+  moment -- authenticated ten days before provisioning runs, asserted
+  against both the expected value and (explicitly) against what a fresh
+  `now` would have produced. Deliberately mutated the source (swapped
+  `acceptance.acceptedAt` for `now` in the date sent to Stripe) and
+  confirmed this exact test fails before reverting -- it was not passing
+  vacuously.
+- `apps/api/src/webauthn/service.test.ts`: the existing D-20 end-to-end
+  test now also asserts `getMandateDetail(mandateId).authenticationIp`
+  round-trips through `InMemoryAuthorizationRepository` after a genuine
+  ceremony.
+- `apps/api/src/authorization/prisma-repository.test.ts`: a new test calls
+  `activateMandate` directly against real Postgres and confirms
+  `authenticationIp` round-trips alongside `authenticatedAt` through
+  `getMandateDetail` -- `activateMandate` had no real-Postgres test at all
+  before this, only the in-memory fake (via a spy in the webauthn service
+  test); now the actual production repository path is proven too.
+
+Implemented in: `packages/db/prisma/schema.prisma` (new nullable
+`MandateVersion.authenticationIp`, pushed via `npm run db:push`),
+`packages/core/src/domain.ts` (`MandateVersion.authentication_ip`),
+`apps/api/src/authorization/types.ts` (`MandateDetail.authenticationIp`;
+`activateMandate` gained a required `ip` param), both
+`AuthorizationRepository` implementations, `apps/api/src/webauthn/service.ts`
+(`AuthenticateMandateInput.ip`), `apps/api/src/server.ts` (passes
+`request.ip` into `completeMandateAuthentication`), and
+`apps/api/src/enforcement/stripe-issuing.ts`
+(`requireCardIssuingTermsAcceptance`,
+`NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX`; `provisionCardForMandate`'s
+second parameter is now the same `IssuingEnforcementRepos` shape
+`handleIssuingAuthorizationRequest` already took, not a bare
+`InstrumentRepository`). `npm run typecheck` and the full `npm test` (403
+passed, 1 skipped -- the same D-37 financial-account-pending SKIP, still
+expected) both ran clean.
+
 ---
 
 # Open questions

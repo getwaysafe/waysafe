@@ -61,6 +61,7 @@ interface MandateVersionRow {
   policy: Policy;
   policyHash: string;
   authenticatedAt: Date | null;
+  authenticationIp: string | null;
   agentIds: string[];
   intentText: string;
   assumptions: string[];
@@ -103,6 +104,11 @@ export interface SeedMandateInput {
   policyHash: string;
   status?: MandateStatus;
   authenticatedAt?: Date | null;
+  /** Defaults to a fixed test IP when authenticatedAt is set (explicitly or
+   * by omission), and to null when authenticatedAt is explicitly null --
+   * D-38's invariant (the two are set together) holds for seeded test
+   * mandates too, unless a test overrides this directly. */
+  authenticationIp?: string | null;
   agentStatus?: AgentStatus;
   boundAgentIds?: string[];
 }
@@ -154,6 +160,12 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
         policy: input.policy,
         policyHash: input.policyHash,
         authenticatedAt: input.authenticatedAt === undefined ? new Date() : input.authenticatedAt,
+        authenticationIp:
+          input.authenticationIp !== undefined
+            ? input.authenticationIp
+            : input.authenticatedAt === null
+              ? null
+              : "203.0.113.10",
         agentIds,
         intentText: "seeded for testing",
         assumptions: [],
@@ -447,7 +459,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       .map((a) => ({ mandateId: a.mandate_id, authorizationId: a.id }));
   }
 
-  async activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void> {
+  async activateMandate(mandateId: string, mandateVersionId: string, ip: string, now: Date): Promise<void> {
     const mandate = this.mandates.get(mandateId);
     if (!mandate) throw new Error(`no such mandate: ${mandateId}`);
     if (mandate.currentVersion.id !== mandateVersionId) {
@@ -456,6 +468,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       );
     }
     mandate.currentVersion.authenticatedAt = now;
+    mandate.currentVersion.authenticationIp = ip;
     mandate.status = "ACTIVE";
   }
 
@@ -481,6 +494,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
         policy: input.policy,
         policyHash: input.policyHash,
         authenticatedAt: null,
+        authenticationIp: null,
         agentIds: input.agentIds,
         intentText: input.intentText,
         assumptions: input.assumptions,
@@ -625,6 +639,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       assumptions: mandate.currentVersion.assumptions,
       agentIds: mandate.currentVersion.agentIds,
       authenticatedAt: mandate.currentVersion.authenticatedAt?.toISOString() ?? null,
+      authenticationIp: mandate.currentVersion.authenticationIp,
       createdAt: mandate.createdAt.toISOString(),
     };
   }

@@ -174,6 +174,10 @@ export interface MandateDetail extends MandateListItem {
   assumptions: string[];
   agentIds: string[];
   authenticatedAt: string | null;
+  /** The request IP the principal authenticated from (D-38). Null exactly
+   * when authenticatedAt is null -- the two are set together, by the same
+   * activateMandate call, and never independently. */
+  authenticationIp: string | null;
 }
 
 export interface NewAgent {
@@ -278,14 +282,21 @@ export interface AuthorizationRepository {
   listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]>;
 
   /**
-   * Stamps `authenticatedAt` on the mandate version and moves the mandate to
-   * ACTIVE. D-20: the only caller is `webauthn/service.ts`'s
-   * `authenticateMandate()`, and only after `verifyAuthentication()` (a real
-   * signature check) has returned `ok: true` -- there is no code path that
-   * reaches this method without one. This method itself does not verify
-   * anything; it trusts the caller already did.
+   * Stamps `authenticatedAt` and `authenticationIp` on the mandate version
+   * and moves the mandate to ACTIVE. D-20: the only caller is
+   * `webauthn/service.ts`'s `authenticateMandate()`, and only after
+   * `verifyAuthentication()` (a real signature check) has returned
+   * `ok: true` -- there is no code path that reaches this method without
+   * one. This method itself does not verify anything; it trusts the caller
+   * already did.
+   *
+   * `ip` (D-38) is the request IP of that same verified ceremony -- the
+   * only legitimate source for a rail's own "the cardholder accepted these
+   * terms from this IP at this time" field
+   * (`provisionCardForMandate`/`requireCardIssuingTermsAcceptance`).
+   * Callers must pass the real `request.ip`, never a placeholder.
    */
-  activateMandate(mandateId: string, mandateVersionId: string, now: Date): Promise<void>;
+  activateMandate(mandateId: string, mandateVersionId: string, ip: string, now: Date): Promise<void>;
 
   /**
    * Creates a Mandate (status PENDING_AUTHENTICATION) and its first

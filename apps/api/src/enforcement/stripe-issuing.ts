@@ -98,6 +98,48 @@ export function financialAccountStatusFromError(err: unknown): string | null {
   return match?.[1] ?? null;
 }
 
+interface CardIssuingTermsAcceptance {
+  ip: string;
+  acceptedAt: Date;
+  mandateVersionId: string;
+}
+
+export const NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX = "Cannot provision a card for mandate";
+
+/**
+ * D-38: `individual.card_issuing.user_terms_acceptance` is the cardholder's
+ * own legal acceptance of Stripe's Issuing terms -- a fact about the
+ * cardholder, not about Waysafe, and Waysafe must never manufacture it (no
+ * `Date.now()`, no placeholder IP). The only legitimate source is the
+ * moment the principal actually authenticated this mandate version over
+ * WebAuthn (D-20): a real signature from a real request, with a real IP
+ * and a real timestamp, captured exactly once by
+ * `webauthn/service.ts`'s `completeMandateAuthentication` and persisted on
+ * the MandateVersion (`authenticatedAt`/`authenticationIp` --
+ * `AuthorizationRepository.activateMandate`). If the mandate was never
+ * authenticated, there is no acceptance on file, and provisioning must
+ * refuse outright rather than invent one.
+ */
+async function requireCardIssuingTermsAcceptance(
+  authorization: AuthorizationRepository,
+  mandateId: string,
+): Promise<CardIssuingTermsAcceptance> {
+  const detail = await authorization.getMandateDetail(mandateId);
+  if (!detail || !detail.authenticatedAt || !detail.authenticationIp) {
+    throw new Error(
+      `${NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX} ${mandateId}: it has never been authenticated by its principal ` +
+        "(D-38). Stripe Issuing requires the cardholder's own acceptance of its Issuing terms, sourced only " +
+        "from that authentication -- Waysafe will not synthesize one. Complete the mandate's WebAuthn " +
+        "authentication first.",
+    );
+  }
+  return {
+    ip: detail.authenticationIp,
+    acceptedAt: new Date(detail.authenticatedAt),
+    mandateVersionId: detail.mandateVersionId,
+  };
+}
+
 /**
  * Creates a Stripe Issuing cardholder and card whose spend authority *is*
  * the named mandate, and the Instrument row (D-35) that makes that spend
@@ -125,10 +167,19 @@ export function financialAccountStatusFromError(err: unknown): string | null {
  * from the SDK's types. A financial account also needs a phone number on
  * the cardholder before Stripe will attach a card to it at all (3DS), which
  * this account's default path never required -- hence `cardholderPhone`.
+ *
+ * D-38: the cardholder also needs `individual.card_issuing.user_terms_acceptance`
+ * -- see `requireCardIssuingTermsAcceptance` for where that comes from and
+ * why provisioning refuses rather than defaulting it. Once the card exists,
+ * the acceptance is recorded as its own evidence event
+ * (`mandate.card_issuing_terms_accepted`), separate from
+ * `mandate.authenticated`, so a receipt can show exactly when and from
+ * where the principal's acceptance was asserted to Stripe -- not merely
+ * when the mandate itself was authenticated.
  */
 export async function provisionCardForMandate(
   stripe: Stripe,
-  instruments: InstrumentRepository,
+  repos: IssuingEnforcementRepos,
   params: {
     organizationId: string;
     mandateId: string;
@@ -140,10 +191,20 @@ export async function provisionCardForMandate(
   now: Date,
 ): Promise<ProvisionedCard> {
   const financialAccount = requireIssuingFinancialAccount();
+  const acceptance = await requireCardIssuingTermsAcceptance(repos.authorization, params.mandateId);
 
   const cardholder = await stripe.issuing.cardholders.create({
     name: params.cardholderName,
     phone_number: params.cardholderPhone,
+    type: "individual",
+    individual: {
+      card_issuing: {
+        user_terms_acceptance: {
+          ip: acceptance.ip,
+          date: Math.floor(acceptance.acceptedAt.getTime() / 1000),
+        },
+      },
+    },
     billing: { address: params.billingAddress },
     metadata: { waysafe_mandate_id: params.mandateId },
   });
@@ -156,7 +217,7 @@ export async function provisionCardForMandate(
     metadata: { waysafe_mandate_id: params.mandateId },
   } as CardCreateParamsWithFinancialAccountV2);
 
-  const instrument = await instruments.createInstrument(
+  const instrument = await repos.instruments.createInstrument(
     {
       organizationId: params.organizationId,
       mandateId: params.mandateId,
@@ -169,6 +230,21 @@ export async function provisionCardForMandate(
   await stripe.issuing.cards.update(card.id, {
     metadata: { waysafe_mandate_id: params.mandateId, waysafe_instrument_id: instrument.id },
   });
+
+  await repos.evidence.withOrganizationLock(params.organizationId, () =>
+    repos.evidence.appendEvent({
+      organizationId: params.organizationId,
+      type: "mandate.card_issuing_terms_accepted",
+      subjectType: "mandate_version",
+      subjectId: acceptance.mandateVersionId,
+      payload: {
+        ip: acceptance.ip,
+        accepted_at: acceptance.acceptedAt.toISOString(),
+        cardholder_id: cardholder.id,
+      },
+      now,
+    }),
+  );
 
   return { cardholderId: cardholder.id, cardId: card.id, instrumentId: instrument.id };
 }

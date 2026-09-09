@@ -208,6 +208,11 @@ model MandateVersion {
   assumptions String[]
 
   authenticatedAt         DateTime?
+  /// The request IP the principal authenticated this version from (D-38).
+  /// Set exactly once, alongside authenticatedAt, by the same
+  /// AuthorizationRepository.activateMandate call -- never backfilled or
+  /// defaulted afterward.
+  authenticationIp         String?
   authenticationEvidenceId String?
 
   createdAt DateTime @default(now())

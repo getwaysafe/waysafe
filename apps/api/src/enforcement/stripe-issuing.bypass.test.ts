@@ -51,6 +51,7 @@ import { InMemoryWebauthnRepository } from "../webauthn/in-memory-repository.js"
 import { InMemoryProviderEventRepository } from "../webhooks/in-memory-repository.js";
 import {
   MISSING_FINANCIAL_ACCOUNT_ENV_MESSAGE,
+  NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX,
   financialAccountStatusFromError,
   probeStripeIssuingKey,
   provisionCardForMandate,
@@ -161,7 +162,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       try {
         ({ cardId } = await provisionCardForMandate(
           stripe,
-          instruments,
+          { authorization: repos.authorization, instruments, evidence: repos.evidence },
           {
             organizationId: ORG,
             mandateId,
@@ -202,6 +203,18 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
               `This suite does not fund or activate accounts; see ` +
               `https://docs.stripe.com/api/v2/money-management/financial-accounts for how one reaches "active".`,
           );
+          ctx.skip();
+          return;
+        }
+
+        // Reason 3 (D-38): the mandate itself was never authenticated, so
+        // there is no real acceptance of Stripe's Issuing terms to send --
+        // Waysafe refuses to provision rather than synthesize one. Should
+        // not happen with this suite's default-seeded mandate (seedMandate
+        // stamps an authenticationIp unless told otherwise), but reported
+        // distinctly rather than folded into the catch-all if it ever does.
+        if (message.startsWith(NO_CARD_ISSUING_TERMS_ACCEPTANCE_PREFIX)) {
+          console.warn(`SKIPPED: ${message}`);
           ctx.skip();
           return;
         }

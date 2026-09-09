@@ -40,6 +40,7 @@ const ORG = "org_test";
 const PRINCIPAL = "prin_test";
 const AGENT = "agt_test";
 const NOW = new Date("2026-08-24T12:00:00.000Z");
+const TEST_IP = "203.0.113.10";
 
 function repos(): WebauthnServiceRepos & { authorization: InMemoryAuthorizationRepository } {
   return {
@@ -185,6 +186,7 @@ describe("mandate authentication and activation (D-20)", () => {
         mandateVersionId,
         policyHash,
         response: assertion,
+        ip: TEST_IP,
       },
       NOW,
     );
@@ -204,6 +206,13 @@ describe("mandate authentication and activation (D-20)", () => {
 
     const events = await r.evidence.listForOrganization(ORG);
     expect(events.map((e) => e.type)).toContain("mandate.authenticated");
+
+    // D-38: the real request IP is persisted on the mandate version
+    // alongside authenticatedAt, not just passed through and dropped --
+    // this is the only place `provisionCardForMandate` can later read a
+    // genuine acceptance from.
+    const detail = await r.authorization.getMandateDetail(mandateId);
+    expect(detail?.authenticationIp).toBe(TEST_IP);
   });
 
   it("THE ATTACK: a reused authentication challenge is rejected", async () => {
@@ -224,13 +233,13 @@ describe("mandate authentication and activation (D-20)", () => {
     const first = await completeMandateAuthentication(
       r,
       CONFIG,
-      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: assertion },
+      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: assertion, ip: TEST_IP },
       NOW,
     );
     const second = await completeMandateAuthentication(
       r,
       CONFIG,
-      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: assertion },
+      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: assertion, ip: TEST_IP },
       new Date(NOW.getTime() + 1000),
     );
 
@@ -291,6 +300,7 @@ describe("mandate authentication and activation (D-20)", () => {
         mandateVersionId: mandateB.mandateVersionId,
         policyHash: mandateB.policyHash,
         response: assertionForA,
+        ip: TEST_IP,
       },
       NOW,
     );
@@ -322,7 +332,7 @@ describe("mandate authentication and activation (D-20)", () => {
     const rejected = await completeMandateAuthentication(
       r,
       CONFIG,
-      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: forgedAssertion },
+      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: forgedAssertion, ip: TEST_IP },
       NOW,
     );
     expect(rejected.kind).toBe("rejected");
@@ -333,7 +343,7 @@ describe("mandate authentication and activation (D-20)", () => {
     const activated = await completeMandateAuthentication(
       r,
       CONFIG,
-      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: realAssertion },
+      { organizationId: ORG, principalId: PRINCIPAL, mandateId, mandateVersionId, policyHash, response: realAssertion, ip: TEST_IP },
       NOW,
     );
     expect(activated.kind).toBe("activated");

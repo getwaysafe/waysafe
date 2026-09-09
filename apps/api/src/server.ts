@@ -622,6 +622,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         mandateVersionId: summary.mandateVersionId,
         policyHash: summary.policyHash,
         response: body.data.response as unknown as AuthenticationResponseJSON,
+        ip: request.ip,
       },
       now,
     );
