@@ -159,14 +159,30 @@ detail page renders `actor_kind`, and for an instrument actor, its rail
 and a masked `external_ref` via a new org-scoped `GET /v1/instruments/:id`
 and `Waysafe.getInstrument`; the list page shows `actor_kind` and a
 truncated reference without the per-row lookup that showing rail there
-would cost). The full suite is green: `npm test` has no
-failing tests as of `D-39`. This environment's financial account
+would cost), and the x402 enforcement adapter (`D-40`: `EnforcementAdapter`
+for x402, Waysafe as payer-side signer — merchant identity gained
+`MerchantScheme.ONCHAIN_ADDRESS` (the `payTo` address, D-3/D-34 rules
+applied unchanged: rail-attested VERIFIED, agent-attested caps at
+ASSERTED), and `handleX402PaymentRequest` never accepts payment
+requirements from a caller, only a `resourceUrl` to independently fetch,
+closing the same laundering attack D-34 closed for `psp_account`/
+`network_mid`. D-40 also surfaces, rather than resolves, a real custody
+tension: x402's standard signing flow is single-key by construction, so
+there is no way to make Waysafe a required co-signer without either
+holding the payer's key (forbidden by non-negotiable #9) or leaving the
+agent advisory (the OQ-10 hole); `toResponse` therefore produces a
+co-signature that is cryptographically necessary but not sufficient to
+move funds, and the 2-of-2 smart account that would close the gap is
+deliberately not built here — see D-40 and its update to OQ-10). The full
+suite is green: `npm test` has no failing tests as of `D-40`. This
+environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
 `status: "pending"`, so the live bypass test self-reports SKIPPED with that
 status rather than a live pass — that is expected, not a failure, and
 nothing in this codebase funds or activates it automatically. `OQ-7`
 (per-unit limits vs. correcting the PRD's example) is the one open
-question left.
+question with no partial answer on record; `OQ-10`'s x402 half is now
+tracked directly against D-40 rather than left purely open.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

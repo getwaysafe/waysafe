@@ -2649,6 +2649,179 @@ typecheck`, `npm run build -w @waysafe/dashboard`, and the full `npm test`
 
 ---
 
+## D-40 — The x402 enforcement adapter: Waysafe as payer-side signer, and the custody tension it surfaces rather than resolves
+
+D-32 named this shape and left it unbuilt: "x402: Waysafe as payer-side
+signer, producing the payment header only against a decision." OQ-10
+(still open below) had already flagged the reason nobody had built it yet:
+"in x402 the *payer* signs the payment... If the agent does [hold that
+key], Waysafe on that rail is advisory by construction, whatever the
+deployment." Building the adapter meant confronting that sentence
+directly, and non-negotiable #9's own custody clause is explicit that the
+easy way out -- Waysafe holding the payer's key -- is not available:
+"Never hold a key that can spend alone... Waysafe is a required signer,
+never a custodian."
+
+**The attack this adapter closes, D-34's rule applied to a rail with no
+synchronous network callback.** Every other enforcement adapter
+(`stripe-issuing.ts`) is *called* by its rail -- Stripe's own webhook
+supplies `merchant_data`, so "rail-attested" is honest because a third
+party, not the agent, put the value on the wire. x402 has no equivalent
+caller: nothing rings Waysafe's doorbell. So `handleX402PaymentRequest`
+(`apps/api/src/enforcement/x402.ts`) never accepts payment requirements
+from anything upstream at all -- its only inputs are an `instrumentRef`
+(which mandate is paying, resolved from a real `Instrument` row, never a
+bare string) and a `resourceUrl` (a location, not a claim about what's
+there). It fetches the 402 itself, via an injectable `X402Fetcher`, and
+*that* result -- never anything a caller supplied -- is what
+`resolveMerchant()` sees, attested `"rail"`. An agent that handed Waysafe
+its own copy of a 402 response, hoping to fabricate a `payTo` sitting on
+an allowlist, has no code path to do so: there is no parameter here for
+payment requirements, only a URL to independently fetch.
+
+**Merchant identity: a new scheme, D-3's table extended by one row.**
+`merchant.ts` gains `MerchantScheme.ONCHAIN_ADDRESS` and
+`MerchantAssertion.onchain_address` -- the `payTo` address is where the
+money actually settles, the same reasoning that already makes
+`psp_account` the strongest signal available on the card rail.
+`resolveMerchant()`'s D-34 rule applies unchanged: rail-attested reaches
+VERIFIED, agent-attested caps at ASSERTED, tested in `merchant.test.ts`
+with the same paired "verified / THE ATTACK" cases every other identity
+scheme already has (resolution and allowlist levels both). The resource
+host rides on the existing `domain` scheme -- no changes needed there,
+and it can independently reach VERIFIED via the merchant directory, same
+as any other domain.
+
+**Money: a second decimal scale, converted without ever touching a
+float.** x402's `maxAmountRequired` is atomic units of `asset` (e.g. a
+6-decimal USDC), not USD cents -- a different scale than D-2 already
+governs, not a violation of it. `assetAtomicToCents` does the conversion
+in pure `BigInt` arithmetic, and only when the requirement states its own
+`extra.decimals`: guessing a token's decimals from its address would mean
+trusting an unverified claim about which asset this even is, so a missing
+or non-numeric `decimals` makes `parseRequest` return `null` (nothing
+parseable) rather than default one. This restricts the MVP to assets that
+say their own decimals in `extra` -- documented scope, the same "USD-only
+for now" stance `money.ts` already takes for currency.
+
+**The custody constraint -- surfaced, not resolved, per the task that
+produced this decision.** x402's standard flow (EIP-3009
+`transferWithAuthorization`, or a plain EOA signing a transfer) is a
+single-signature scheme by construction: whoever holds *the* key that
+signs the transfer can move the funds alone. There is no way to bolt "a
+required co-signer" onto that without either (a) Waysafe holding the
+payer's key -- custodial, exactly what non-negotiable #9 forbids -- or
+(b) the agent holding it -- advisory, the exact OQ-10 hole D-32 exists to
+close. This adapter does neither. `X402Adapter.toResponse` produces, on a
+genuine ALLOW only (STEP_UP fails closed here too, mirroring D-33 point
+4 -- there is no channel to put a human in front of a decision inside one
+synchronous HTTP response any more than inside Stripe's ~2-second
+window), an `X402CoSignature`: Waysafe's own Ed25519 signature over the
+payment intent (`pay_to`, `asset`, `network`, `amount_atomic`, `resource`,
+`expires_at`), signed with a key (`x402-signing-key.ts`,
+`WAYSAFE_X402_COSIGNER_KEY`) deliberately separate from the evidence
+chain's signing key -- same cryptography, different trust boundary; see
+that file's doc comment for why conflating them would be a modeling
+mistake, not just an inconvenience. This is *necessary* (nothing stands
+in for it; a forged signature never verifies against Waysafe's real
+public key -- `x402.bypass.test.ts` part 1) but structurally
+*not sufficient*: the co-signature carries no field that is a signed
+transfer authorization over the asset contract, so it cannot move funds
+by itself (`x402.bypass.test.ts` part 2 enumerates every field the type
+actually has and confirms none of them is one).
+
+**The smallest payer-account design that would close the gap, not built
+here.** A 2-of-2 smart account per mandate (ERC-4337 or Safe-style,
+threshold 2): one owner slot a session key scoped to the mandate and held
+by the agent's runtime -- inert alone, the same shape a Stripe-tokenized
+card already has (D-13) -- the other owner slot this adapter's signing
+key. Neither half alone satisfies the account's validator; both together,
+which only happens when `evaluate()` said ALLOW, does.
+`provisionX402InstrumentForMandate` creates the `Instrument` row this
+design needs a home for, with a placeholder `external_ref`
+(`pending-2of2-account:<mandateId>`) that says so explicitly rather than
+implying a real payer account exists. Deploying that account -- the
+"custodial version" the task asked not to build -- is out of scope here,
+deliberately; `x402.bypass.test.ts`'s third, self-skipping part
+(`test-support/x402-gate.ts`, gated on `WAYSAFE_X402_LIVE_PAYER_ACCOUNT`)
+names exactly the proof this leaves undone: that a forged envelope
+combining a genuine Waysafe co-signature with a fabricated session-key
+signature is actually rejected on-chain. It cannot pass today because
+nothing to reject it against is deployed, and it self-skips rather than
+faking a pass, per CLAUDE.md's testing posture.
+
+**Ledger and evidence, mirroring D-35 exactly.** An ALLOW writes a real
+`RESERVATION` inside the same `withMandateLock` acquisition that read the
+spend snapshot, attributed to the `Instrument` (`actorKind: "instrument"`)
+-- D-4's row lock now covers x402-rail spend the same way it already
+covers card-rail spend. DENY and a fail-closed STEP_UP write no ledger
+entry. `gateMandateStatus` is a deliberate, separate copy of
+`stripe-issuing.ts`'s function of the same name -- narrower than
+`resolveMandateGate` for the identical reason (no agent to bind or
+suspend on a rail-initiated decision) -- not shared, since importing from
+a sibling rail adapter for five lines would create a dependency between
+rails for no real reuse. Every decision, ALLOW or not, appends an
+`enforcement.x402.decision` evidence event.
+
+**Tests, per the task's own ordering (written before this summary).**
+`packages/core/src/merchant.test.ts`: four new `onchain_address` cases,
+paired rail/agent attestation at both the resolution and allowlist
+levels, same shape as D-34's `psp_account`/`network_mid` coverage.
+`apps/api/src/enforcement/x402.test.ts` (offline, no network, no key --
+20 cases): adapter mapping and amount conversion, THE ATTACK (the
+merchant evaluated is always whatever the injected fetcher returned, never
+anything a caller of `handleX402PaymentRequest` supplied directly),
+per-transaction and cumulative limits, mandate-lifecycle gating, the
+missing-instrument and empty-`accepts` failure paths (the latter now
+routed through the normal evidenced pipeline rather than silently
+dropped, fixed during review of this same change), and
+`provisionX402InstrumentForMandate`. `apps/api/src/enforcement/
+x402.bypass.test.ts`: the two offline, always-run cryptographic proofs
+described above, plus the third, honestly-skipped on-chain proof.
+
+**A real bug caught and fixed before this ever shipped, worth recording
+because it's exactly the kind of mistake this design invites.** An
+earlier draft of `toResponse` included the not-yet-created authorization
+row's id inside the *signed* payload, then mutated it afterward once
+`handleX402PaymentRequest` learned the real id -- which would have
+silently invalidated every co-signature the moment its id was filled in,
+since the signature covers the payload as it was at signing time.
+`X402CoSignaturePayload` now deliberately excludes `authorization_id`;
+`X402CoSignature` carries it unsigned, for evidence traceability only.
+Caught by writing the co-signature verification test before wiring the
+mutation, not by inspection -- the exact reason CLAUDE.md's testing
+posture asks for tests before implementation on this path.
+
+**Change cost if wrong:** low for the code shipped here -- the interface
+is additive (a new `EnforcementAdapter` implementation, a new merchant
+scheme, no changes to `RailCapability`, `PaymentAdapter`, or `evaluate()`,
+as scoped). The custody question left open is the expensive one: if the
+answer turns out to require the agent holding the session key in a way
+that makes real-world key-scoping weaker than this design assumes, or if
+a 2-of-2 smart account proves impractical on the chains x402 actually
+targets, the honest fallback is documenting x402 as preflight-only (D-32's
+own vocabulary) until an account design that satisfies non-negotiable #9
+exists -- not quietly shipping the custodial version this decision
+declined to build.
+
+Implemented in `packages/core/src/merchant.ts`
+(`MerchantScheme.ONCHAIN_ADDRESS`, `MerchantAssertion.onchain_address`,
+`resolveMerchant`'s new branch, `resolution_source: "onchain"`),
+`apps/api/src/enforcement/x402.ts` (new: `X402Adapter`,
+`handleX402PaymentRequest`, `provisionX402InstrumentForMandate`,
+`X402Fetcher`/`createHttpX402Fetcher`, the co-signature sign/verify
+helpers), `apps/api/src/enforcement/x402-signing-key.ts` (new),
+`apps/api/src/enforcement/test-support/x402-gate.ts` (new),
+`apps/api/src/keygen.ts` (now prints both signing keys), `.env.example`
+(`WAYSAFE_X402_COSIGNER_KEY`). Tested in `packages/core/src/merchant.test.ts`
+(4 new cases), `apps/api/src/enforcement/x402.test.ts` (new, 20 cases),
+`apps/api/src/enforcement/x402.bypass.test.ts` (new, 3 run + 1 honest
+skip). `npm run typecheck`, `npm run build`, and the full `npm test` (426
+passed, 12 skipped -- the same pre-existing skips D-39 left, plus this
+file's own new honest skip) all ran clean.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -2837,6 +3010,18 @@ persistence, not just the demo.**
 required signer on every rail, never a custodian and never advisory; an
 agent's cooperation is never a control (non-negotiable #9).** Left in
 place, unedited below, so the original reasoning survives.
+
+**The x402 half of this question, named explicitly below ("in x402 the
+*payer* signs the payment... If the agent does, Waysafe on that rail is
+advisory by construction"), is addressed but not closed by D-40.** D-40
+builds the adapter and proves the two things that can be proven without a
+real payer account deployed (forging Waysafe's signature is impossible;
+Waysafe's genuine signature alone can't move funds either) but explicitly
+declines to deploy the 2-of-2 smart account that would make Waysafe's
+co-signature actually load-bearing on-chain -- see D-40's own "custody
+constraint" section. Until that account exists, x402 remains the one rail
+where this question's honest answer is still "it depends which key the
+agent holds," same as it was when this was written.
 
 Found working OQ-3 (Sep 2026), reading `packages/sdk/src/index.ts` against
 the three integration shapes OQ-3 names. The SDK's I-10 neutrality means

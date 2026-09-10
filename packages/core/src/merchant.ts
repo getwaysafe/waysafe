@@ -39,6 +39,11 @@ import { z } from "zod";
  * - `mcc`            ISO-18245 merchant category code. Categorical, not
  *                    identity — usable for category rules, never for allowlists.
  * - `name`           free text. Never sufficient on its own.
+ * - `onchain_address` a payee's on-chain address (D-40, x402) — the address
+ *                    the payment itself actually settles to. Same trust
+ *                    class as `psp_account`/`network_mid`: strong when a
+ *                    rail attested it, exactly as fabricable as a `name`
+ *                    claim when an agent did (D-34 applies identically).
  */
 export const MerchantScheme = {
   DOMAIN: "domain",
@@ -46,6 +51,7 @@ export const MerchantScheme = {
   NETWORK_MID: "network_mid",
   MCC: "mcc",
   NAME: "name",
+  ONCHAIN_ADDRESS: "onchain_address",
 } as const;
 
 export type MerchantScheme =
@@ -130,6 +136,9 @@ export const MerchantAssertionSchema = z.object({
   psp_account: z.string().min(1).optional(),
   network_mid: z.string().min(1).optional(),
   mcc: z.string().regex(/^\d{4}$/, "MCC must be four digits").optional(),
+  /** On-chain payee address (D-40, x402), e.g. an EVM `payTo`. Compared
+   * case-insensitively, same as every non-domain scheme. */
+  onchain_address: z.string().min(1).optional(),
 });
 
 export type MerchantAssertion = z.infer<typeof MerchantAssertionSchema>;
@@ -153,7 +162,7 @@ export interface ResolvedMerchant {
   /** Display name for receipts. */
   display_name?: string;
   /** How resolution happened, for the evidence record. */
-  resolution_source: "psp" | "directory" | "assertion" | "network" | "none";
+  resolution_source: "psp" | "directory" | "assertion" | "network" | "onchain" | "none";
 }
 
 /** Schemes that can, on their own, satisfy an allowlist entry. */
@@ -161,6 +170,7 @@ const IDENTITY_SCHEMES: MerchantScheme[] = [
   MerchantScheme.PSP_ACCOUNT,
   MerchantScheme.NETWORK_MID,
   MerchantScheme.DOMAIN,
+  MerchantScheme.ONCHAIN_ADDRESS,
 ];
 
 export function isIdentityScheme(scheme: MerchantScheme): boolean {
@@ -262,12 +272,16 @@ export function matchesDenylist(
  *      actually able to satisfy an allowlist per D-3's table, instead of
  *      forever capping at STEP_UP). Agent-attested -> ASSERTED at most
  *      (D-34), same reasoning as psp_account above.
- *   3. Known-merchant directory hit on domain -> VERIFIED, regardless of
+ *   3. On-chain payee address (onchain_address), rail-attested -> VERIFIED
+ *      (D-40: same corroboration class as psp_account/network_mid -- it's
+ *      where the money actually settles). Agent-attested -> ASSERTED at
+ *      most (D-34), identical reasoning.
+ *   4. Known-merchant directory hit on domain -> VERIFIED, regardless of
  *      attestation source (the corroboration is Waysafe's own directory
  *      lookup, not a claim about who supplied the domain string).
- *   4. Domain present but unknown -> ASSERTED
- *   5. Name only -> ASSERTED, with no identity ref at all
- *   6. Nothing usable -> UNKNOWN
+ *   5. Domain present but unknown -> ASSERTED
+ *   6. Name only -> ASSERTED, with no identity ref at all
+ *   7. Nothing usable -> UNKNOWN
  */
 export function resolveMerchant(
   assertion: MerchantAssertion,
@@ -318,6 +332,27 @@ export function resolveMerchant(
       }
       if (mcc && mccSource === "assertion") {
         mccSource = "network";
+      }
+    } else if (trust === MerchantTrust.UNKNOWN) {
+      trust = MerchantTrust.ASSERTED;
+      resolutionSource = "assertion";
+    }
+  }
+
+  if (assertion.onchain_address) {
+    refs.push({
+      scheme: MerchantScheme.ONCHAIN_ADDRESS,
+      value: assertion.onchain_address,
+    });
+    if (attestedByRail) {
+      // D-40: the same corroboration class as psp_account/network_mid --
+      // the payee address a rail's own callback reports is where the money
+      // actually settles, not something the party requesting the payment
+      // could fabricate. Only holds when the rail itself is the source
+      // (D-34); an agent typing the same address proves nothing.
+      if (trust !== MerchantTrust.VERIFIED) {
+        trust = MerchantTrust.VERIFIED;
+        resolutionSource = "onchain";
       }
     } else if (trust === MerchantTrust.UNKNOWN) {
       trust = MerchantTrust.ASSERTED;

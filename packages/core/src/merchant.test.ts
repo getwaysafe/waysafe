@@ -116,6 +116,30 @@ describe("merchant resolution", () => {
     expect(resolved.mcc).toBe("5943");
     expect(resolved.mcc_source).toBe("assertion");
   });
+
+  it("D-40: treats a rail-attested on-chain payee address as verified, same class as a PSP account", () => {
+    const resolved = resolveMerchant(
+      { onchain_address: "0xabc0000000000000000000000000000000def1" },
+      directory,
+      "rail",
+    );
+    expect(resolved.trust).toBe(MerchantTrust.VERIFIED);
+    expect(resolved.resolution_source).toBe("onchain");
+  });
+
+  it("THE ATTACK: D-40/D-34 -- an agent-attested on-chain payee address is only asserted, not verified", () => {
+    // Same class of attack D-34 closed for psp_account/network_mid: an agent
+    // relaying x402 payment requirements to Waysafe could type any payTo
+    // address, including a real, allowlisted one it read off someone else's
+    // receipt -- the field alone proves nothing about who put it there.
+    const resolved = resolveMerchant(
+      { onchain_address: "0xabc0000000000000000000000000000000def1" },
+      directory,
+      "agent",
+    );
+    expect(resolved.trust).toBe(MerchantTrust.ASSERTED);
+    expect(resolved.resolution_source).toBe("assertion");
+  });
 });
 
 describe("allowlist enforcement", () => {
@@ -187,6 +211,34 @@ describe("allowlist enforcement", () => {
       "rail",
     );
     const result = satisfiesAllowlist(nameAllowlist, resolved);
+    expect(result.matched).toBe(true);
+    expect(result.verified).toBe(false);
+  });
+
+  it("D-40: a rail-attested on-chain payee address can satisfy an allowlist entry of the same scheme", () => {
+    const onchainAllowlist: MerchantRef[] = [
+      { scheme: "onchain_address", value: "0xabc0000000000000000000000000000000def1" },
+    ];
+    const resolved = resolveMerchant(
+      { onchain_address: "0xabc0000000000000000000000000000000def1" },
+      directory,
+      "rail",
+    );
+    const result = satisfiesAllowlist(onchainAllowlist, resolved);
+    expect(result.matched).toBe(true);
+    expect(result.verified).toBe(true);
+  });
+
+  it("THE ATTACK: D-40/D-34 -- an agent-attested on-chain payee address matches the allowlist by value but is never verified", () => {
+    const onchainAllowlist: MerchantRef[] = [
+      { scheme: "onchain_address", value: "0xabc0000000000000000000000000000000def1" },
+    ];
+    const resolved = resolveMerchant(
+      { onchain_address: "0xabc0000000000000000000000000000000def1" },
+      directory,
+      "agent",
+    );
+    const result = satisfiesAllowlist(onchainAllowlist, resolved);
     expect(result.matched).toBe(true);
     expect(result.verified).toBe(false);
   });
