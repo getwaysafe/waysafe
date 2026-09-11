@@ -14,6 +14,7 @@
     "compile:record": "tsx --env-file-if-exists=../../.env src/record-fixture.ts",
     "keygen": "tsx src/keygen.ts",
     "deploy-x402-safe": "tsx --env-file-if-exists=../../.env src/enforcement/deploy-x402-safe.ts",
+    "demo:seed": "tsx --env-file-if-exists=../../.env src/demo-seed.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {

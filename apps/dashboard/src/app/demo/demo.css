@@ -1,0 +1,202 @@
+/* D-42: the /demo page's own styling -- dark, large type, 16:9, no page
+   scroll at 1440px wide. Scoped to this route via demo/layout.tsx; never
+   applied to the rest of the dashboard. */
+
+.demo-root {
+  height: 100vh;
+  width: 100vw;
+  box-sizing: border-box;
+  background: #05070a;
+  color: #e6edf3;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 28px;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.demo-topbar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex: 0 0 auto;
+}
+
+.demo-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #f3f6fa;
+}
+
+.demo-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #7d8797;
+}
+
+.demo-reset {
+  background: #1c2430;
+  color: #cdd6e0;
+  border: 1px solid #2b3542;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.demo-reset:hover {
+  background: #232d3a;
+}
+
+.demo-caption {
+  flex: 0 0 auto;
+  font-size: 26px;
+  font-weight: 600;
+  color: #f3f6fa;
+  line-height: 1.25;
+  min-height: 1.6em;
+}
+
+.demo-scene-dots {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.demo-scene-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2b3542;
+}
+.demo-scene-dot--active {
+  background: #5eead4;
+}
+
+.demo-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 20px;
+}
+
+.demo-left {
+  flex: 0 0 42%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.demo-right {
+  flex: 1;
+  min-width: 0;
+  background: #0a0e14;
+  border: 1px solid #1a2230;
+  border-radius: 12px;
+  padding: 14px 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.demo-card {
+  background: #10151d;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 16px 18px;
+  min-height: 0;
+}
+
+.demo-card-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #7d8797;
+  margin-bottom: 8px;
+}
+
+.demo-card-body {
+  font-size: 15px;
+  color: #dde4ec;
+  line-height: 1.5;
+}
+
+.demo-mono {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  color: #9fb0c3;
+  word-break: break-all;
+}
+
+.demo-badge {
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+.demo-badge--allow { background: #0f3d2e; color: #6ee7b7; }
+.demo-badge--deny { background: #3d1414; color: #fca5a5; }
+.demo-badge--rejected { background: #3d2a0f; color: #fbbf24; }
+.demo-badge--pending { background: #1c2430; color: #93a2b6; }
+
+.demo-link {
+  color: #7dd3fc;
+  text-decoration: none;
+}
+.demo-link:hover {
+  text-decoration: underline;
+}
+
+.demo-footer {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #5c6675;
+  display: flex;
+  justify-content: space-between;
+}
+
+.demo-log-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid #10151d;
+}
+.demo-log-kind {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #5c6675;
+  min-width: 3.5em;
+}
+.demo-log-line--success .demo-log-kind { color: #6ee7b7; }
+.demo-log-line--warn .demo-log-kind { color: #fbbf24; }
+.demo-log-line--error .demo-log-kind { color: #fca5a5; }
+.demo-log-line--chain .demo-log-kind { color: #a78bfa; }
+.demo-log-line--http .demo-log-kind { color: #7dd3fc; }
+
+.demo-log-label {
+  color: #cdd6e0;
+}
+.demo-log-detail {
+  flex-basis: 100%;
+  margin: 2px 0 0 3.5em;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #7d8797;
+  font-size: 12px;
+}
+.demo-log-link {
+  color: #7dd3fc;
+}
+
+.demo-verify-pass { color: #6ee7b7; font-weight: 700; }
+.demo-verify-fail { color: #fca5a5; font-weight: 700; }

@@ -3022,6 +3022,220 @@ included.
 
 ---
 
+## D-42 — The demo: a real settlement path for x402's fallback mode, and the routes D-40/D-41 built but never wired to HTTP
+
+The task: a screen-recordable demo proving, to a developer watching 60-90s
+of video, that an AI agent holding its own key cannot spend outside its
+mandate -- driving the real system end to end, nothing mocked except the
+three rejection cases D-41 already proves via `eth_call`. Building it
+surfaced a real gap: `handleX402PaymentRequest` (D-40) and the 2-of-2 Safe
+primitives (D-41) existed and were fully tested, but nothing had ever
+wired either one to an HTTP route, and nothing had ever combined D-40's
+off-chain co-signature with D-41's on-chain Safe into one settlement that
+actually moves funds on a genuine ALLOW. Both gaps are closed here, plus
+the demo built on top of them.
+
+**The settlement bridge -- closes the "facilitator integration" gap for
+the one mode this codebase can actually settle, not the standard one,
+which stays deferred.** `settleTwoOfTwoTransfer` (`apps/api/src/
+enforcement/x402-safe.ts`) is a session-key relay: the agent (the
+dashboard's own `agent-runtime.ts`, see below) independently fetches the
+same 402 Waysafe will fetch, builds the identical Safe transfer, and signs
+it with its own session key -- which never appears in this function, this
+file, or any file under `apps/api`. It sends Waysafe only `{nonce, signer,
+data}`, a partial signature over a transaction Waysafe reconstructs from
+its *own* independently-fetched `payTo`/`amount_atomic` (D-40's rule,
+unchanged), never from anything the caller asserts. Only `nonce` is taken
+from the caller, because a Safe nonce is chain bookkeeping with no bearing
+on who gets paid or how much -- a wrong one just makes `execTransaction`
+revert, the same honest failure mode as any stale Safe transaction, not a
+security gap. On a genuine ALLOW, Waysafe adds its own
+`WAYSAFE_SAFE_COSIGNER_KEY` signature and broadcasts. This is still
+`X402_SAFE_SETTLEMENT_MODE`'s `erc20_transfer_fallback`, not the standard
+x402 "exact" facilitator flow -- that remains exactly as deferred as D-40
+and D-41 already left it, per the EIP-1271 finding neither decision
+reopens.
+
+**The new route: `POST /v1/enforcement/x402`.** Bearer-authenticated, same
+as `POST /v1/authorizations` -- the caller here is the agent's own
+runtime, and per D-40's own file comment that's not a weaker enforcement
+position: the agent cannot get itself co-signed by asserting payment
+requirements, only `handleX402PaymentRequest`'s own independent fetch ever
+reaches `resolveMerchant()`. Body: `{instrument_id, resource_url,
+session_signature?}`. Omitting `session_signature` reproduces D-40's
+original scope exactly -- a decision plus an off-chain co-signature,
+nothing settled on-chain -- so this is additive, not a change to what
+D-40 already shipped.
+
+**The other missing route: `POST /v1/instruments/x402`.** D-32 item 3 and
+D-40 described x402 instrument provisioning but never gave it a route,
+same gap card provisioning still has. Which `X402SafeDeployer` it uses is
+chosen entirely by server configuration (`getX402SafeDeployer` in
+server.ts), never by the request: the real per-mandate deployment path
+(D-41's `createOnChainSafeDeployer`) by default, or -- only when
+`WAYSAFE_X402_REUSE_LIVE_SAFE=1` is explicitly set -- a new
+`createReuseSafeDeployer` that returns the one already-deployed, already-
+funded `WAYSAFE_X402_LIVE_PAYER_ACCOUNT` Safe instead of deploying a fresh
+one. That reuse is for the demo only: deploying a new 2-of-2 Safe per
+mandate costs real gas and a confirmation wait per run, and the task's own
+requirement is a clean state *without redeploying* -- a fresh mandate
+(and a fresh Instrument row pointing at the same real Safe) is enough,
+since D-4's cumulative limits are scoped to the mandate, not the
+instrument. Ignoring the caller's requested owners in the reuse path is
+safe, not a shortcut on the security property: a mismatch would just make
+every subsequent 2-of-2 signature fail on-chain (a loud, honest failure),
+never a silent authority leak, since nothing about the threshold check
+itself is bypassed.
+
+**Two new `@waysafe/sdk` methods, and a deliberate exception to "reuse the
+SDK" for two other routes.** `provisionX402Instrument` and
+`enforceX402Payment` are added to the SDK -- both are real product
+surface. Two more routes exist only for this demo
+(`apps/api/src/demo/routes.ts`, mounted only when
+`WAYSAFE_ENABLE_DEMO_ROUTES=1`): a synthetic-authenticator mandate
+activation (`POST /v1/demo/mandates/:id/authenticate`, calling the same
+`webauthn/service.ts` functions and the same real `@simplewebauthn/server`
+verification `examples/demo.ts` already uses, just folded into one call
+instead of two HTTP round trips) and `POST /v1/enforcement/x402/
+bypass-proof` (the same `x402.bypass.test.ts` part 3 negative cases,
+exposed over HTTP so the live page can show them without shelling out to
+`npm test`). Neither is added to the SDK: the SDK is the product's
+developer contract, and permanently exposing "fake a WebAuthn ceremony"
+there for something gated off by default in production would misrepresent
+what the contract is. The dashboard calls these two with a plain `fetch`
+and the same Bearer credential instead.
+
+**Merchant identity for the demo mandate is on-chain, and attached
+separately from compilation on purpose -- not a fallback shortcut.** No
+compiler, real or fixture, can produce an `onchain_address` allowlist
+entry from natural language: a `payTo` address is infrastructure a policy
+author configures, the same way a real integration maps a human-readable
+merchant name to its actual payment endpoint out of band. `buildDemoPolicy`
+(`apps/dashboard/src/lib/demo/policy.ts`) always attaches
+`MERCHANT_POLICY` (the `GoodBeans API` `onchain_address` allowlist,
+`unlisted: "DENY"`) after compilation, whether compilation succeeded live
+or fell back -- this is how merchant identity for this rail always works,
+not a special case for when a model isn't available.
+
+**The demo instruction has no recorded fixture, and this environment has
+no `ANTHROPIC_API_KEY` -- so scene 0 genuinely exercises the fallback
+path, not just in theory.** `buildDemoPolicy` tries `compileMandate`
+first; a 422 (no fixture) or `needs_clarification` falls back to
+`handAuthoredPolicy()`, submitted via `POST /v1/policies/validate` --
+that route's own doc comment already sanctions a hand-authored policy;
+this is not a fabricated "recorded model output" standing in for a real
+one, which is what CLAUDE.md's testing posture actually warns against.
+With a real `ANTHROPIC_API_KEY` configured on the API server, scene 0
+compiles live instead, and the log says which happened. Verified in this
+session: with no key configured, the demo correctly falls back and every
+other scene still runs against a real, hand-validated policy.
+
+**The dashboard's "agent runtime" is written from scratch, not imported
+from `x402-safe.ts`, even though both use `@safe-global/protocol-kit`.**
+`apps/dashboard/src/lib/demo/agent-runtime.ts` holds
+`WAYSAFE_DEMO_AGENT_SESSION_KEY` and nothing else Waysafe-related, and
+never imports anything from `@waysafe/api`. A demo whose "agent" imported
+Waysafe's own server internals to sign its own payments would quietly
+undermine the story it's telling -- a real agent's runtime never would.
+Using the same open-source Safe library Waysafe's server happens to use is
+normal (it's the standard way to build a Safe transaction) and unrelated
+to that boundary.
+
+**Independent evidence verification runs in the actual browser, via
+WebCrypto -- not `@waysafe/sdk`'s own verifier, which cannot.**
+`verifyEvidenceIndependently` (and the `@waysafe/core` functions it wraps)
+call `node:crypto` directly and do not bundle for a browser. `apps/
+dashboard/src/lib/demo/browser-verify.ts` is a from-scratch
+reimplementation of the identical algorithm (`sortKeysDeep` +
+`JSON.stringify` canonicalization, SHA-256, Ed25519) using
+`crypto.subtle`, run client-side. Node's Ed25519 (`sign(null, ...)`) and
+WebCrypto's Ed25519 are the same RFC 8032 scheme with no conversion
+needed -- proven, not assumed: `browser-verify.test.ts` builds a chain
+with `@waysafe/core`'s own Node-side `computeEventHash`/`signEventHash`
+and verifies it with this file's WebCrypto implementation, including the
+flip-one-byte negative case the demo's own UI control exposes live.
+
+**The card rail scene is the honest placeholder the task asked for, not a
+faked Stripe scene.** `SCENES` (`apps/dashboard/src/lib/demo/scenes.ts`)
+includes a `card_rail` entry whose caption is exactly "card rail: pending
+Stripe sandbox activation (D-37)" -- this environment's Issuing financial
+account is still `status: "pending"` per D-37's own note, unchanged by
+this decision.
+
+**Verified live, in this session, against the real deployed infrastructure
+-- not just offline.** Ran all three processes (`npm run dev:api` with
+`WAYSAFE_ENABLE_DEMO_ROUTES=1` and `WAYSAFE_X402_REUSE_LIVE_SAFE=1`,
+`npm run demo:merchant`, `npm run dev:dashboard`) and drove the page in a
+real browser tab: scene 0 compiled (fell back offline, as expected with no
+`ANTHROPIC_API_KEY`), authenticated a real mandate, and provisioned an
+instrument pointing at the real Safe; scene 1 got a genuine ALLOW and a
+real `execTransaction` that confirmed on-chain (`status: "success"`,
+144690 gas) and actually moved 0.5 test USDC; scene 2 got a genuine DENY
+(`DENY_MERCHANT_NOT_ALLOWLISTED`) with no chain call; scene 3's three
+rejection cases all reverted on-chain for real (`GS020`/`GS026`), via
+`eth_call`, no gas spent; scene 4 verified the real evidence chain in the
+browser (`crypto.subtle`) against the real published public key, showed
+VERIFIED, then showed NOT VERIFIED after flipping one byte. Two demo
+constants (`SHINYGADGETS_PAY_TO`) were caught and fixed during this
+verification -- one was one hex character short of a valid 20-byte
+address, which `viem`'s `isAddress` correctly rejected; both merchant
+addresses are now real, checksummed, 40-hex-character addresses.
+
+**A secret-hygiene fix to `demo-seed.ts`, made for the same reason D-41
+already fixed `deploy-x402-safe.ts` once.** The first draft printed the
+newly-minted `WAYSAFE_DEMO_ORG_API_KEY` to stdout for a human to paste in
+-- wrong here for the identical reason D-41 gives: this script's output
+was about to be read by an agent (this session, running it on the
+operator's behalf) into a chat transcript, not only a human's own
+terminal. Fixed to write the credential directly into `apps/dashboard/
+.env.local` (the same `setEnvVar` pattern `deploy-x402-safe.ts` already
+established) and log only the key's non-secret prefix.
+
+**A real funding gap this session's own testing exposed, recorded so the
+next session doesn't mistake it for a regression.** Proving scene 1's
+settlement for real spent real (test) gas from `WAYSAFE_SAFE_COSIGNER_KEY`'s
+EOA; by the end of this session's verification, its balance is too low for
+`x402.bypass.test.ts`'s "genuine 2-of-2 transfer" case (the one broadcast
+case in that file) to succeed -- it now fails with `InsufficientFundsError`,
+not a code defect. The three negative cases in that same test (pure
+`eth_call`, no gas) and everything else still passes (464 passed, 1
+failed on funding, 1 skipped as before). Fund the cosigner EOA
+(`WAYSAFE_SAFE_COSIGNER_KEY`'s address) with a small amount of Amoy POL
+from a public faucet before running the live bypass test or recording
+scene 1 again.
+
+**Change cost if wrong:** low. Every change is additive -- two new SDK
+methods, two new product routes, one new demo/proof-support module gated
+off by default, one new exported Safe-primitive function, one new
+optional deployer variant. Nothing here changes `evaluate()`,
+`handleX402PaymentRequest`'s existing contract, or any already-shipped
+route's behavior when `session_signature` and the new env flags are
+absent.
+
+Implemented in `apps/api/src/enforcement/x402-safe.ts`
+(`createReuseSafeDeployer`, `settleTwoOfTwoTransfer`), `apps/api/src/
+server.ts` (`POST /v1/instruments/x402`, `POST /v1/enforcement/x402`,
+`getX402SafeDeployer`, demo-route mounting), `apps/api/src/demo/routes.ts`
+(new), `apps/api/src/demo-seed.ts` (new), `packages/sdk/src/index.ts`
+(`provisionX402Instrument`, `enforceX402Payment` and their types),
+`examples/demo-merchant.ts` (new), `apps/dashboard/src/lib/demo/*` (new:
+`scenes.ts`, `log.ts`, `LogPane.tsx`, `browser-verify.ts`, `constants.ts`,
+`policy.ts`, `waysafe-client.ts`, `agent-runtime.ts`),
+`apps/dashboard/src/app/demo/*` (new page), `apps/dashboard/src/app/api/
+demo/*` (new route handlers), `apps/dashboard/src/proxy.ts` (matcher
+excludes `/demo` and `/api/demo`), `.env.example` / `apps/dashboard/
+.env.example` (new demo env vars). Tested in `apps/dashboard/src/lib/
+demo/scenes.test.ts` (the scene state machine), `apps/dashboard/src/lib/
+demo/LogPane.test.tsx` (the log renderer and its formatting helpers,
+`renderToStaticMarkup`, same pattern `actor-fields.test.tsx` already
+uses), and `apps/dashboard/src/lib/demo/browser-verify.test.ts` (the
+WebCrypto verifier against `@waysafe/core`'s real Node-side signing).
+`npm run typecheck` and the full `npm test` ran clean except the funding
+gap noted above (464 passed, 1 failed on insufficient testnet gas, 1
+skipped -- the pre-existing D-37 SKIP).
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

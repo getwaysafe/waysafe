@@ -5,8 +5,10 @@ import type {
   AuthenticationResponseJSON,
   RegistrationResponseJSON,
 } from "@simplewebauthn/server";
+import type { Address, Hex } from "viem";
 import {
   AuthorizationRequestSchema,
+  Decision,
   EMPTY_DIRECTORY,
   buildConfirmation,
   createCompileContext,
@@ -49,6 +51,21 @@ import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository
 import type { ProviderEventRepository } from "./webhooks/types.js";
 import { handleStripeWebhook } from "./webhooks/service.js";
 import { StripeIssuingAdapter, handleIssuingAuthorizationRequest } from "./enforcement/stripe-issuing.js";
+import {
+  X402Adapter as X402EnforcementAdapter,
+  createHttpX402Fetcher,
+  handleX402PaymentRequest,
+  provisionX402InstrumentForMandate,
+  type X402SafeDeployer,
+} from "./enforcement/x402.js";
+import { loadOrGenerateX402SigningKey } from "./enforcement/x402-signing-key.js";
+import {
+  addressFromPrivateKey,
+  createOnChainSafeDeployer,
+  createReuseSafeDeployer,
+  settleTwoOfTwoTransfer,
+} from "./enforcement/x402-safe.js";
+import { registerDemoRoutes } from "./demo/routes.js";
 import { InMemoryWebauthnRepository } from "./webauthn/in-memory-repository.js";
 import type { WebauthnRepository } from "./webauthn/types.js";
 import {
@@ -111,6 +128,34 @@ const ExecuteBodySchema = z.object({
 
 const ListQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
+});
+
+/** D-42: provisions an x402 payer instrument for a mandate. `session_key_address`
+ * is the agent's own runtime key -- public by nature (an EVM address, not a
+ * secret), supplied by the caller because only the agent's own runtime
+ * knows what key it intends to sign payments with; the server never
+ * generates or holds it. */
+const ProvisionX402InstrumentBodySchema = z.object({
+  mandate_id: z.string().min(1),
+  session_key_address: z.string().regex(/^0x[0-9a-fA-F]{40}$/, "must be a 0x-prefixed EVM address"),
+});
+
+const SessionSignatureSchema = z.object({
+  nonce: z.number().int().nonnegative(),
+  signer: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  data: z.string().regex(/^0x[0-9a-fA-F]+$/),
+});
+
+/** D-42/D-40: the caller (the agent's own runtime) supplies only a location
+ * to fetch (`resource_url`) and which instrument is paying
+ * (`instrument_id`) -- never payment requirements themselves (THE ATTACK
+ * D-40 closes). `session_signature` is optional: omitting it gets exactly
+ * D-40's original scope back (a decision plus an off-chain co-signature,
+ * no on-chain settlement attempted). */
+const X402EnforcementBodySchema = z.object({
+  instrument_id: z.string().min(1),
+  resource_url: z.string().min(1),
+  session_signature: SessionSignatureSchema.optional(),
 });
 
 const DEFAULT_LIST_LIMIT = 50;
@@ -391,6 +436,38 @@ export function buildServer(options: BuildServerOptions = {}) {
     process.env.STRIPE_ISSUING_WEBHOOK_SECRET ??
     "whsec_dev_placeholder";
   const stripeIssuingAdapter = new StripeIssuingAdapter();
+
+  // D-40/D-42: the x402 enforcement adapter and its co-signing key. Not
+  // read from options -- unlike the Stripe adapters (registered per-app in
+  // `adapters`), x402 enforcement has always been wired directly against
+  // the environment (loadOrGenerateX402SigningKey already falls back to an
+  // ephemeral key with a warning, same convention as the evidence key).
+  const x402SigningKey = loadOrGenerateX402SigningKey((msg) => app.log.warn(msg));
+  const x402Adapter = new X402EnforcementAdapter(x402SigningKey);
+  const x402RpcUrl = process.env.POLYGON_AMOY_RPC_URL;
+  const x402SafeCosignerKey = process.env.WAYSAFE_SAFE_COSIGNER_KEY as Hex | undefined;
+
+  /**
+   * D-42: which `X402SafeDeployer` `POST /v1/instruments/x402` uses.
+   * `WAYSAFE_X402_REUSE_LIVE_SAFE=1` selects the demo's reuse deployer
+   * (`createReuseSafeDeployer`, x402-safe.ts's own doc comment explains why
+   * that's honest and not a shortcut on the security property) against
+   * `WAYSAFE_X402_LIVE_PAYER_ACCOUNT` -- the real Safe D-41 deployed and
+   * funded once, reused across demo runs rather than redeployed. Otherwise,
+   * whenever both the RPC and Waysafe's real secp256k1 Safe co-signer key
+   * are configured, this is the genuine per-mandate deployment path D-41
+   * built. With neither configured, this is undefined and the route below
+   * fails loudly rather than silently no-op'ing.
+   */
+  function getX402SafeDeployer(): X402SafeDeployer | undefined {
+    if (process.env.WAYSAFE_X402_REUSE_LIVE_SAFE === "1" && process.env.WAYSAFE_X402_LIVE_PAYER_ACCOUNT) {
+      return createReuseSafeDeployer(process.env.WAYSAFE_X402_LIVE_PAYER_ACCOUNT as Address);
+    }
+    if (x402RpcUrl && x402SafeCosignerKey) {
+      return createOnChainSafeDeployer({ rpcUrl: x402RpcUrl, cosignerPrivateKey: x402SafeCosignerKey });
+    }
+    return undefined;
+  }
 
   /**
    * Phase 4 auth rule: every route except /health and /v1/reason-codes
@@ -870,6 +947,79 @@ export function buildServer(options: BuildServerOptions = {}) {
     return reply.send(decision.response);
   });
 
+  /**
+   * D-32/D-40, wired for the first time (D-42): x402's enforcement
+   * chokepoint. Unlike the card rail, no third-party network calls Waysafe
+   * here -- the caller is the agent's own runtime, presenting its ordinary
+   * Bearer credential (D-18), same as `POST /v1/authorizations`. That's not
+   * a weaker enforcement position: per D-40's own file comment, the agent
+   * cannot get *itself* co-signed by asserting payment requirements --
+   * `handleX402PaymentRequest` only ever evaluates what Waysafe's own fetch
+   * of `resource_url` returned, never anything in this request body.
+   *
+   * `session_signature`, when present, is the agent's own Safe-transaction
+   * signature (never its private key) over the identical transfer Waysafe
+   * is about to independently reconstruct from its own fetch -- see
+   * `settleTwoOfTwoTransfer`'s doc comment (x402-safe.ts, D-42). Settlement
+   * is attempted only on a genuine ALLOW, and only when a signature was
+   * supplied; omitting it reproduces D-40's original scope exactly (a
+   * decision plus an off-chain co-signature, nothing on-chain).
+   */
+  app.post("/v1/enforcement/x402", async (request, reply) => {
+    const body = X402EnforcementBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+
+    const instrument = await repos.instruments.getInstrument(body.data.instrument_id);
+    if (!instrument || instrument.organization_id !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+
+    const decision = await handleX402PaymentRequest(
+      { authorization: repos.authorization, evidence: repos.evidence, instruments: repos.instruments },
+      x402Adapter,
+      createHttpX402Fetcher(),
+      { instrumentRef: body.data.instrument_id, resourceUrl: body.data.resource_url },
+      new Date(),
+    );
+
+    let settlement: { tx_hash: string } | { error: string } | null = null;
+    const coSignature = decision.response.co_signature;
+    if (decision.response.decision === Decision.ALLOW && coSignature && body.data.session_signature) {
+      if (!x402RpcUrl || !x402SafeCosignerKey) {
+        settlement = { error: "x402 settlement is not configured on this server (POLYGON_AMOY_RPC_URL / WAYSAFE_SAFE_COSIGNER_KEY)." };
+      } else {
+        try {
+          const txHash = await settleTwoOfTwoTransfer({
+            rpcUrl: x402RpcUrl,
+            safeAddress: instrument.external_ref as Address,
+            cosignerPrivateKey: x402SafeCosignerKey,
+            payTo: coSignature.pay_to as Address,
+            amountAtomic: BigInt(coSignature.amount_atomic),
+            nonce: body.data.session_signature.nonce,
+            agentSignature: {
+              signer: body.data.session_signature.signer as Address,
+              data: body.data.session_signature.data as Hex,
+            },
+          });
+          settlement = { tx_hash: txHash };
+        } catch (err) {
+          settlement = { error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+    }
+
+    return reply.send({
+      decision: decision.response.decision,
+      reason_codes: decision.response.reason_codes,
+      co_signature: decision.response.co_signature,
+      mandate_id: decision.mandateId,
+      safe_address: instrument.external_ref,
+      settlement,
+    });
+  });
+
   app.post("/v1/agents", async (request, reply) => {
     const body = CreateAgentBodySchema.safeParse(request.body);
     if (!body.success) {
@@ -976,6 +1126,53 @@ export function buildServer(options: BuildServerOptions = {}) {
     return reply.send(toMandateDetailJSON(mandate));
   });
 
+  /**
+   * D-42: provisions the x402 payer instrument D-32 item 3 and D-40
+   * described but never gave a route -- production onboarding friction
+   * (D-32's own words) rather than a self-serve call an agent makes on its
+   * own, same as card provisioning has no route of its own either; an org
+   * credential is the intended caller. Which `X402SafeDeployer` this uses
+   * is chosen purely by server configuration (`getX402SafeDeployer`), never
+   * by anything in the request -- a genuine per-mandate Safe deployment in
+   * production, or the demo's fixed, already-funded Safe when
+   * `WAYSAFE_X402_REUSE_LIVE_SAFE=1` is set.
+   */
+  app.post("/v1/instruments/x402", async (request, reply) => {
+    const body = ProvisionX402InstrumentBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+
+    const summary = await repos.authorization.getMandateSummary(body.data.mandate_id);
+    if (!summary || summary.organizationId !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+
+    const deployer = getX402SafeDeployer();
+    if (!deployer) {
+      return reply.code(500).send({
+        error: "not_configured",
+        message: "x402 Safe provisioning needs POLYGON_AMOY_RPC_URL and WAYSAFE_SAFE_COSIGNER_KEY " +
+          "(or WAYSAFE_X402_REUSE_LIVE_SAFE=1 with WAYSAFE_X402_LIVE_PAYER_ACCOUNT for the demo).",
+      });
+    }
+
+    const instrument = await provisionX402InstrumentForMandate(
+      { instruments: repos.instruments },
+      deployer,
+      {
+        organizationId: request.auth!.organizationId,
+        mandateId: body.data.mandate_id,
+        sessionKeyAddress: body.data.session_key_address,
+        cosignerAddress: x402SafeCosignerKey
+          ? addressFromPrivateKey(x402SafeCosignerKey)
+          : "0x0000000000000000000000000000000000000000",
+      },
+      new Date(),
+    );
+    return reply.code(201).send(toInstrumentJSON(instrument));
+  });
+
   /** So a dashboard receipt can show who acted (D-35): `getInstrument` is a
    * global lookup by design (see `InstrumentRepository`'s doc comment), so
    * the org check happens here, same pattern as `GET /v1/mandates/:id` --
@@ -1050,6 +1247,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   app.get("/v1/evidence/public-key", async (_request, reply) => {
     return reply.send({ algorithm: "Ed25519", public_key: repos.evidence.getPublicKey() });
   });
+
+  /**
+   * D-42: demo/proof-support routes only -- never mounted unless
+   * `WAYSAFE_ENABLE_DEMO_ROUTES=1` is explicitly set. See demo/routes.ts's
+   * own file comment for exactly what these do and why they're kept out of
+   * the default route surface.
+   */
+  if (process.env.WAYSAFE_ENABLE_DEMO_ROUTES === "1") {
+    registerDemoRoutes(app, { webauthnRepos, webauthnConfig, instruments: repos.instruments });
+  }
 
   return app;
 }

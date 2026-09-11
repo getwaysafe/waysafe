@@ -332,6 +332,94 @@ export function createOnChainSafeDeployer(params: { rpcUrl: string; cosignerPriv
   };
 }
 
+/**
+ * D-42: an `X402SafeDeployer` that never deploys anything -- it returns one
+ * fixed, already-deployed Safe address on every call. Exists for the demo
+ * page: deploying a fresh 2-of-2 Safe per mandate (the production path
+ * above) costs real gas and a confirmation wait per run, and the demo's own
+ * requirement is a clean state *without redeploying* -- a fresh mandate
+ * (and a fresh Instrument row pointing at the same real Safe) is enough,
+ * since a mandate's cumulative spend is scoped to the mandate, not the
+ * instrument (D-4). The Safe this points at must already be owned by
+ * exactly the two keys the demo's own signing paths use -- `deploy-x402-safe.ts`
+ * already established that pairing (`WAYSAFE_X402_TEST_SESSION_KEY`,
+ * `WAYSAFE_SAFE_COSIGNER_KEY`) -- so `owners` passed to `deploySafe` here is
+ * intentionally ignored rather than checked against it: a mismatch would
+ * simply make every subsequent 2-of-2 signature fail on-chain (a loud,
+ * honest failure), not a silent authority leak, since nothing about the
+ * threshold check itself is bypassed. Never use this for a real mandate
+ * outside the demo -- it is never selected unless `WAYSAFE_X402_REUSE_LIVE_SAFE`
+ * is explicitly set (see server.ts).
+ */
+export function createReuseSafeDeployer(safeAddress: Address): {
+  deploySafe(owners: SafeOwners): Promise<{ safeAddress: string }>;
+} {
+  return {
+    async deploySafe() {
+      return { safeAddress };
+    },
+  };
+}
+
+/**
+ * D-42: closes the settlement gap D-40 and D-41 both deliberately left
+ * deferred ("a real facilitator integration... remains explicitly
+ * deferred") for the one case this codebase can actually settle --
+ * `X402_SAFE_SETTLEMENT_MODE`'s `erc20_transfer_fallback`. Not the standard
+ * x402 "exact" scheme facilitator flow (still deferred, unchanged from
+ * D-41's own EIP-1271 finding): a bespoke relay specific to this fallback
+ * mode, where the agent signs with its own session key -- which never
+ * appears anywhere in this file, this process, or this codebase -- and
+ * Waysafe adds its own signature and broadcasts only once, from a real
+ * `evaluate()` ALLOW.
+ *
+ * `agentSignature` is the agent's own partial signature over the *exact*
+ * transaction this function reconstructs from `payTo`/`amountAtomic`
+ * (Waysafe's own independently-fetched values, per D-40 -- never anything
+ * the agent asserted) and `nonce` (taken from the caller because a Safe
+ * nonce is chain bookkeeping with no bearing on who gets paid or how much;
+ * if the agent's stated nonce is stale or wrong, `execTransaction` simply
+ * reverts on-chain -- the same honest failure mode as any other stale Safe
+ * transaction, not a security gap). If `agentSignature` doesn't correspond
+ * to a real signature over this exact reconstructed transaction, execution
+ * reverts the same way `x402.bypass.test.ts`'s forged-envelope case proves
+ * it must -- this function does not (and structurally cannot) special-case
+ * that; the chain is the only arbiter, exactly per this file's own design.
+ */
+export async function settleTwoOfTwoTransfer(params: {
+  rpcUrl: string;
+  safeAddress: Address;
+  cosignerPrivateKey: Hex;
+  payTo: Address;
+  amountAtomic: bigint;
+  nonce: number;
+  agentSignature: { signer: Address; data: Hex };
+}): Promise<Hex> {
+  await assertAmoyChainId(params.rpcUrl);
+
+  const transfer = buildUsdcTransfer(params.payTo, params.amountAtomic);
+  const kit = await Safe.init({
+    provider: params.rpcUrl,
+    signer: params.cosignerPrivateKey,
+    safeAddress: params.safeAddress,
+  });
+  const safeTransaction = await kit.createTransaction({
+    transactions: [transfer],
+    options: { nonce: params.nonce },
+  });
+  safeTransaction.addSignature(
+    new EthSafeSignature(params.agentSignature.signer, params.agentSignature.data, false),
+  );
+  const cosigned = await kit.signTransaction(safeTransaction);
+
+  return executeSafeTransaction({
+    rpcUrl: params.rpcUrl,
+    safeAddress: params.safeAddress,
+    executorPrivateKey: params.cosignerPrivateKey,
+    safeTransaction: cosigned,
+  });
+}
+
 /** The settlement fallback `X402_SAFE_SETTLEMENT_MODE` documents: a plain
  * ERC-20 `transfer(to, amount)` on Amoy's test USDC, to be wrapped in a
  * Safe transaction rather than sent directly (a Safe has no private key of

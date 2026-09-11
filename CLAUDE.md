@@ -71,7 +71,8 @@ packages/db       Prisma schema (Postgres)
 packages/sdk      TypeScript SDK — the developer contract (a preflight client, see #9)
 apps/api          Fastify REST API, expiry worker, payment adapters (Stripe test mode, x402 stub), evidence chain
 apps/dashboard    Next.js developer dashboard
-examples/         quickstart.ts (no env needed) and demo.ts (the scripted lifecycle, D-27)
+examples/         quickstart.ts (no env needed), demo.ts (the scripted lifecycle, D-27),
+                  and demo-merchant.ts (a tiny real x402 merchant for the /demo page, D-42)
 fixtures/compiler recorded compiler output, replayed deterministically in tests
 ```
 
@@ -92,6 +93,12 @@ npm run quickstart                     # examples/quickstart.ts, no env required
 npm run demo                           # examples/demo.ts, the full lifecycle
 npm run compile -w @waysafe/api -- "your instruction"     # compile from the terminal
 npm run compile:record -w @waysafe/api -- <name> "..."    # record a new fixture
+
+# /demo (D-42) -- three processes, in order:
+npm run demo:seed -w @waysafe/api      # once: seeds org_demo, writes the dashboard's API key
+npm run dev:api                        # needs WAYSAFE_ENABLE_DEMO_ROUTES=1
+npm run demo:merchant                  # examples/demo-merchant.ts, on :4402
+npm run dev:dashboard                  # then open /demo
 ```
 
 Without `ANTHROPIC_API_KEY` the compiler replays fixtures, so tests and the CLI
@@ -187,17 +194,31 @@ settlement falls back to the Safe's own `execTransaction` calling
 deferred; D-40's self-skipping bypass test part 3 is now a real, passing
 proof against the deployed Safe — a genuine 2-of-2 transfer succeeds,
 and the session key alone, a forged envelope, and a session-key-only
-signature are each rejected on-chain). The full suite is green: `npm test`
-has no failing tests as of `D-41`. This environment's financial account
+signature are each rejected on-chain). The full suite was green as of
+`D-41`. Since then, `D-42` (the recordable `/demo` page) wired the two
+routes D-40/D-41 built but never gave HTTP endpoints
+(`POST /v1/enforcement/x402`, `POST /v1/instruments/x402`) and closed the
+settlement gap for x402's `erc20_transfer_fallback` mode specifically — a
+session-key relay where the agent's runtime signs with a key that never
+reaches Waysafe, and Waysafe combines and broadcasts only on a genuine
+ALLOW. Verified live in that session: a real ALLOW settled on-chain for
+real, and all three bypass rejections reverted for real. That same live
+testing spent down `WAYSAFE_SAFE_COSIGNER_KEY`'s testnet gas balance, so
+`x402.bypass.test.ts`'s one broadcast case (the genuine 2-of-2 transfer)
+currently fails on `InsufficientFundsError`, not a code regression — fund
+that address with Amoy POL before relying on that test again. This
+environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
 `status: "pending"`, so the Stripe Issuing live bypass test self-reports
 SKIPPED with that status rather than a live pass — that is expected, not a
-failure, and nothing in this codebase funds or activates it automatically.
+failure, and nothing in this codebase funds or activates it automatically;
+`D-42`'s own demo page says so too, rather than faking a Stripe scene.
 `OQ-7` (per-unit limits vs. correcting the PRD's example) is the one open
 question with no partial answer on record; `OQ-10`'s x402 half is now
-closed for the "exact" fallback settlement path D-41 built — see D-41's
-own note on what remains genuinely open (the standard facilitator flow,
-deferred on the EIP-1271 finding).
+closed for the "exact" fallback settlement path D-41 built and the
+settlement bridge D-42 added — see D-41's own note on what remains
+genuinely open (the standard facilitator flow, deferred on the EIP-1271
+finding).
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

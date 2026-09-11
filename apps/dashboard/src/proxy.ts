@@ -26,5 +26,8 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|_next/static|_next/image|favicon.ico).*)"],
+  // D-42: /demo and its API routes are a standalone, unauthenticated-by-
+  // design recordable page -- it holds its own fixed org credential
+  // server-side (WAYSAFE_DEMO_ORG_API_KEY), never a user's session cookie.
+  matcher: ["/((?!login|demo|api/demo|_next/static|_next/image|favicon.ico).*)"],
 };

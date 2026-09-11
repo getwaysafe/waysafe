@@ -437,6 +437,57 @@ export interface InstrumentDetail {
   created_at: string;
 }
 
+// --- x402 enforcement (D-32/D-40, wired D-42) --------------------------------
+
+export interface ProvisionX402InstrumentRequest {
+  mandate_id: string;
+  /** The agent's own runtime key -- an EVM address, public by nature. The
+   * SDK (and Waysafe) never see the corresponding private key. */
+  session_key_address: string;
+}
+
+/** Waysafe's off-chain decision attestation over one payment intent
+ * (D-40) -- necessary but not by itself sufficient to move funds; see
+ * DECISIONS.md D-40's custody comment. */
+export interface X402CoSignature {
+  pay_to: string;
+  asset: string;
+  network: string;
+  amount_atomic: string;
+  resource: string;
+  expires_at: string;
+  authorization_id: string;
+  signature: string;
+}
+
+/** The agent's own partial signature over the exact Safe transfer Waysafe
+ * independently reconstructs -- never the agent's private key itself. */
+export interface X402SessionSignature {
+  nonce: number;
+  signer: string;
+  data: string;
+}
+
+export interface X402EnforcementRequest {
+  instrument_id: string;
+  /** A location for Waysafe to fetch itself -- never payment requirements
+   * asserted by the caller (D-40's own rule, applied to the one rail with
+   * no rail-side caller to attest them). */
+  resource_url: string;
+  /** Omit to reproduce D-40's original scope exactly: a decision plus an
+   * off-chain co-signature, nothing settled on-chain. */
+  session_signature?: X402SessionSignature;
+}
+
+export interface X402EnforcementResult {
+  decision: Decision;
+  reason_codes: ReasonCode[];
+  co_signature: X402CoSignature | null;
+  mandate_id: string | null;
+  safe_address: string | null;
+  settlement: { tx_hash: string } | { error: string } | null;
+}
+
 // --- mandates (dashboard reads) ----------------------------------------------
 
 export interface MandateListItem {
@@ -733,6 +784,31 @@ export class Waysafe {
    * the two (org-scoped, same as `getMandate`). */
   async getInstrument(instrumentId: string): Promise<InstrumentDetail> {
     return this.get<InstrumentDetail>(`/v1/instruments/${instrumentId}`);
+  }
+
+  /**
+   * Provisions the x402 payer instrument (D-32 item 3, D-40, wired D-42) a
+   * mandate needs before it can pay on that rail -- onboarding, not
+   * something an agent calls on its own behalf mid-run (D-32's own
+   * distinction). Which underlying Safe this points at is entirely a
+   * server-side configuration choice; nothing about this call controls it.
+   */
+  async provisionX402Instrument(request: ProvisionX402InstrumentRequest): Promise<InstrumentDetail> {
+    const { body } = await this.request<InstrumentDetail>("POST", "/v1/instruments/x402", request);
+    return body;
+  }
+
+  /**
+   * The x402 enforcement chokepoint (D-32/D-40, wired D-42): evaluates a
+   * real payment attempt against the mandate bound to `instrument_id`, and
+   * -- on a genuine ALLOW, only when `session_signature` is supplied --
+   * settles it on-chain. `resource_url` must be a location Waysafe can
+   * fetch itself; never pass payment requirements you read yourself here,
+   * they will be ignored (D-40's whole point).
+   */
+  async enforceX402Payment(request: X402EnforcementRequest): Promise<X402EnforcementResult> {
+    const { body } = await this.request<X402EnforcementResult>("POST", "/v1/enforcement/x402", request);
+    return body;
   }
 
   /**
