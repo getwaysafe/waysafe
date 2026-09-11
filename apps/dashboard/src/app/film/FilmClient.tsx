@@ -37,6 +37,7 @@ import {
   AGENT_REASONING_ATTRIBUTION,
   AGENT_REASONING_QUOTE,
   AGENT_TASKS,
+  CARD_REPLAY_TAG,
   COMPROMISE_CAPTION,
   END_CARD_LINE_1A,
   END_CARD_LINE_1B,
@@ -160,6 +161,7 @@ function Act2Split(props: {
                     ) : (
                       <span className="film-decline-badge">EVALUATING</span>
                     )}
+                    <span className="film-replayed-tag">{CARD_REPLAY_TAG}</span>
                   </div>
                 );
               }

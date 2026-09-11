@@ -3812,6 +3812,49 @@ cosigner EOA was funded; the one x402 broadcast case fails on
 `InsufficientFundsError` after this session's own live testing spent it
 down again -- the standing, documented fact above, not a regression.
 
+### Follow-up -- a persistent on-screen tag on every card decline, not just a code comment
+
+The card lane's own honesty label ("replayed Stripe authorization
+request -- live sandbox pending (D-37)") existed everywhere in this
+decision's own prose above and in the route's doc comments, but never
+actually reached the screen -- `Act2Split`'s card-notification branch
+rendered the label and the DENY/EVALUATING badge and nothing else. A
+viewer watching only the video had no way to tell that decline apart
+from the stablecoin lane's genuinely live on-chain rejection sitting
+right above it in the same stack. Caught because it was pointed out
+directly, not by the live check, which only ever confirmed the
+*decision* was real -- it never asserted anything about whether the
+honesty label describing that decision's provenance was actually
+visible.
+
+Fixed with one new constant, `CARD_REPLAY_TAG`
+(`lib/film/constants.ts`), rendered as a small persistent line inside
+every card notification in `Act2Split`'s right-hand device, styled
+distinctly (`.film-replayed-tag`, amber, matching the corner
+"DRAMATIZATION" tag's own color so the two visually read as the same
+*kind* of disclosure). `.film-notification--right` gained
+`flex-wrap: wrap` so the tag drops to its own line under the label and
+badge rather than being clipped or squeezed. Deliberately not added to
+the stablecoin notification: those rejections are live `eth_call`s
+against the real deployed Safe on Amoy, not a replay of anything, and
+tagging them the same way would blur a distinction this whole decision
+exists to keep sharp. Verified by injecting the exact rendered markup
+onto the live page (the same technique used earlier in this decision to
+confirm the aftermath beat's CSS) rather than waiting for a live
+autoplay to land on the right beat -- legible, correctly wrapped, and
+visually distinct from the decline badge.
+
+**Change cost if wrong:** trivial -- one constant, one CSS rule, one
+JSX line, no logic changed.
+
+Implemented in `apps/dashboard/src/lib/film/constants.ts`
+(`CARD_REPLAY_TAG`), `apps/dashboard/src/app/film/FilmClient.tsx`
+(rendered in `Act2Split`), `apps/dashboard/src/app/film/film.css`
+(`.film-replayed-tag`, `flex-wrap` on `.film-notification--right`). No
+test changes: this is a rendering-only addition with no new branch in
+any pure, tested module. Full `npm test` unaffected (525 passed, 1
+skipped, 1 failed on the same pre-existing funding gap).
+
 ---
 
 # Open questions

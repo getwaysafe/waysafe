@@ -43,6 +43,17 @@ export const ATTACKER_NOTIFICATIONS = [
 ] as const;
 
 /**
+ * D-44 follow-up: a small, persistent on-screen tag on every Act 2 card
+ * decline -- the label CLAUDE.md's HONESTY requirement demands wherever a
+ * result from `POST /v1/demo/enforcement/stripe-issuing` is shown, so a
+ * viewer never mistakes a real-but-replayed decision for a live Stripe
+ * sandbox scene. The stablecoin lane carries no such tag: its rejections
+ * are live `eth_call`s against the real deployed Safe on Amoy, not a
+ * replay of anything.
+ */
+export const CARD_REPLAY_TAG = "replayed Stripe authorization request — live sandbox pending (D-37)";
+
+/**
  * Starting balances for Act 1's dramatization, sized to exactly the
  * notifications above so "falling to zero" is arithmetic, not a fudge:
  * the two card notifications ($1,240.00 + $89.99) sum to the card
