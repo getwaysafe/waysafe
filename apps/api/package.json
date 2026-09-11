@@ -13,14 +13,17 @@
     "compile": "tsx --env-file-if-exists=../../.env src/cli.ts",
     "compile:record": "tsx --env-file-if-exists=../../.env src/record-fixture.ts",
     "keygen": "tsx src/keygen.ts",
+    "deploy-x402-safe": "tsx --env-file-if-exists=../../.env src/enforcement/deploy-x402-safe.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@waysafe/core": "*",
     "@prisma/client": "^6.19.3",
+    "@safe-global/protocol-kit": "^8.0.7",
     "@simplewebauthn/server": "^13.3.2",
+    "@waysafe/core": "*",
     "fastify": "^5.2.0",
     "stripe": "^22.5.0",
+    "viem": "^2.56.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {

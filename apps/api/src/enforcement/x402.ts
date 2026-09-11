@@ -337,73 +337,96 @@ export class X402Adapter implements EnforcementAdapter<X402Callback, X402Enforce
   }
 }
 
-// --- Custody constraint (D-40) -- the tension this spike surfaces rather than resolves ---
+// --- Custody constraint (D-40, closed by D-41) --------------------------
 //
 // D-32's non-negotiable #9 requires Waysafe to be a *required signer*, never
 // a custodian: its signature must be necessary but not sufficient to move
 // the principal's funds. x402's standard flow (EIP-3009
 // `transferWithAuthorization`, or a plain EOA signing a transfer) does not
-// give this file a way to satisfy that. Both are single-signature schemes
-// by construction -- whoever holds *the* key that signs the transfer can
-// move the funds alone, full stop. There is no way to make Waysafe "a
+// give this file a way to satisfy that on its own. Both are single-signature
+// schemes by construction -- whoever holds *the* key that signs the transfer
+// can move the funds alone, full stop. There is no way to make Waysafe "a
 // required co-signer" on an ordinary EOA or a bare EIP-3009 authorization;
 // the only two honest options are (a) Waysafe holds the payer's key, which
 // makes it a custodian -- exactly what D-32 says it must never be -- or
 // (b) the agent holds the key, which makes Waysafe advisory on this rail,
 // exactly the OQ-10 hole D-32 was written to close.
 //
-// So this file does neither. `X402CoSignature` is deliberately NOT a
-// complete, spendable x402 X-PAYMENT header -- it has no field that is a
-// signed transfer authorization over the asset contract, because producing
-// one would require a key capable of authorizing that transfer alone, and
-// this codebase must never hold such a key (see `signCoSignaturePayload`:
-// it signs with the *evidence-signing* key class -- a decision-attestation
-// key, structurally incapable of moving funds, the same key class D-26
-// already uses to sign the evidence chain, though a *distinct* key from
-// it in practice -- see x402-signing-key.ts). What `toResponse` returns on
-// ALLOW is Waysafe's half of a two-part authorization: necessary, per the
-// custody constraint, but insufficient alone to construct a valid
-// X-PAYMENT header for any payer account that does not itself also require
-// it.
+// So this file does neither, and `X402CoSignature` is still deliberately
+// NOT a complete, spendable x402 X-PAYMENT header -- it has no field that
+// is a signed transfer authorization over the asset contract, because
+// producing one would require a key capable of authorizing that transfer
+// alone, and this codebase must never hold such a key (see
+// `signCoSignaturePayload`: it signs with the *evidence-signing* key
+// class -- a decision-attestation key, structurally incapable of moving
+// funds, the same key class D-26 already uses to sign the evidence chain,
+// though a *distinct* key from it in practice -- see x402-signing-key.ts).
+// What `toResponse` returns on ALLOW remains Waysafe's off-chain half of a
+// two-part authorization, kept for evidence traceability.
 //
-// The smallest payer-account design that makes Waysafe's half load-bearing:
-// a 2-of-2 smart account per mandate (an ERC-4337 or Safe-style account
-// whose validator has a threshold of 2, one owner slot being a session key
-// scoped to the mandate and held by the agent's runtime -- inert on its
-// own, the same shape a Stripe-tokenized card already has (D-13) -- the
-// other owner slot being this file's own signing key). The agent's session
-// key alone cannot satisfy the account's validator; this file's
-// co-signature alone cannot either; only both together, which happens only
-// when `evaluate()` said ALLOW, can. That account is not deployed by
-// anything in this codebase -- doing so is exactly the "custodial version"
-// this decision stops short of building, deliberately, per the task that
-// produced it. `provisionX402InstrumentForMandate` below creates the
-// `Instrument` row this design needs a home for, with a placeholder
-// `external_ref` that says so explicitly, so the gap is a documented TODO
-// on a real row, not a silent one.
+// **D-41 closes the gap D-40 left open** by actually deploying the 2-of-2
+// account: a real Safe (`x402-safe.ts`, `@safe-global/protocol-kit`) per
+// mandate, threshold 2, one owner the session key scoped to the mandate
+// and held by the agent's runtime -- inert on its own, the same shape a
+// Stripe-tokenized card already has (D-13) -- the other owner a genuinely
+// new secp256k1 key, `WAYSAFE_SAFE_COSIGNER_KEY`. That second key is *not*
+// the Ed25519 key `X402CoSignaturePayload` is signed with above: Safe
+// owners are secp256k1 EVM addresses, and an Ed25519 key has no such
+// address to be one. Two keys, two trust boundaries -- see
+// `x402-safe.ts`'s file-level comment. The agent's session key alone
+// cannot satisfy the Safe's `execTransaction` threshold; Waysafe's Safe
+// co-signer key alone cannot either; only both together, proven live on
+// Polygon Amoy by `x402.bypass.test.ts`'s now-real part 3.
+//
+// One further constraint D-41 checked on-chain rather than assumed:
+// Amoy's test USDC does not support EIP-1271, so the Safe cannot satisfy
+// `transferWithAuthorization` no matter how many owners sign it (see
+// `X402_SAFE_SETTLEMENT_MODE` in x402-safe.ts for the on-chain evidence).
+// The Safe settles instead by calling its own `execTransaction` to invoke
+// the token's plain `transfer(to, amount)` -- genuinely 2-of-2-gated, and
+// a real on-chain USDC payment, but not the specific mechanism a standard
+// x402 "exact" scheme facilitator expects to verify. Wiring this adapter
+// into a real facilitator flow remains deferred, same as D-40 left it;
+// what D-41 changes is that the account backing it now actually exists
+// and actually enforces the threshold, rather than being a documented
+// TODO on a placeholder row.
 
 // --- Provisioning ------------------------------------------------------------
+
+/** What actually deploys the payer account -- injected so the offline test
+ * suite (this file's own `x402.test.ts`, "no network, no key") can supply a
+ * fake that returns instantly, while the live bypass test and any real
+ * caller use `x402-safe.ts`'s `createOnChainSafeDeployer`, the same
+ * injectable-dependency shape `X402Fetcher` already uses above for exactly
+ * the same reason. */
+export interface X402SafeDeployer {
+  deploySafe(owners: { sessionKeyAddress: string; cosignerAddress: string }): Promise<{ safeAddress: string }>;
+}
 
 /**
  * Creates the `Instrument` row (D-32 item 3, D-35) that represents "the
  * payer account for this mandate on the x402 rail" -- one per mandate, same
- * cardinality `provisionCardForMandate` uses for the card rail. Unlike that
- * function, this one calls no external API: there is no real payer account
- * to provision yet (see the custody comment above), only the Waysafe-side
- * row that a real one would eventually be wired into. `external_ref` is a
- * placeholder, not a spendable address -- nothing in this codebase, or any
- * test, treats it as one.
+ * cardinality `provisionCardForMandate` uses for the card rail. Unlike D-40's
+ * version of this function, `external_ref` is now the real, deployed 2-of-2
+ * Safe address `deployer.deploySafe` returns (D-41) -- never a placeholder
+ * string, and never treated as spendable by anything in this codebase until
+ * it demonstrably is one.
  */
 export async function provisionX402InstrumentForMandate(
   repos: { instruments: InstrumentRepository },
-  params: { organizationId: string; mandateId: string },
+  deployer: X402SafeDeployer,
+  params: { organizationId: string; mandateId: string; sessionKeyAddress: string; cosignerAddress: string },
   now: Date,
 ): Promise<Instrument> {
+  const deployment = await deployer.deploySafe({
+    sessionKeyAddress: params.sessionKeyAddress,
+    cosignerAddress: params.cosignerAddress,
+  });
   const input: NewInstrument = {
     organizationId: params.organizationId,
     mandateId: params.mandateId,
     rail: "x402",
-    externalRef: `pending-2of2-account:${params.mandateId}`,
+    externalRef: deployment.safeAddress,
   };
   return repos.instruments.createInstrument(input, now);
 }

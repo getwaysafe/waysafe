@@ -173,16 +173,31 @@ holding the payer's key (forbidden by non-negotiable #9) or leaving the
 agent advisory (the OQ-10 hole); `toResponse` therefore produces a
 co-signature that is cryptographically necessary but not sufficient to
 move funds, and the 2-of-2 smart account that would close the gap is
-deliberately not built here — see D-40 and its update to OQ-10). The full
-suite is green: `npm test` has no failing tests as of `D-40`. This
-environment's financial account
+deliberately not built here — see D-40 and its update to OQ-10), and the
+deployment of that account (`D-41`: a real Safe, threshold 2, per mandate,
+owners the agent's session key and a new secp256k1
+`WAYSAFE_SAFE_COSIGNER_KEY` — genuinely distinct from D-40's Ed25519
+`WAYSAFE_X402_COSIGNER_KEY`, since Safe owners are secp256k1 EVM addresses
+and Ed25519 has none — deployed and verified live on Polygon Amoy via
+`@safe-global/protocol-kit`; checked on-chain rather than assumed that
+Amoy's real test USDC has no EIP-1271 path for `transferWithAuthorization`
+(its implementation contract never references the EIP-1271 selector), so
+settlement falls back to the Safe's own `execTransaction` calling
+`transfer` directly, and the standard x402 facilitator flow stays
+deferred; D-40's self-skipping bypass test part 3 is now a real, passing
+proof against the deployed Safe — a genuine 2-of-2 transfer succeeds,
+and the session key alone, a forged envelope, and a session-key-only
+signature are each rejected on-chain). The full suite is green: `npm test`
+has no failing tests as of `D-41`. This environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
-`status: "pending"`, so the live bypass test self-reports SKIPPED with that
-status rather than a live pass — that is expected, not a failure, and
-nothing in this codebase funds or activates it automatically. `OQ-7`
-(per-unit limits vs. correcting the PRD's example) is the one open
+`status: "pending"`, so the Stripe Issuing live bypass test self-reports
+SKIPPED with that status rather than a live pass — that is expected, not a
+failure, and nothing in this codebase funds or activates it automatically.
+`OQ-7` (per-unit limits vs. correcting the PRD's example) is the one open
 question with no partial answer on record; `OQ-10`'s x402 half is now
-tracked directly against D-40 rather than left purely open.
+closed for the "exact" fallback settlement path D-41 built — see D-41's
+own note on what remains genuinely open (the standard facilitator flow,
+deferred on the EIP-1271 finding).
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

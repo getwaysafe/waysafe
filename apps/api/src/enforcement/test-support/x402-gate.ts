@@ -3,13 +3,16 @@
  * self-skip when there's nothing to test against, but fail loudly instead
  * of silently when WAYSAFE_REQUIRE_X402_LIVE=1 says there should be one.
  *
- * "Nothing to test against" means something different here than it does
- * for Stripe Issuing: there is no missing API key, because this codebase
- * deliberately never built the piece that would need one -- see x402.ts's
- * custody comment. What's missing is a deployed 2-of-2 smart account (or
- * equivalent) on a real network whose validator actually enforces "Waysafe's
- * co-signature is required." `WAYSAFE_X402_LIVE_PAYER_ACCOUNT` is where that
- * account's address would go once one exists.
+ * D-40 left this gated on a single missing piece: no 2-of-2 payer account
+ * existed at all. D-41 builds that account (`x402-safe.ts`'s
+ * `deploySafeTwoOfTwo`), so `reachable` (`probeX402SafeAccount()`) now
+ * checks the fuller set of real prerequisites the live test actually
+ * needs: `WAYSAFE_SAFE_COSIGNER_KEY` (the real secp256k1 owner key),
+ * `POLYGON_AMOY_RPC_URL`, `WAYSAFE_X402_LIVE_PAYER_ACCOUNT` (the deployed
+ * Safe's address), and `WAYSAFE_X402_TEST_SESSION_KEY` (this test's own
+ * stand-in for "the agent's runtime"). Any one missing is still an honest
+ * skip, not a failure -- this file only escalates to a hard failure when
+ * WAYSAFE_REQUIRE_X402_LIVE=1 explicitly says skipping is unacceptable.
  */
 
 import { describe, it } from "vitest";
@@ -19,13 +22,12 @@ export function requireX402LiveOrExplainSkip(suiteName: string, reachable: boole
   if (process.env.WAYSAFE_REQUIRE_X402_LIVE !== "1") return;
 
   describe(suiteName, () => {
-    it("requires a deployed 2-of-2 payer account because WAYSAFE_REQUIRE_X402_LIVE=1", () => {
+    it("requires a deployed and funded 2-of-2 payer Safe because WAYSAFE_REQUIRE_X402_LIVE=1", () => {
       throw new Error(
-        `WAYSAFE_REQUIRE_X402_LIVE=1 but WAYSAFE_X402_LIVE_PAYER_ACCOUNT is unset -- refusing to ` +
-          `silently skip "${suiteName}". This proof needs a real, deployed payer smart account whose ` +
-          `validator requires Waysafe's co-signature (D-40's custody comment in x402.ts) -- nothing in ` +
-          `this codebase deploys one yet, deliberately. Set WAYSAFE_X402_LIVE_PAYER_ACCOUNT once one ` +
-          "exists, or unset WAYSAFE_REQUIRE_X402_LIVE to allow skipping.",
+        `WAYSAFE_REQUIRE_X402_LIVE=1 but one of WAYSAFE_SAFE_COSIGNER_KEY, POLYGON_AMOY_RPC_URL, ` +
+          `WAYSAFE_X402_LIVE_PAYER_ACCOUNT, or WAYSAFE_X402_TEST_SESSION_KEY is unset -- refusing to ` +
+          `silently skip "${suiteName}". Run \`npm run deploy-x402-safe -w @waysafe/api\` (D-41) to ` +
+          "deploy the Safe and populate these, or unset WAYSAFE_REQUIRE_X402_LIVE to allow skipping.",
       );
     });
   });

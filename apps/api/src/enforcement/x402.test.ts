@@ -41,6 +41,16 @@ const AGENT = "agt_test";
 const NOW = new Date("2026-09-09T12:00:00.000Z");
 const PAY_TO = "0xabc0000000000000000000000000000000def1";
 const RESOURCE_URL = "https://api.example.com/paid-endpoint";
+const SESSION_KEY_ADDRESS = "0x1111111111111111111111111111111111aaaa";
+const COSIGNER_ADDRESS = "0x2222222222222222222222222222222222bbbb";
+
+/** D-41: the real deployer (`x402-safe.ts`'s `createOnChainSafeDeployer`)
+ * makes an RPC call and pays gas -- this file stays offline (see the
+ * file-level comment) by injecting a fake that returns instantly, the same
+ * shape `fetcherFor` already fakes `X402Fetcher` with. */
+function fakeSafeDeployer(safeAddress = "0x3333333333333333333333333333333333cccc") {
+  return { deploySafe: async () => ({ safeAddress }) };
+}
 
 function policyFrom(overrides: Record<string, unknown> = {}): Policy {
   const result = parsePolicy({
@@ -108,7 +118,8 @@ async function setup() {
   });
   const instrument = await provisionX402InstrumentForMandate(
     { instruments },
-    { organizationId: ORG, mandateId },
+    fakeSafeDeployer(),
+    { organizationId: ORG, mandateId, sessionKeyAddress: SESSION_KEY_ADDRESS, cosignerAddress: COSIGNER_ADDRESS },
     NOW,
   );
   return { authorization, evidence, instruments, mandateId, instrumentId: instrument.id };
@@ -341,7 +352,8 @@ describe("handleX402PaymentRequest", () => {
     });
     const instrument = await provisionX402InstrumentForMandate(
       { instruments },
-      { organizationId: ORG, mandateId },
+      fakeSafeDeployer(),
+      { organizationId: ORG, mandateId, sessionKeyAddress: SESSION_KEY_ADDRESS, cosignerAddress: COSIGNER_ADDRESS },
       NOW,
     );
 
@@ -394,7 +406,8 @@ describe("handleX402PaymentRequest", () => {
     });
     const instrument = await provisionX402InstrumentForMandate(
       { instruments },
-      { organizationId: ORG, mandateId },
+      fakeSafeDeployer(),
+      { organizationId: ORG, mandateId, sessionKeyAddress: SESSION_KEY_ADDRESS, cosignerAddress: COSIGNER_ADDRESS },
       NOW,
     );
 
@@ -431,20 +444,32 @@ describe("handleX402PaymentRequest", () => {
 });
 
 describe("provisionX402InstrumentForMandate", () => {
-  it("creates an Instrument row on the x402 rail, one per mandate, with a placeholder external_ref", async () => {
+  it("creates an Instrument row on the x402 rail, one per mandate, with the deployer's real Safe address (D-41)", async () => {
     const instruments = new InMemoryInstrumentRepository();
+    const deployedAddress = "0x4444444444444444444444444444444444dddd";
+    let calledWith: { sessionKeyAddress: string; cosignerAddress: string } | null = null;
+    const deployer = {
+      async deploySafe(owners: { sessionKeyAddress: string; cosignerAddress: string }) {
+        calledWith = owners;
+        return { safeAddress: deployedAddress };
+      },
+    };
+
     const instrument = await provisionX402InstrumentForMandate(
       { instruments },
-      { organizationId: ORG, mandateId: "mdt_test_1" },
+      deployer,
+      { organizationId: ORG, mandateId: "mdt_test_1", sessionKeyAddress: SESSION_KEY_ADDRESS, cosignerAddress: COSIGNER_ADDRESS },
       NOW,
     );
 
     expect(instrument.rail).toBe("x402");
     expect(instrument.mandate_id).toBe("mdt_test_1");
     expect(instrument.organization_id).toBe(ORG);
-    // Not a real spendable address -- see x402.ts's custody comment.
-    expect(instrument.external_ref).toContain("mdt_test_1");
-    expect(instrument.external_ref).not.toMatch(/^0x/);
+    // D-40's placeholder ("pending-2of2-account:<mandateId>") is gone --
+    // external_ref is now exactly whatever the deployer says the real Safe
+    // address is, never a string this file invents itself.
+    expect(instrument.external_ref).toBe(deployedAddress);
+    expect(calledWith).toEqual({ sessionKeyAddress: SESSION_KEY_ADDRESS, cosignerAddress: COSIGNER_ADDRESS });
   });
 });
 
