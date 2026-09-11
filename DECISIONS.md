@@ -3447,6 +3447,109 @@ ceiling) and `playback.test.ts` (the state machine). Full `npm test`
 ran clean except the pre-existing D-42 funding-gap failure (unrelated:
 `/story` never touches x402, Stripe, or any on-chain rail).
 
+### Amendment — an aftermath beat before the end card, and a copy change this decision had to soften rather than ship as asked
+
+The follow-up task: a ~6-second beat between the attack and the existing
+end card. Counters freeze; both halves fade to "Who pays?"; LEFT
+answers "Unknown. No record of what was authorized. Every transaction
+is a dispute."; RIGHT answers with an accountability claim and pulls
+three real receipts from the stream into focus with their hashes; then
+the end card, its second line changed to a product tagline.
+
+**The phase timeline gained a pure, tested layer of its own rather than
+more inline conditionals in `StoryClient.tsx`.** `lib/story/phases.ts`
+(`resolvePhase`, `resolveAftermathStage`, `totalDurationMs`) turns an
+elapsed-ms number and a `PhaseTiming` into `"attack" | "aftermath" |
+"endcard"` and, within aftermath, `"question" | "answer"` --
+exactly the `scenes.ts`/`playback.ts` pattern this file's own original
+text already committed to. `phases.test.ts` asserts every boundary
+exactly (the last ms of attack, the first ms of aftermath, the question/
+answer split at +1800ms, the aftermath/end-card boundary, and that
+end-card is sticky past the total). This is the layer most likely to
+have an off-by-one, and it's also the layer a live browser check can't
+actually exercise (see below) -- which is exactly why it has direct
+tests rather than relying on watching the page.
+
+**The three receipts pulled into "focus" are the same real stream, not
+a curated example.** `captureAftermathReceipts` (`StoryClient.tsx`)
+reads the last three `DENY` entries out of `story.decisions` up to
+however far the cursor has actually advanced this run -- the identical
+data the receipt-stream box has been rendering all along, including
+each one's real `evaluate()` reasons and its real (WebCrypto SHA-256)
+receipt hash from `receipt-hash.ts`. Nothing here is written for
+display; it's a read of state the attack phase already produced.
+
+**The task's own RIGHT-answer copy claimed more than this page's
+mechanism backs, and the fix was to soften the copy, not to fake the
+mechanism.** As specified, the right answer read "Every attempt
+attributed, signed, independently verifiable. The incident report
+already exists." This page's receipt hash (see the original decision
+above, "deliberately not called an 'evidence hash'") is a plain
+`crypto.subtle.digest`, not a signature, and is computed over
+fabricated simulation data that was never written to any real
+evidence chain -- there is no real signing key, no real chain, and no
+real incident report behind it. Claiming "signed, independently
+verifiable" here would be the exact class of defect CLAUDE.md's
+non-negotiable #4 and D-16/D-17 exist to prevent: a security/provenance
+property asserted in copy that the code does not provide. Generating a
+throwaway in-browser keypair to sign the simulated receipts was
+considered and rejected -- it would make the word "signed" technically
+true while leaving "independently verifiable" and "incident report"
+just as hollow, since nothing would exist afterward for a third party
+to check it against. The shipped line instead reads "Every attempt
+attributed, hashed, and timestamped. The incident report already
+exists." -- same cadence, same claim of immediate accountability,
+without asserting a provenance guarantee this simulation doesn't have.
+Flagging this explicitly rather than quietly shipping different copy:
+if genuine signing (the real evidence-signing path, exercised for real
+authorizations, is what actually earns "signed, independently
+verifiable" elsewhere in this product) is wanted here too, that is a
+materially bigger feature than this beat, and a deliberate ask, not a
+side effect of a video.
+
+**The end card's second line changed as specified.** "Waysafe ·
+waysafe.ai · proof: /demo" became "Waysafe — the authorization and
+evidence layer for agent spending, across every rail." This one *is*
+an accurate claim about the real product (the real evidence chain is
+genuinely signed and hash-chained, per D-26/OQ-8) -- it describes
+Waysafe, not this page's simulated receipts, so it doesn't run into the
+same problem as the RIGHT answer above. The `/demo` link this line used
+to carry isn't lost: the corner "proof: /demo" overlay (`story-back`)
+was already present throughout the whole page, end card included.
+
+**Verified live, with a caveat this session couldn't get past.**
+Confirmed in the browser: the phase sequence runs attack → aftermath →
+end card with no console errors, the end card's new second line
+renders correctly, and (via a direct DOM injection of the exact
+aftermath markup and classes onto the live page, bypassing playback)
+the "Who pays?" beat's CSS -- the two-column answer layout, the accent
+colors, the receipt cards -- renders exactly as intended. What this
+session could *not* do is watch the real playback path land inside the
+live 6-second aftermath window: `document.hidden` in this automation
+tab (see the original decision's own note) throttles
+`requestAnimationFrame` enough that even a `setTimeout`-based polyfill
+patched in for testing fires in large, unpredictable catch-up bursts --
+each burst's frame-to-frame delta capped at 2000ms individually, but
+enough queued callbacks firing back-to-back can still cross a
+6-second-wide window between two screenshots taken a second apart.
+Multiple attempts landed either well before or well past the aftermath
+phase, never inside it. This is specific to this harness's timer
+throttling, not a code path a real, focused, foreground recording tab
+would ever hit -- `phases.test.ts` is what actually exercises the exact
+transition this live check couldn't catch in the act.
+
+**Change cost if wrong:** low. Purely additive to the existing timeline
+(one new phase between two that already existed); no change to the
+attack phase, the simulation, or `evaluate()`.
+
+Implemented in `apps/dashboard/src/lib/story/phases.ts` (new),
+`apps/dashboard/src/app/story/StoryClient.tsx` (the aftermath phase,
+stage tracking, `captureAftermathReceipts`, the end-card copy change),
+`apps/dashboard/src/app/story/story.css` (aftermath styles). Tested in
+`apps/dashboard/src/lib/story/phases.test.ts`. Full `npm test`: 493
+passed, 1 skipped, 1 failed on the same pre-existing D-42 funding gap
+(unaffected by this change).
+
 ---
 
 # Open questions

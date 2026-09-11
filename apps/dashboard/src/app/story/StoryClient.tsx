@@ -18,13 +18,38 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Decision } from "@waysafe/core/browser";
 import { RAILS, INCIDENT_FOOTNOTE, type Rail } from "@/lib/story/attack-data";
+import {
+  resolveAftermathStage,
+  resolvePhase,
+  totalDurationMs,
+  type AftermathStage,
+  type PhaseTiming,
+} from "@/lib/story/phases";
 import { initialPlaybackState, restart, tick, togglePlay, type PlaybackState } from "@/lib/story/playback";
 import { computeReceiptHashes } from "@/lib/story/receipt-hash";
 import { buildStory, type DecisionEvent, type StoryData } from "@/lib/story/simulation";
 
 const CANVAS_W = 1920;
 const CANVAS_H = 1080;
+const AFTERMATH_MS = 6000;
+const AFTERMATH_QUESTION_MS = 1800;
 const END_CARD_MS = 4000;
+
+function phaseTiming(story: StoryData): PhaseTiming {
+  return {
+    activeDurationMs: story.config.activeDurationMs,
+    aftermathMs: AFTERMATH_MS,
+    aftermathQuestionMs: AFTERMATH_QUESTION_MS,
+    endCardMs: END_CARD_MS,
+  };
+}
+
+interface AftermathReceipt {
+  id: number;
+  text: string;
+  amount: string;
+  hash: string;
+}
 
 const LEFT_X0 = 40;
 const LEFT_X1 = 940;
@@ -96,7 +121,7 @@ function formatUsd(minor: number): string {
   return dollars.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 }
 
-type UiPhase = "loading" | "paused" | "playing" | "endcard" | "ended";
+type UiPhase = "loading" | "paused" | "playing" | "aftermath" | "endcard" | "ended";
 
 export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -114,8 +139,12 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
   const receiptLinesRef = useRef<{ text: string; decision: Decision }[]>([]);
   const compromisedAtRef = useRef<Map<number, number>>(new Map());
   const uiPhaseRef = useRef<UiPhase>("loading");
+  const aftermathStageRef = useRef<AftermathStage>("question");
+  const aftermathCapturedRef = useRef(false);
 
   const [uiPhase, setUiPhase] = useState<UiPhase>("loading");
+  const [aftermathStage, setAftermathStage] = useState<AftermathStage>("question");
+  const [aftermathReceipts, setAftermathReceipts] = useState<AftermathReceipt[]>([]);
 
   const seedLabel = useMemo(() => seed, [seed]);
 
@@ -158,6 +187,10 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
       leftFlightsRef.current = [];
       rightFlightsRef.current = [];
       receiptLinesRef.current = [];
+      aftermathStageRef.current = "question";
+      aftermathCapturedRef.current = false;
+      setAftermathStage("question");
+      setAftermathReceipts([]);
     }
 
     function onKeydown(e: KeyboardEvent) {
@@ -199,24 +232,39 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
       const delta = Math.min(2000, ts - last);
       lastTsRef.current = ts;
 
-      const totalMs = story.config.activeDurationMs + END_CARD_MS;
-      playbackRef.current = tick(playbackRef.current, delta, totalMs);
+      const timing = phaseTiming(story);
+      playbackRef.current = tick(playbackRef.current, delta, totalDurationMs(timing));
       const elapsed = playbackRef.current.elapsedMs;
 
       advanceCursor(story, elapsed);
       draw(ctx, story, elapsed);
 
+      const timelinePhase = resolvePhase(elapsed, timing);
       const nextPhase: UiPhase =
         playbackRef.current.status === "ended"
           ? "ended"
-          : elapsed >= story.config.activeDurationMs
+          : timelinePhase === "endcard"
             ? "endcard"
-            : playbackRef.current.status === "playing"
-              ? "playing"
-              : "paused";
+            : timelinePhase === "aftermath"
+              ? "aftermath"
+              : playbackRef.current.status === "playing"
+                ? "playing"
+                : "paused";
       if (nextPhase !== uiPhaseRef.current) {
         uiPhaseRef.current = nextPhase;
         setUiPhase(nextPhase);
+      }
+
+      if (timelinePhase === "aftermath") {
+        const stage = resolveAftermathStage(elapsed, timing);
+        if (stage !== aftermathStageRef.current) {
+          aftermathStageRef.current = stage;
+          setAftermathStage(stage);
+        }
+        if (stage === "answer" && !aftermathCapturedRef.current) {
+          aftermathCapturedRef.current = true;
+          captureAftermathReceipts(story);
+        }
       }
 
       rafRef.current = requestAnimationFrame(frame);
@@ -281,11 +329,33 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
     if (receiptLinesRef.current.length > 16) receiptLinesRef.current.length = 16;
   }
 
+  /** Pulls three real, already-decided DENY receipts from the same stream
+   * the RIGHT side has been filling all along -- not a fabricated example,
+   * the actual last three denials `evaluate()` produced this run. */
+  function captureAftermathReceipts(story: StoryData) {
+    const denies = story.decisions
+      .slice(0, cursorRef.current)
+      .filter((d) => d.decision === "DENY");
+    const picks = denies.slice(-3);
+    setAftermathReceipts(
+      picks.map((d) => ({
+        id: d.attempt.id,
+        text: `agent#${d.attempt.agentId.toString().padStart(3, "0")} · ${RAIL_LABELS[d.attempt.rail]} · ${d.reasons.map((r) => r.code).join("+")}`,
+        amount: formatUsd(d.attempt.amountMinor),
+        hash: hashesRef.current?.get(d.attempt.id)?.slice(0, 16) ?? "",
+      })),
+    );
+  }
+
   function draw(ctx: CanvasRenderingContext2D, story: StoryData, elapsed: number) {
     ctx.fillStyle = COLOR_BG;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    const inEndCard = elapsed >= story.config.activeDurationMs;
+    // Once the attack ends, the counters and canvas visuals freeze (see
+    // advanceCursor's capped elapsed) and fade to black under the aftermath
+    // and end-card HTML overlays -- this only needs to reach full black
+    // once, not stay in sync with which of those two phases is showing.
+    const pastAttack = elapsed >= story.config.activeDurationMs;
 
     drawTopBar(ctx, elapsed, story.config.activeDurationMs);
 
@@ -299,9 +369,9 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
     ctx.lineTo(960, RECEIPT_Y1);
     ctx.stroke();
 
-    if (inEndCard) {
-      const endElapsed = elapsed - story.config.activeDurationMs;
-      const alpha = Math.min(1, endElapsed / 500);
+    if (pastAttack) {
+      const fadeElapsed = elapsed - story.config.activeDurationMs;
+      const alpha = Math.min(1, fadeElapsed / 500);
       ctx.fillStyle = `rgba(3,4,5,${alpha})`;
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
     }
@@ -535,11 +605,42 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
           </div>
         ) : null}
 
+        {uiPhase === "aftermath" ? (
+          <div className="story-aftermath">
+            {aftermathStage === "question" ? (
+              <div className="story-aftermath-question">Who pays?</div>
+            ) : (
+              <div className="story-aftermath-answers">
+                <div className="story-aftermath-col story-aftermath-col--left">
+                  <div className="story-aftermath-answer">
+                    Unknown. No record of what was authorized. Every transaction is a dispute.
+                  </div>
+                </div>
+                <div className="story-aftermath-col story-aftermath-col--right">
+                  <div className="story-aftermath-answer">
+                    Every attempt attributed, hashed, and timestamped. The incident report already exists.
+                  </div>
+                  <div className="story-aftermath-receipts">
+                    {aftermathReceipts.map((r) => (
+                      <div className="story-aftermath-receipt" key={r.id}>
+                        <div className="story-aftermath-receipt-line">{r.text}</div>
+                        <div className="story-aftermath-receipt-meta">
+                          {r.amount} attempted · receipt {r.hash}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
         {uiPhase === "endcard" || uiPhase === "ended" ? (
           <div className="story-end-card">
             <div className="story-end-line-1">Same agents. Same attack.<br />The control isn&apos;t in the agent.</div>
             <div className="story-end-line-2">
-              Waysafe · waysafe.ai · proof: <a className="story-link" href="/demo">/demo</a>
+              Waysafe — the authorization and evidence layer for agent spending, across every rail.
             </div>
           </div>
         ) : null}
