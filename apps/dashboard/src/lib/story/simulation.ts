@@ -159,7 +159,7 @@ function buildCompromiseSchedule(
 }
 
 function merchantAssertionForRail(rng: Rng, rail: Rail): { merchant: MerchantAssertion; label: string } {
-  const scheme = rail === "x402" || rail === "wallet" ? "onchain" : pick(rng, ["domain", "domain", "name", "account"] as const);
+  const scheme = rail === "stablecoin" ? "onchain" : pick(rng, ["domain", "domain", "name", "account"] as const);
 
   if (scheme === "onchain") {
     const value = pick(rng, ATTACKER_ONCHAIN_ADDRESSES);

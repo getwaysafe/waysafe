@@ -3550,6 +3550,48 @@ stage tracking, `captureAftermathReceipts`, the end-card copy change),
 passed, 1 skipped, 1 failed on the same pre-existing D-42 funding gap
 (unaffected by this change).
 
+### Amendment — two lanes, not four: the bank lane never belonged there, and x402/wallet were never two rails
+
+Raised while opening OQ-11: `/story`'s four lanes (card, x402, wallet,
+bank) implied four enforced rails. Only two required-signer positions
+actually exist (cards, D-33; on-chain stablecoins, D-41), and the
+"four rails" framing overstated both what's built and what's even
+architecturally distinct. `RAILS` (`lib/story/attack-data.ts`) is now
+`["card", "stablecoin"]`. Two separate fixes, not one:
+
+- **`x402` and `wallet` were never two rails.** x402 is a payment
+  protocol spoken *over* a stablecoin wallet instrument -- D-40's
+  adapter and D-41's Safe are the required-signer position for both;
+  there was never a second position to draw a second lane for. Merged
+  into one `stablecoin` lane.
+- **`bank` was never built at all.** No adapter, no stub, not even a
+  design exists for ACH/wire/RTP (OQ-11, new). Drawing it as a lane --
+  even a labeled simulation -- implied a required-signer position that
+  doesn't exist yet. Removed outright, not merged into anything.
+
+`merchantAssertionForRail` (`simulation.ts`) collapses to one branch
+(`rail === "stablecoin"` picks an `onchain_address` assertion; `card`
+picks the same domain/name/account mix as before) -- the onchain-vs-
+other split across all attempts is unchanged, since `x402`+`wallet`
+and `card`+`bank` were already an even 50/50 of the old four-rail
+draw. `RAIL_LABELS` (`StoryClient.tsx`) drops to `{ card, stablecoin }`,
+and the rails-hit counter and the "four rails, one authorization
+layer" caption were both hardcoded to the old count -- fixed to read
+`RAILS.length` and to say "every rail" instead of a number that would
+go stale again the next time a lane changes.
+
+**Change cost if wrong:** low. Purely a display change to `/story`;
+`evaluate()` never took a rail as input either before or after.
+
+Implemented in `apps/dashboard/src/lib/story/attack-data.ts` (`RAILS`),
+`apps/dashboard/src/lib/story/simulation.ts`
+(`merchantAssertionForRail`), `apps/dashboard/src/app/story/
+StoryClient.tsx` (`RAIL_LABELS`, the rails-hit stat, the caption).
+No test changes needed: `simulation.test.ts`'s assertions are about
+decision outcomes and aggregate invariants, not rail count, and all 29
+`lib/story` tests and the full suite (493/1/1, same pre-existing
+funding-gap failure) still pass unchanged.
+
 ---
 
 # Open questions
@@ -3826,3 +3868,25 @@ says so)?** Whichever way this goes, the README's invariant language
 ("an unverified merchant can never produce ALLOW") is a claim about
 decisions and should not be read as a claim about spend until this is
 answered.
+
+---
+
+## OQ-11 — What is the required-signer position on bank rails?
+
+D-32 makes enforcement rail-initiated: Waysafe must be the party a rail
+cannot move money without. That position exists and is built for cards
+(issuing real-time authorization, D-33) and for on-chain stablecoins
+(the 2-of-2 Safe, D-41). No adapter, stub, or design exists for
+ACH/wire/RTP.
+
+The candidate positions: an originator-side approval hook at a
+bank-as-a-service or payment-ops provider (a virtual account whose
+outbound transfers require Waysafe's approval before origination), or
+being the ODFI-side authorizer directly. Neither has been evaluated.
+
+`EnforcementAdapter` (D-32) should hold as an interface regardless of
+which position wins -- nothing about it is card- or chain-specific. But
+"rail-agnostic" is proven for two rails and claimed for a third only
+architecturally, not demonstrated. Until this is answered, no demo,
+doc, or page may show a bank lane as enforced -- see D-43's amendment,
+which removed `/story`'s simulated bank lane for exactly this reason.

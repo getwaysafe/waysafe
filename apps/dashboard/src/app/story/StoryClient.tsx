@@ -62,7 +62,7 @@ const LANE_GAP = 20;
 const RECEIPT_Y0 = 800;
 const RECEIPT_Y1 = 1010;
 
-const RAIL_LABELS: Record<Rail, string> = { card: "CARD", x402: "X402", wallet: "WALLET", bank: "BANK" };
+const RAIL_LABELS: Record<Rail, string> = { card: "CARD", stablecoin: "STABLECOIN" };
 
 const COLOR_BG = "#030405";
 const COLOR_AGENT_SAFE = "#3b4a5f";
@@ -416,7 +416,7 @@ export function StoryClient({ seed, autoplay }: { seed: number; autoplay: boolea
 
     ctx.font = "600 14px ui-monospace, monospace";
     ctx.fillStyle = COLOR_DIM;
-    const stat = `${totals.count.toLocaleString("en-US")} attempts · ${totals.merchants.size} merchants · ${totals.rails.size}/4 rails`;
+    const stat = `${totals.count.toLocaleString("en-US")} attempts · ${totals.merchants.size} merchants · ${totals.rails.size}/${RAILS.length} rails`;
     ctx.fillText(stat, geom.x0 + 320, 165);
 
     // Agent field border
@@ -655,7 +655,7 @@ function currentCaption(elapsedMs: number): string {
     { atMs: 2500, text: "lateral spread: credential reuse across the fleet" },
     { atMs: 9000, text: "compromise spreading agent by agent" },
     { atMs: 18000, text: "fleet-wide compromise -- every agent now firing" },
-    { atMs: 30000, text: "four rails, one authorization layer" },
+    { atMs: 30000, text: "every rail, one authorization layer" },
     { atMs: 40000, text: "the mandate's ceiling holds" },
   ];
   let current = timeline[0]!.text;

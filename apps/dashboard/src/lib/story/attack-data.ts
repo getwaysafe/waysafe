@@ -6,10 +6,22 @@
  * are kept in one place so the page can cite them precisely once.
  */
 
-/** Rails the story draws as lanes. `evaluate()` doesn't take a rail -- D-32's
+/**
+ * Rails the story draws as lanes. `evaluate()` doesn't take a rail -- D-32's
  * whole point is that the same decision applies no matter which one asks --
- * so this is a display label only. */
-export const RAILS = ["card", "x402", "wallet", "bank"] as const;
+ * so this is a display label only.
+ *
+ * D-43 (amendment, OQ-11): only two lanes, not four. `x402` and `wallet`
+ * are merged into one `stablecoin` lane -- x402 is a protocol spoken over a
+ * stablecoin wallet instrument, not a second rail with its own required-
+ * signer position (D-41's 2-of-2 Safe is the position for both). `bank`
+ * (ACH/wire/RTP) is removed entirely: unlike cards (D-33) and on-chain
+ * stablecoins (D-41), no adapter, stub, or even a design exists for a
+ * required-signer position on a bank rail -- see OQ-11. Showing it as a
+ * lane here, even a simulated one, would draw a bank transfer as something
+ * this product enforces today, which isn't true yet.
+ */
+export const RAILS = ["card", "stablecoin"] as const;
 export type Rail = (typeof RAILS)[number];
 
 /**
