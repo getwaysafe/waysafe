@@ -259,6 +259,9 @@ export function DemoClient({ autoplay, commit }: { autoplay: boolean; commit: st
           <button className="demo-reset" onClick={reset}>
             reset
           </button>
+          <a className="demo-link" href="/story">
+            watch the story ↗
+          </a>
         </div>
       </div>
 

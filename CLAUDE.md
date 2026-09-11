@@ -218,7 +218,17 @@ question with no partial answer on record; `OQ-10`'s x402 half is now
 closed for the "exact" fallback settlement path D-41 built and the
 settlement bridge D-42 added — see D-41's own note on what remains
 genuinely open (the standard facilitator flow, deferred on the EIP-1271
-finding).
+finding). `D-43` added `/story`, a separate cinematic-simulation page for
+a 60-second video (linked from, and linking back to, `/demo`) — a fleet
+of simulated agents under simulated compromise, but the RIGHT side's
+decisions are the genuine `evaluate()`, called in the browser against a
+real policy, never scripted. That needed a new browser-safe entry point,
+`@waysafe/core/browser` (`packages/core/src/browser.ts`), since the
+package's only prior export transitively pulled in `node:crypto` and
+`@anthropic-ai/sdk` — verified mechanically that nothing reachable from
+the new subpath does. `npm test` was clean apart from the pre-existing
+D-42 funding-gap failure, which `/story` cannot touch (no x402, no
+Stripe, no on-chain rail).
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

@@ -1,0 +1,139 @@
+/* D-43: /story -- a launch-video-style page, not a dashboard screen.
+   Scoped to this route via story/layout.tsx. Fixed 1920x1080 design,
+   scaled to fit the viewport in StoryClient.tsx so there is never page
+   scroll or a browser-chrome dependency. */
+
+.story-viewport {
+  position: fixed;
+  inset: 0;
+  background: #030405;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.story-stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  flex: 0 0 auto;
+  transform-origin: center center;
+  background: #030405;
+}
+
+.story-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  display: block;
+}
+
+.story-overlay {
+  position: absolute;
+  color: #e6edf3;
+  pointer-events: none;
+}
+
+.story-link {
+  pointer-events: auto;
+  color: #5eead4;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(94, 234, 212, 0.4);
+}
+.story-link:hover {
+  border-bottom-color: #5eead4;
+}
+
+.story-center-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  color: #e6edf3;
+  background: rgba(3, 4, 5, 0.55);
+  pointer-events: none;
+}
+
+.story-center-hint-title {
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.story-center-hint-sub {
+  font-size: 18px;
+  color: #93a2b6;
+}
+
+.story-end-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 22px;
+  background: #030405;
+  text-align: center;
+}
+
+.story-end-line-1 {
+  font-size: 52px;
+  font-weight: 800;
+  color: #f3f6fa;
+  letter-spacing: 0.01em;
+  max-width: 1400px;
+  line-height: 1.25;
+}
+
+.story-end-line-2 {
+  font-size: 22px;
+  color: #93a2b6;
+  letter-spacing: 0.06em;
+  pointer-events: auto;
+}
+
+.story-keys {
+  position: absolute;
+  right: 24px;
+  bottom: 20px;
+  font-size: 13px;
+  color: #5c6675;
+  pointer-events: none;
+}
+
+.story-simlabel {
+  position: absolute;
+  left: 24px;
+  top: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #93a2b6;
+  pointer-events: none;
+}
+
+.story-footnote {
+  position: absolute;
+  left: 24px;
+  bottom: 20px;
+  max-width: 760px;
+  font-size: 12px;
+  color: #5c6675;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.story-back {
+  position: absolute;
+  right: 24px;
+  top: 20px;
+  font-size: 13px;
+  pointer-events: auto;
+}

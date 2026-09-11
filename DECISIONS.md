@@ -3236,6 +3236,219 @@ skipped -- the pre-existing D-37 SKIP).
 
 ---
 
+## D-43 — `/story`: a cinematic simulation for a 60-second video, and the browser-safe `@waysafe/core` subpath it needed
+
+The task: a split-screen, recordable video for social distribution --
+~200 agents, one compromised at T+0, lateral spread, four rails, a
+dollar counter racing on the left with no authorization layer and one
+held to the mandate's ceiling on the right -- separate from and linking
+to the proof demo at `/demo` (D-42). Non-negotiable per the task itself:
+the agents, the compromise, and the money are simulated and the page
+says so in a persistent corner label, but the RIGHT side's decisions
+have to be genuine -- the real `evaluate()` from `@waysafe/core`,
+called in the browser, against a real policy, never a scripted outcome.
+
+**`evaluate()` itself is pure; `@waysafe/core`'s only export before this
+decision was not.** `index.ts`'s barrel (`export * from "./evidence.js"`,
+`"./compiler/index.js"`, `"./domain.js"`) transitively imports
+`node:crypto` and `@anthropic-ai/sdk`. The package has no
+`sideEffects: false`, so a bundler can't drop an unused module without
+first resolving its own top-level imports -- importing `@waysafe/core`
+into a client component would drag `node:crypto` into a browser bundle
+that has no such module. D-42 hit the identical shape of problem for
+evidence verification and solved it by writing `browser-verify.ts`, a
+from-scratch WebCrypto reimplementation of the hashing/signing
+algorithm -- the right call *there*, because the thing being verified is
+unavoidably `node:crypto`-shaped on the signing side. It would have been
+the wrong call here: a browser-side reimplementation of `evaluate()`
+would be a second decision path, not the real one, and would have
+quietly violated the task's own "never script an outcome" rule by
+construction, however faithfully it copied the logic.
+
+The actual fix: `packages/core/src/browser.ts`, a new file re-exporting
+only `evaluate()` and its genuinely dependency-free graph --
+`merchant.ts`, `money.ts`, `policy.ts`, `reason-codes.ts`, `time.ts`,
+`engine/{evaluate,types}.ts`, plus `domain.ts`'s `ProposedAction` as an
+`import type` only (erased at compile time, so it never pulls in
+`domain.ts`'s own `node:crypto` id-generation code). `package.json`
+gained a second `exports` entry, `"./browser"`, pointing at
+`dist/browser.js`. Verified mechanically, not just by inspection: a
+script walked `dist/browser.js`'s real `from "..."` import graph after
+`tsc -b` and confirmed no reachable file contains a runtime
+`node:crypto` import (8 files visited: `browser.js`, `evaluate.js`,
+`merchant.js`, `money.js`, `policy.js`, `reason-codes.js`, `time.js`,
+`engine/types.js` -- `domain.js` never appears, because nothing imports
+it as a value). The dashboard's `/story` code imports only from
+`@waysafe/core/browser`, never `@waysafe/core`, so this stays true by
+construction rather than by discipline. This subpath is intentionally
+narrow: `evidence.ts`, `evidence-signing.ts`, and `compiler/index.ts`
+must never be added to it, even transitively -- a future addition that
+needs one of those belongs in `index.ts`.
+
+**The mandate is hand-authored, not compiled, and that's not a
+shortcut.** Unlike `/demo`'s scene 0, `/story` has no "principal types an
+instruction" beat -- the premise is a fleet already operating under an
+existing mandate at the moment of compromise. `lib/story/policy.ts`
+builds a `Policy` directly: $2,000/day, $500/transaction, one named
+vendor (`acmecloud-billing.com`), high-risk categories denied per D-10.
+The same justification `lib/demo/policy.ts`'s `handAuthoredPolicy()`
+already relies on (`POST /v1/policies/validate` is the product's own
+sanctioned path for a hand-authored policy) applies here unchanged.
+
+**The attack mix is designed so the real engine's own rules do the
+narrative work, not a hardcoded outcome.** `lib/story/simulation.ts`
+generates each compromised agent's payment attempts from a seeded PRNG
+(`lib/story/rng.ts`, mulberry32 -- no `Math.random()` anywhere in
+`lib/story`, which is what makes `?seed=` reproducible): ~82% target an
+attacker-controlled merchant the mandate never named (`domain`, `name`,
+`psp_account`, `network_mid`, or `onchain_address`, at a mix of
+amounts and categories, some high-risk) -- these deny on
+`DENY_MERCHANT_NOT_ALLOWLISTED` per D-3, exactly the flagship rule this
+product exists to prove; ~8% target the real named vendor at an inflated
+amount (blending into normal traffic while asking for too much) --
+these deny on `DENY_TRANSACTION_LIMIT_EXCEEDED` even though the merchant
+itself is VERIFIED; ~10% target the real vendor at an ordinary amount --
+these genuinely `ALLOW`, until the mandate's own $2,000/day ceiling
+is reached, after which the identical request denies on
+`DENY_CUMULATIVE_LIMIT_EXCEEDED`. For the default seed (43), this
+produces a LEFT total near $14.8M and a RIGHT total of exactly $1,992.30
+-- at, not over, the mandate's ceiling. `simulation.test.ts` asserts this
+as an invariant (`allowedTotal <= ceiling`), not just as an observed
+number for one seed. Every attempt runs across all four rail lanes
+(`RAILS` in `lib/story/attack-data.ts`) but rail never reaches
+`evaluate()` as an input -- D-32's whole point is that the same decision
+applies no matter which rail asks, and the simulation's own structure
+reflects that rather than special-casing a rail.
+
+**The "decisions are real" invariant is a real stubbed-`evaluate()`
+test, not a comment promising honesty.** `decideAttempts()`
+(`simulation.ts`) takes `evaluate`/`resolveMerchant` as injectable
+dependencies (defaulting to the real ones). `simulation.test.ts` stubs
+`evaluate()` to always return a fixed sentinel decision unrelated to
+what the real engine would say, and asserts every emitted event carries
+exactly that sentinel -- proving the rendering path has no alternate
+route to a `Decision` that bypasses whatever `evaluate()` actually
+returned. A companion test spies on the real, unstubbed `evaluate()` and
+confirms it's called exactly once per attempt.
+
+**A receipt hash, deliberately not called an "evidence hash" or
+"evidence chain."** The task asked for one in the receipt stream;
+`lib/story/receipt-hash.ts` computes a genuine SHA-256 (via
+`crypto.subtle`, real WebCrypto, not a fabricated string) over each
+decision's own content. It has no `previous_hash` link and nothing signs
+it, so calling it a "chain" or "verifiable" would overclaim exactly the
+property D-16/D-17 are careful never to claim without the mechanism to
+back it. UI copy calls it a "receipt hash," never more.
+
+**The incident figures are the one non-simulated fact on the page, and
+are sourced honestly rather than precisely.** The task specified
+17,600 agent actions and 13 hours to cluster-admin as real figures to
+cite with a footnote. Neither number is independently verifiable in
+this session against a specific named publication, and CLAUDE.md's
+instruction against generating or guessing URLs applies here -- so
+`lib/story/attack-data.ts`'s `INCIDENT_FOOTNOTE` presents them as
+"reported figures for a 2026 agentic-infrastructure compromise" with a
+pointer to this repo's own D-32 for context, rather than inventing a
+specific outlet or link. The simulation's own dollar counters are
+independently and explicitly labeled "(simulated -- no bound on this
+side)" so neither number is ever mistaken for the other.
+
+**`/story` needed the same auth-gate exclusion `/demo` already has, for
+the same reason.** `apps/dashboard/src/proxy.ts`'s matcher gates every
+route behind a session cookie except `/login`. `/story` makes no server
+calls at all (no org credential, no database, no fetch) -- it's a
+standalone public page like `/demo`, not a dashboard screen -- so it was
+added to the same exclusion list alongside `demo`/`api/demo`. Found by
+actually loading the page rather than by inspection: without this, `/story`
+307-redirected to `/login`.
+
+**A rendering discipline, not a testing requirement: everything that
+changes every frame is drawn imperatively on canvas inside one
+`requestAnimationFrame` loop, with no React re-render in that loop.**
+`StoryClient.tsx` keeps playback state, agent positions, in-flight
+particles, and the receipt-stream buffer in refs; React state changes
+only on the rare, discrete transitions an HTML overlay needs (loading
+done, paused/playing/end-card). This is what keeps ~200 agents and a
+few thousand precomputed attempts smooth -- the task's own "60fps, no
+jank" requirement -- without needing to test canvas drawing itself
+(canvas output isn't meaningfully unit-testable; the same reasoning
+`LogPane.test.tsx` already applies to a different pure-formatting
+component is why `simulation.ts`/`playback.ts` are the tested layer, not
+`StoryClient.tsx`).
+
+**The RAF delta clamp is generous on purpose.** An early version capped
+each frame's delta at 100ms as a defensive measure against a huge jump
+after a stall. Verified live (browser automation) that a tab the browser
+doesn't render as visible (`document.hidden`) can starve
+`requestAnimationFrame` almost entirely -- and a 100ms cap in that
+situation doesn't protect anything, it just makes elapsed time creep at
+a fraction of wall-clock speed once frames do arrive, which is worse for
+a page whose entire purpose is being screen-recorded. Raised to 2000ms:
+still guards against a truly degenerate multi-minute gap, never
+throttles ordinary playback.
+
+**The playback state machine (`lib/story/playback.ts`) follows
+`lib/demo/scenes.ts`'s established pattern exactly** -- pure, no
+timers, no React -- for the same reason: the page component should only
+ever call `tick`/`togglePlay`/`restart` and render the result. Tested in
+`playback.test.ts`: clamping and the ended transition, toggling from
+each state, restart always resetting to T+0, and `tick` being a no-op
+both when paused and when already ended.
+
+**Verified live in a real browser (Chrome, via automation), not just by
+reading the code.** Confirmed the page loads without console errors,
+renders the correct split-screen layout at both the default seed (43)
+and a different seed (7, visibly different agent field and compromise
+order -- determinism *and* seed-sensitivity, not just the former), that
+the compromise fix left exactly one agent red at T+0 (see below), that
+the "press space to play" pause overlay renders correctly when
+`?autoplay=1` is absent, and that pressing space transitions out of it.
+Full end-to-end playback across the whole 50-second timeline was not
+observed frame-by-frame in this session -- the automation tab's
+`document.hidden: true` state (confirmed directly: a raw
+`requestAnimationFrame` probe got zero callbacks in 2+ seconds) starves
+`requestAnimationFrame` in a way no real, focused, foreground browser
+tab (the actual target environment for a screen recording) would
+experience. The simulation's own correctness -- the part this
+starvation can't exercise -- is what `simulation.test.ts` and
+`playback.test.ts` cover directly instead.
+
+**A real bug the live check caught: symmetric jitter let multiple
+agents tie at exactly T+0.** `buildCompromiseSchedule`'s original jitter
+was `randFloat(rng, -250, 250)`, clamped to a minimum of 0 -- for
+several early-order agents, the eased base time plus a negative jitter
+landed below zero and got clamped to the same 0ms as the true patient
+zero, so the first frame showed several red dots, not the task's "T+0
+one agent is compromised." Fixed to additive-only jitter
+(`randFloat(rng, 0, 300)`), so only index 0 (forced to exactly 0ms)
+ever reads as compromised at T+0; every other agent's time is now
+strictly positive. Confirmed by reloading in the browser before and
+after the fix.
+
+**Change cost if wrong:** low. `browser.ts` is additive (a new subpath,
+no change to `index.ts` or any existing import of `@waysafe/core`);
+`/story` is a new, standalone route with no effect on `/demo`, the API,
+or the SDK. The one shared-file change is `proxy.ts`'s matcher regex
+(additive: one more excluded path).
+
+Implemented in `packages/core/src/browser.ts` (new),
+`packages/core/package.json` (`"./browser"` export),
+`apps/dashboard/src/lib/story/` (new: `rng.ts`, `policy.ts`,
+`attack-data.ts`, `simulation.ts`, `playback.ts`, `receipt-hash.ts`),
+`apps/dashboard/src/app/story/` (new page: `page.tsx`, `layout.tsx`,
+`StoryClient.tsx`, `story.css`), `apps/dashboard/src/proxy.ts` (matcher),
+and a link each way between `/demo` and `/story`. Tested in
+`apps/dashboard/src/lib/story/simulation.test.ts` (seed determinism, the
+compromise schedule, attempt/decision index-alignment, the
+"decisions are real" invariant against a stubbed `evaluate()`, and the
+real engine's actual behavior for this policy: never `STEP_UP`, denies
+the majority, and never lets `ALLOW`ed spend exceed the mandate's own
+ceiling) and `playback.test.ts` (the state machine). Full `npm test`
+ran clean except the pre-existing D-42 funding-gap failure (unrelated:
+`/story` never touches x402, Stripe, or any on-chain rail).
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

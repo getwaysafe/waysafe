@@ -29,5 +29,8 @@ export const config = {
   // D-42: /demo and its API routes are a standalone, unauthenticated-by-
   // design recordable page -- it holds its own fixed org credential
   // server-side (WAYSAFE_DEMO_ORG_API_KEY), never a user's session cookie.
-  matcher: ["/((?!login|demo|api/demo|_next/static|_next/image|favicon.ico).*)"],
+  // D-43: /story is the same kind of standalone public page -- it makes no
+  // server calls at all (no org credential, no database), so there is no
+  // session to gate it behind.
+  matcher: ["/((?!login|demo|story|api/demo|_next/static|_next/image|favicon.ico).*)"],
 };
