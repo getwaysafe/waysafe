@@ -228,7 +228,19 @@ package's only prior export transitively pulled in `node:crypto` and
 `@anthropic-ai/sdk` — verified mechanically that nothing reachable from
 the new subpath does. `npm test` was clean apart from the pre-existing
 D-42 funding-gap failure, which `/story` cannot touch (no x402, no
-Stripe, no on-chain rail).
+Stripe, no on-chain rail). `D-44` added `/film`, a three-act human-scale
+companion to `/story` (one person, one phone, two instruments) built
+entirely on `/demo`'s real plumbing rather than a new decision path:
+Act 2's card lane replays hand-authored `issuing_authorization.request`
+payloads through the real `StripeIssuingAdapter` (a new demo-only route,
+`POST /v1/demo/enforcement/stripe-issuing`), its stablecoin lane is a
+genuine x402/Safe ALLOW plus the three real on-chain bypass rejections,
+and Act 3 is `/demo`'s real signed evidence chain, verified in the
+browser. Building it surfaced a real schema constraint
+(`Instrument.mandateId` is `@unique`, D-32 item 3) that a naive second
+instrument on the same mandate violates — fixed with an additive
+`provision_x402: false` option on `/api/demo/mandate`, never a schema
+change.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

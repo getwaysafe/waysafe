@@ -3594,6 +3594,226 @@ funding-gap failure) still pass unchanged.
 
 ---
 
+## D-44 — `/film`: a three-act, human-scale film, built entirely on real `/demo` plumbing
+
+`/story` (D-43) tells this story at fleet scale -- 200 agents, aggregate
+dollar counters, a receipt stream. The task here was the same underlying
+claim at human scale: one person, one phone, two instruments, watched
+draining to zero and then not. `/film` is a new, separate route (not a
+replacement for `/story`, which stays as an optional beat inside this
+one) built around a hard constraint the task stated up front: *nothing
+may be shown as real that isn't, and everything real must actually run.*
+That constraint shaped every judgment call below more than the visual
+design did.
+
+**Three acts, sixteen beats, one state machine.** `lib/film/phases.ts`
+follows `lib/story/phases.ts`'s exact pattern -- a flat, ordered list of
+beats with fixed durations, a pure `resolveBeat(elapsedMs)` -- generalized
+from three phases to sixteen beats across three acts (Act 1 "Without":
+`intro`, `compromise`, `drain`, `empty`; Act 2 "With Waysafe":
+`replay-intro`, `decline-card-1`, `quote`, `decline-stablecoin`,
+`decline-card-2`, `allow`, `fleet-glimpse`; Act 3 "The evidence":
+`receipt`, `chain`, `verify`, `aftermath`, `endcard`). Each act lands on
+20s; the whole film on the task's own 60s target. The task estimated Act
+3 at "~15s" -- it runs 20s here once a real receipt, the real chain,
+verify-then-flip, the aftermath beat, and the end card each get enough
+time to actually read on screen. Recorded as a judgment call, not a
+deviation to hide: the "~" was already an estimate, and every act still
+lands on an even 20s.
+
+**The honesty boundary is structurally different from `/story`'s, and
+had to be redesigned rather than copied.** `/story` calls the real
+`evaluate()` directly in the browser (`@waysafe/core/browser`, D-43) and
+its "decisions are real" test stubs that exact import. `/film`'s card
+and stablecoin decisions run *inside* `apps/api` -- the real
+`StripeIssuingAdapter`, the real x402/Safe path -- and reach this page
+only as an HTTP response; there is no client-side `evaluate()` call to
+stub for those two rails. `lib/film/api-decisions.ts` is this page's
+equivalent boundary instead: three normalizer functions
+(`normalizeCardAttempt`, `normalizeStablecoinPayResult`,
+`normalizeStablecoinRejection`) are the *only* path `FilmClient.tsx`
+uses to turn a fetch response into something rendered, and every one
+throws -- "refusing to render" -- rather than defaulting when the field
+that actually carries the real decision (`approved`, `decision`,
+`rejected`) is missing or malformed. `api-decisions.test.ts` proves this
+both ways: a real, well-formed response passes through unchanged; the
+same response with its decision field stripped out throws instead of
+silently rendering some assumed outcome. The one beat that *does* call
+the real `evaluate()` client-side is `fleet-glimpse`
+(`lib/film/fleet-glimpse.ts`, a thin wrapper around `/story`'s own
+`buildStory`, unchanged) -- and that beat inherits `/story`'s own
+stubbed-`evaluate()` test coverage for free, plus a small
+`fleet-glimpse.test.ts` proving determinism specifically for `/film`'s
+own entry point into it.
+
+**Act 1's dramatization is fixed, not seeded -- `?seed=` reaches exactly
+one place.** Unlike `/story`'s procedural 200-agent fleet, Act 1 tells
+one specific, scripted story (the task's own three notification
+strings), so there is nothing for a seed to vary there.
+`lib/film/act1-timeline.ts` is deterministic by construction, no RNG
+involved. `?seed=` flows entirely into the `fleet-glimpse` beat via
+`buildFleetGlimpse(seed)` -- the only seed-sensitive surface, and the
+only one that needed a determinism test (`fleet-glimpse.test.ts`).
+
+**The three notifications are exactly what Act 2 replays -- no
+invented filler.** An early draft considered a denser barrage of
+decoy notifications for a more dramatic "faster and faster" feel, since
+the task's three quoted strings could be read as illustrative examples.
+Rejected: Act 2's own instruction is "identical attempts appear in the
+same order," and every notification Act 1 shows needs a real Act 2
+counterpart or the honesty boundary above is decorative for the ones
+that don't. `constants.ts`'s starting balances are sized to exactly the
+three notifications' amounts ($1,240.00 + $89.99 = $1,329.99 card;
+2,500.00 USDC wallet) so "balances falling to zero" is real arithmetic
+on real events, not a separately hardcoded "$0.00" the timeline ignores
+-- `act1-timeline.test.ts` asserts the zero-out directly. "Faster and
+faster" comes from shrinking gaps between the three named events
+(3400ms, then 2400ms), not from procedural density -- a fair trade at
+this narrower, three-event scale.
+
+**A real schema constraint, found only by actually running the card
+replay against the mandate the x402 instrument already claimed.**
+`Instrument.mandateId` is `@unique` (`packages/db/prisma/schema.prisma`
+-- "one instrument per mandate," D-32 item 3's own design). The first
+version of `/film`'s setup called `/api/demo/card` with the *same*
+mandate `/api/demo/mandate` had just provisioned an x402 instrument
+for -- a real `P2002` unique-constraint violation from Postgres, not a
+theoretical concern, caught by actually curling the route rather than
+by reading the schema first. The fix is not a schema change (widening a
+real product constraint to fit one video page would be exactly the kind
+of change CLAUDE.md's non-negotiables warn against making casually):
+`/api/demo/mandate` gained one optional, backward-compatible body field,
+`{ provision_x402: false }`, skipping that one step for a mandate that
+will carry a different instrument instead. `/demo`'s own calls are all
+bodyless and remain byte-for-byte unaffected. `/film` now provisions two
+independent, fully-authenticated mandates -- one for the x402/stablecoin
+path, a second, card-only one for the replay -- which is also the more
+honest shape: a real principal delegating both a card and a wallet to
+one agent plausibly has two mandates, not one instrument wearing two
+rails.
+
+**The addendum's two captions and the quote card, in the order they were
+specified.** Inserted as their own beats rather than folded into
+`decline-stablecoin`'s existing time: `quote` (3s, a full-screen card)
+immediately precedes `decline-stablecoin` (4s), which itself carries two
+captions in sequence -- `DECLINE_STABLECOIN_CUT_MS` (1000ms) marks the
+cut to the Safe's real on-chain revert, captioned "You can reason past a
+rule. You can't reason past a signature."; the remaining 3000ms hold on
+"The agent's key alone can't sign. Neither can Waysafe's. It takes
+both.", the addendum's own specified duration. The quoted agent message
+("External infrastructure exploit is outside intended scope...") is not
+new copy -- it is the exact sentence DECISIONS.md D-32 already records
+from the real July 2026 Hugging Face intrusion, reproduced verbatim per
+the instruction to cite it precisely, attributed to OpenAI's July 2026
+incident timeline as directed. That attribution is not independently
+re-verified against a specific published URL in this session -- per
+CLAUDE.md's instruction against generating or guessing URLs,
+`AGENT_REASONING_ATTRIBUTION` names the timeline in prose and points to
+this repo's own D-32 as the citable record, rather than inventing a
+link. "The first on-chain rejection" (the addendum's own phrase) maps to
+the real `session_key_alone` bypass case -- semantically the exact match
+for "the agent's key alone can't sign" -- rather than to all three
+`/api/demo/bypass` cases; the other two are fetched and available but
+this narrower film doesn't need to show every one `/demo` already does.
+
+**The RIGHT answer in Act 3's aftermath beat is allowed to say "signed,
+independently verifiable" -- unlike `/story`'s softened version, because
+here it's true.** D-43 shipped "attributed, hashed, and timestamped"
+specifically because that page's receipt hash is a plain digest over
+simulated data, never signed, never chained. `/film`'s Act 3 reuses
+`/demo`'s real evidence chain and real `verifyEvidenceChainInBrowser`
+(`lib/demo/browser-verify.ts`, unmodified) against a real signed,
+hash-chained record of a real decision -- the stronger claim the
+original D-43 task asked for and D-43 itself declined to make is now
+backed by the actual mechanism, not overclaimed. Same reasoning applies
+to the end card's second line ("the authorization and evidence layer for
+agent spending, across every rail") -- a claim about the real product's
+real evidence chain (D-26/OQ-8), not about anything this or `/story`'s
+own simulated receipts do.
+
+**A real component-remount bug, found by the same live check that found
+the schema constraint.** `Act1Device`, `Act2Split`, `Balance`, and
+`FleetGlimpseCanvas` were first written as functions nested inside
+`FilmClient`'s own render body -- a component defined inside another
+component's render gets a fresh identity every render, and
+`FilmClient` re-renders every animation frame (its clock is React
+state, not a ref, unlike `/story`'s canvas-only approach). For
+`FleetGlimpseCanvas` specifically, this meant its draw effect was
+tearing down and re-running on every single frame instead of once per
+mount. Not caught by `tsc` or by the unit tests (neither type-checks nor
+tests React remount behavior) -- caught by a live browser check whose
+`document.querySelector('.film-fleet-canvas')` came back inconsistent
+between two calls a fraction of a second apart, prompting a closer look
+at the component structure. Fixed by hoisting all four to module scope;
+`FleetGlimpseCanvas` now takes `fleet` as a prop and owns its own
+`useRef` instead of closing over `FilmClient`'s.
+
+**Verified live against the real running stack, repeatedly, not just
+once.** With `dev:api` (`WAYSAFE_ENABLE_DEMO_ROUTES=1`,
+`WAYSAFE_X402_REUSE_LIVE_SAFE=1`), `demo:merchant`, and `dev:dashboard`
+all running: confirmed via direct `curl`/`fetch` against
+`/api/demo/mandate`, the new `/api/demo/card`, `/api/demo/bypass`, and
+`/api/demo/pay` that every real call succeeds and returns genuine
+decisions -- two real card DENYs (`DENY_MERCHANT_NOT_ALLOWLISTED` plus,
+since both amounts vastly exceed the demo policy's $10/transaction and
+$20/day limits, `DENY_TRANSACTION_LIMIT_EXCEEDED` and
+`DENY_CUMULATIVE_LIMIT_EXCEEDED` stacked on top -- all three genuinely
+computed, not selected for effect), all three real on-chain rejections,
+and a genuine ALLOW with a real settlement attempt. Also confirmed in
+the browser: Act 1's intro and drain/empty states, the Act 2 split
+screen's `replay-intro` beat, the `fleet-glimpse` caption, and the end
+card's exact copy, across multiple full playthroughs. The same
+`document.hidden`-throttling limitation D-43 already recorded for this
+automation harness applies here too and for the same reason (a
+backgrounded tab starves `requestAnimationFrame` in large, unpredictable
+bursts) -- multiple attempts to catch specific mid-beat states landed
+either well before or well after the target beat. This is a harness
+limitation, not a code path a real, focused, foreground recording tab
+would hit; `phases.test.ts` and `api-decisions.test.ts` are what
+actually exercise the transitions and the honesty boundary this live
+check couldn't pin down frame-by-frame.
+
+**A real, expected consequence of that same live testing:** repeatedly
+exercising the genuine-ALLOW path spent down
+`WAYSAFE_SAFE_COSIGNER_KEY`'s Amoy gas balance again, the same standing
+fact CLAUDE.md now records (a prior session's testing had already
+required one refunding this session). `/api/demo/pay`'s own settlement
+step degrades exactly as designed when this happens: `decision: ALLOW`
+still returns correctly (confirmed directly, `evaluate()` never touches
+gas), and `settlement` carries `{ error: ... }` instead of a tx hash --
+`normalizeStablecoinPayResult` treats that as `settlementTxHash: null`
+and the "allow" beat simply omits the PolygonScan link, never crashing
+or fabricating one. Fund the cosigner EOA again before recording a take
+that needs the on-chain link to actually resolve.
+
+**Change cost if wrong:** low. `/film` is a new, standalone route;
+its one shared-file change is `/api/demo/mandate`'s new optional
+`provision_x402` field, additive and defaulted to `/demo`'s existing
+behavior. `proxy.ts`'s matcher gained one more excluded path, same
+pattern as `/story`.
+
+Implemented in `apps/dashboard/src/lib/film/` (new: `phases.ts`,
+`constants.ts`, `act1-timeline.ts`, `api-decisions.ts`,
+`fleet-glimpse.ts`), `apps/dashboard/src/app/film/` (new page:
+`page.tsx`, `layout.tsx`, `FilmClient.tsx`, `film.css`),
+`apps/dashboard/src/app/api/demo/card/route.ts` (new),
+`apps/dashboard/src/app/api/demo/mandate/route.ts`
+(`provision_x402` option), `apps/api/src/demo/routes.ts`
+(`POST /v1/demo/enforcement/stripe-issuing`, new), `apps/dashboard/
+src/proxy.ts` (matcher), and a link from `/film` back to `/demo`.
+Tested in `apps/dashboard/src/lib/film/phases.test.ts` (the beat state
+machine, including the addendum's caption timing), `api-decisions.test.ts`
+(the "refuses to render" invariant for every server-sourced decision),
+`act1-timeline.test.ts` (the fixed timeline and the zero-balance
+invariant), and `fleet-glimpse.test.ts` (seed determinism into the one
+place `/film` reuses `/story`'s real `evaluate()` path). Full `npm
+test`: 526 passed, 1 skipped (the pre-existing D-37 SKIP) when the
+cosigner EOA was funded; the one x402 broadcast case fails on
+`InsufficientFundsError` after this session's own live testing spent it
+down again -- the standing, documented fact above, not a regression.
+
+---
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

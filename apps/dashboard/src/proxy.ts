@@ -32,5 +32,8 @@ export const config = {
   // D-43: /story is the same kind of standalone public page -- it makes no
   // server calls at all (no org credential, no database), so there is no
   // session to gate it behind.
-  matcher: ["/((?!login|demo|story|api/demo|_next/static|_next/image|favicon.ico).*)"],
+  // D-44: /film is also standalone and public, but unlike /story it does
+  // call the server -- through /api/demo/* (the same demo org credential
+  // /demo already uses server-side), never a user's session cookie.
+  matcher: ["/((?!login|demo|story|film|api/demo|_next/static|_next/image|favicon.ico).*)"],
 };

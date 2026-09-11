@@ -25,9 +25,27 @@
  *    moves no funds (every case is `simulateExecTransaction`'s `eth_call`,
  *    never a broadcast) -- see that test file for what property this is
  *    actually proving.
+ *
+ *  - `POST /v1/demo/enforcement/stripe-issuing` (D-44, for `/film`'s Act 2
+ *    card lane) replays two hand-authored `issuing_authorization.request`-
+ *    shaped payloads through the real `StripeIssuingAdapter` and
+ *    `handleIssuingAuthorizationRequest` (`enforcement/stripe-issuing.ts`)
+ *    -- the same code a live Stripe webhook would call. It is not a live
+ *    Stripe call: this environment's Issuing financial account is still
+ *    `status: "pending"` (D-37), so card provisioning here creates the
+ *    Instrument row directly (the same shape `provisionCardForMandate`
+ *    would produce) rather than calling Stripe's real API, and the
+ *    authorization payloads are authored to match Stripe's real webhook
+ *    shape rather than replayed from an actual captured webhook, since
+ *    none exists yet against a live sandbox. Everything downstream of that
+ *    payload -- merchant resolution, `evaluate()`, the adapter's response
+ *    mapping -- is the real, unmodified code path. The page must label
+ *    every result from this route "replayed Stripe authorization request
+ *    -- live sandbox pending (D-37)"; never shown as a live Stripe scene.
  */
 
 import type { FastifyInstance } from "fastify";
+import type Stripe from "stripe";
 import { z } from "zod";
 import type { AuthorizationRepository } from "../authorization/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
@@ -53,6 +71,7 @@ import {
   signWithOneOwnerOnly,
   simulateExecTransaction,
 } from "../enforcement/x402-safe.js";
+import { StripeIssuingAdapter, handleIssuingAuthorizationRequest } from "../enforcement/stripe-issuing.js";
 import type { Address, Hex } from "viem";
 
 export interface DemoRoutesRepos {
@@ -64,6 +83,22 @@ export interface DemoRoutesRepos {
 const BypassProofBodySchema = z.object({
   instrument_id: z.string().min(1),
 });
+
+const CardReplayBodySchema = z.object({
+  mandate_id: z.string().min(1),
+});
+
+/** Two recorded-shaped attempts, chosen to match `/film`'s Act 1 captions
+ * exactly -- these are the same fabricated numbers dramatized there,
+ * replayed here for real. Neither `network_id` is on the demo mandate's
+ * allowlist (which names only an `onchain_address`, per
+ * `lib/demo/policy.ts`), so both are expected to DENY on
+ * `DENY_MERCHANT_NOT_ALLOWLISTED` -- a real decision, not a scripted one;
+ * see `stripe-issuing.test.ts` for the same rule proven directly. */
+const CARD_REPLAY_SCENARIOS = [
+  { label: "$1,240.00 -- unknown merchant, card ending 4421", amountCents: 124_000, networkId: "unknown_merchant_9911" },
+  { label: "$89.99 -- recurring, unknown", amountCents: 8_999, networkId: "unknown_recurring_2207" },
+] as const;
 
 export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos): void {
   /**
@@ -202,5 +237,66 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
         },
       ],
     });
+  });
+
+  /**
+   * D-44: `/film`'s Act 2 card lane. See this file's own header comment
+   * for why this replays hand-authored payloads rather than calling
+   * Stripe's real API. Provisions a card Instrument row directly (no
+   * Stripe call -- D-37's financial account is still pending), then runs
+   * `CARD_REPLAY_SCENARIOS` through the real adapter and returns each
+   * real `Decision`.
+   */
+  app.post("/v1/demo/enforcement/stripe-issuing", async (request, reply) => {
+    const body = CardReplayBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: body.error.issues });
+    }
+
+    const summary = await repos.webauthnRepos.authorization.getMandateSummary(body.data.mandate_id);
+    if (!summary || summary.organizationId !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+
+    const now = new Date();
+    const cardId = `ic_demo_${body.data.mandate_id}`;
+    const instrument = await repos.instruments.createInstrument(
+      {
+        organizationId: summary.organizationId,
+        mandateId: body.data.mandate_id,
+        rail: "stripe_issuing",
+        externalRef: cardId,
+      },
+      now,
+    );
+
+    const adapter = new StripeIssuingAdapter();
+    const issuingRepos = {
+      authorization: repos.webauthnRepos.authorization,
+      evidence: repos.webauthnRepos.evidence,
+      instruments: repos.instruments,
+    };
+
+    const attempts = [];
+    for (const scenario of CARD_REPLAY_SCENARIOS) {
+      const authorization = {
+        id: `iauth_demo_${scenario.networkId}`,
+        amount: scenario.amountCents,
+        currency: "usd",
+        merchant_data: { network_id: scenario.networkId, category_code: "5999", name: "UNKNOWN MERCHANT" },
+        card: { id: cardId, metadata: { waysafe_instrument_id: instrument.id } },
+        pending_request: { amount: scenario.amountCents },
+      } as unknown as Stripe.Issuing.Authorization;
+
+      const decision = await handleIssuingAuthorizationRequest(issuingRepos, adapter, authorization, now);
+      attempts.push({
+        label: scenario.label,
+        amount_cents: scenario.amountCents,
+        approved: decision.response.approved,
+        reason_codes: decision.response.reason_codes,
+      });
+    }
+
+    return reply.send({ instrument_id: instrument.id, attempts });
   });
 }
