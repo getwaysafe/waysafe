@@ -202,12 +202,12 @@ settlement gap for x402's `erc20_transfer_fallback` mode specifically — a
 session-key relay where the agent's runtime signs with a key that never
 reaches Waysafe, and Waysafe combines and broadcasts only on a genuine
 ALLOW. Verified live in that session: a real ALLOW settled on-chain for
-real, and all three bypass rejections reverted for real. That same live
-testing spent down `WAYSAFE_SAFE_COSIGNER_KEY`'s testnet gas balance, so
+real, and all three bypass rejections reverted for real.
 `x402.bypass.test.ts`'s one broadcast case (the genuine 2-of-2 transfer)
-currently fails on `InsufficientFundsError`, not a code regression — fund
-that address with Amoy POL before relying on that test again. This
-environment's financial account
+spends real gas from `WAYSAFE_SAFE_COSIGNER_KEY`'s EOA, so it will
+eventually fail with `InsufficientFundsError` as that balance depletes —
+this is never a code regression, just fund that address with Amoy POL
+(gas only, never USDC) and re-run. This environment's financial account
 (`fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56`) is still
 `status: "pending"`, so the Stripe Issuing live bypass test self-reports
 SKIPPED with that status rather than a live pass — that is expected, not a
