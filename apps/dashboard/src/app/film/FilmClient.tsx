@@ -438,35 +438,37 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
   return (
     <div className="film-viewport">
       <div className="film-stage" ref={stageRef}>
-        {resolved.beat.act < 3 ? <div className="film-dramatization-tag film-overlay">DRAMATIZATION</div> : null}
-        {resolved.beat.act === 3 ? <div className="film-real-tag film-overlay">EVERYTHING FROM HERE IS REAL</div> : null}
-        <div className="film-keys film-overlay">space: play/pause &nbsp;·&nbsp; r: restart &nbsp;·&nbsp; seed {seed}</div>
-        <a className="film-back film-overlay" href="/demo" style={{ pointerEvents: "auto" }}>
-          proof: /demo ↗
-        </a>
+        {/* All mandate/Safe/instrument setup happens behind a plain black
+            frame -- no text, no tags, no overlays -- so a recording that
+            starts on ?autoplay=1 never shows provisioning as part of the
+            film. Act 1 begins, and everything below appears, only once
+            `ready` is true (setup finished, successfully or not). */}
+        {ready ? (
+          <>
+            {resolved.beat.act < 3 ? <div className="film-dramatization-tag film-overlay">DRAMATIZATION</div> : null}
+            {resolved.beat.act === 3 ? <div className="film-real-tag film-overlay">EVERYTHING FROM HERE IS REAL</div> : null}
+            <div className="film-keys film-overlay">space: play/pause &nbsp;·&nbsp; r: restart &nbsp;·&nbsp; seed {seed}</div>
+            <a className="film-back film-overlay" href="/demo" style={{ pointerEvents: "auto" }}>
+              proof: /demo ↗
+            </a>
 
-        {setupError ? (
-          <div className="film-center-hint">
-            <div className="film-center-hint-title" style={{ color: "#fca5a5" }}>setup failed</div>
-            <div className="film-center-hint-sub">{setupError}</div>
-          </div>
+            {setupError ? (
+              <div className="film-center-hint">
+                <div className="film-center-hint-title" style={{ color: "#fca5a5" }}>setup failed</div>
+                <div className="film-center-hint-sub">{setupError}</div>
+              </div>
+            ) : null}
+
+            {status === "paused" && !setupError ? (
+              <div className="film-center-hint">
+                <div className="film-center-hint-title">▶ press space to play</div>
+                <div className="film-center-hint-sub">r restarts · ?autoplay=1 starts immediately</div>
+              </div>
+            ) : null}
+
+            {!setupError ? renderBeat() : null}
+          </>
         ) : null}
-
-        {!ready ? (
-          <div className="film-center-hint">
-            <div className="film-center-hint-title">provisioning the real mandate and Safe…</div>
-            <div className="film-center-hint-sub">this calls the real /demo plumbing -- see how to run it below</div>
-          </div>
-        ) : null}
-
-        {ready && status === "paused" && !setupError ? (
-          <div className="film-center-hint">
-            <div className="film-center-hint-title">▶ press space to play</div>
-            <div className="film-center-hint-sub">r restarts · ?autoplay=1 starts immediately</div>
-          </div>
-        ) : null}
-
-        {ready && !setupError ? renderBeat() : null}
       </div>
     </div>
   );
@@ -546,7 +548,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
       case "replay-intro":
         return (
           <Act2Split>
-            <div className="film-caption-big film-caption-big--waysafe" style={{ top: "8%", fontSize: 30 }}>
+            <div className="film-caption-big film-caption-big--waysafe" style={{ top: "8%", fontSize: 40 }}>
               identical compromise. identical attempts.
             </div>
           </Act2Split>
@@ -577,7 +579,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
             stablecoinRejection={rejection}
             stablecoinError={bypassError}
           >
-            <div className="film-caption-big film-caption-big--waysafe" style={{ top: "78%", fontSize: 28 }}>
+            <div className="film-caption-big film-caption-big--waysafe" style={{ top: "78%", fontSize: 40 }}>
               {showThresholdCaption ? STABLECOIN_THRESHOLD_CAPTION : STABLECOIN_REVERT_CAPTION}
             </div>
           </Act2Split>

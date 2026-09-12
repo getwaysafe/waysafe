@@ -3855,6 +3855,73 @@ test changes: this is a rendering-only addition with no new branch in
 any pure, tested module. Full `npm test` unaffected (525 passed, 1
 skipped, 1 failed on the same pre-existing funding gap).
 
+### Follow-up -- provisioning must never appear on screen, and minimum type sizes for 1080p
+
+Two fixes, both craft/production requirements, before any visual
+redesign.
+
+**Provisioning happens behind a plain black frame, no text, ever.**
+Before this, the not-`ready` window (the real mandate, x402 Safe, card
+instrument, bypass proof, and ALLOW settlement all being provisioned)
+rendered a literal caption -- "provisioning the real mandate and Safe…
+this calls the real /demo plumbing -- see how to run it below" -- plus
+the corner tags, the keys hint, and the `/demo` link, all *before* Act 1
+had even started. On `?autoplay=1` this text would appear at the very
+start of every recording. The fix moves every overlay (tags, keys hint,
+`/demo` link, the paused hint, `renderBeat()` itself) inside a single
+`{ready ? ... : null}` block -- while `!ready`, `FilmClient` renders
+nothing but the stage's own black background. This is not scoped to
+`?autoplay=1` specifically, on purpose: there is no case where showing
+internal setup diagnostics is the right behavior for either playback
+mode, and a single unconditional gate is simpler and cannot drift out
+of sync with the autoplay flag the way a second, autoplay-only branch
+could later.
+
+**Minimum type sizes, mapped onto three categories that don't
+perfectly match this page's own CSS structure -- a judgment call, not
+an exact translation.** The task named exactly three buckets (captions
+≥40px, phone UI text ≥22px, tags ≥18px) for a page whose actual CSS has
+more than three kinds of text: the big overlay captions and the literal
+`.film-device` phone frame map directly, but Act 2's `allow` panel and
+Act 3's receipt/chain/verify panels are neither -- not a phone frame,
+not a one-line dramatic caption, not a small corner disclosure. Decided
+by what these panels visually *are*: styled UI cards showing
+information a viewer must actually read (a decision, a reason code, an
+evidence event), functionally the same job the phone's own UI does just
+without a phone-shaped border -- so panel body text, badges, and the
+evidence-chain list all took the 22px "phone UI text" floor. Genuinely
+secondary meta -- the corner tags, the `space/r/seed` hint, the `/demo`
+link, the quote's attribution line, `CARD_REPLAY_TAG`, `.film-mono`
+technical detail (policy hashes, addresses), and each panel's own small
+uppercase section title -- took the 18px "tags" floor instead. Every
+big narrative overlay (the compromise/threshold captions, the quote
+text itself, the aftermath's question and answers, all three end-card
+lines, the fleet-glimpse caption) took the 40px "captions" floor,
+including two inline `fontSize` overrides in `FilmClient.tsx` that had
+quietly dropped Act 2's own captions to 28-30px. One truly dead rule,
+`.film-act-label`, was deleted outright rather than bumped -- it was
+never referenced by any component. Recorded as a judgment call
+precisely because the mapping isn't the task's own three-way split
+applied mechanically; if the intent was stricter (every non-phone,
+non-tag text at the 40px caption floor, including chain-list rows),
+that would need a real layout redesign, not a type-size pass, since a
+scrollable evidence-chain list at 40px per row stops reading as a list
+at this page's current panel widths.
+
+**Change cost if wrong:** low. Both are additive/corrective -- no
+behavior changed besides what's on screen and when the black frame
+lifts.
+
+Implemented in `apps/dashboard/src/app/film/FilmClient.tsx` (the
+`ready`-gated overlay block, two `fontSize` fixes) and
+`apps/dashboard/src/app/film/film.css` (every `font-size` rule bumped
+to its category floor, `.film-act-label` removed). No test changes:
+purely a rendering/CSS pass, no new logic in any tested module. Full
+`npm test` unaffected (525 passed, 1 skipped, 1 failed on the same
+pre-existing funding gap). Verified live: a fresh `?autoplay=1` load
+shows a plain black frame with no text at all until Act 1 begins, and
+Act 1's phone UI, tags, and captions all render visibly larger.
+
 ---
 
 # Open questions
