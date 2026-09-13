@@ -240,7 +240,20 @@ browser. Building it surfaced a real schema constraint
 (`Instrument.mandateId` is `@unique`, D-32 item 3) that a naive second
 instrument on the same mandate violates — fixed with an additive
 `provision_x402: false` option on `/api/demo/mandate`, never a schema
-change.
+change. `D-45` rebuilt `/film`'s visuals wholesale against
+`design/film-storyboard/`'s ten static frames as the design source of
+truth — exact palette/type/phone-shell values copied rather than
+re-derived, a shared `Phone` component, and a code-level
+frame→beat mapping (`lib/film/frame-map.ts`) checked in a test against
+the storyboard's own README table — while leaving `phases.ts`'s
+sixteen beats, `?autoplay=1&seed=1`, the black-frame provisioning gate,
+and every real decision path (card replay, live x402/Safe, evidence
+chain) untouched. `IssuingDecision` gained an additive
+`authorizationId` field so Act 3's receipt/chain rows can look up the
+real evidence event instead of showing placeholders — and frame 08's
+honesty tag deliberately does not match the storyboard's own wording,
+since the storyboard is a static mockup disclosing placeholder hashes
+and this page's hashes are genuinely real.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

@@ -294,9 +294,20 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
         amount_cents: scenario.amountCents,
         approved: decision.response.approved,
         reason_codes: decision.response.reason_codes,
+        // D-45: the real Authorization row's id -- /film's Act 3 uses this
+        // to find this exact decision's own EvidenceEvent (subject_id) for
+        // a real receipt, rather than a placeholder.
+        authorization_id: decision.authorizationId,
       });
     }
 
-    return reply.send({ instrument_id: instrument.id, attempts });
+    return reply.send({
+      instrument_id: instrument.id,
+      // D-45: real, not placeholders -- /film's Act 3 receipt card cites
+      // these directly.
+      mandate_version_id: summary.mandateVersionId,
+      policy_hash: summary.policyHash,
+      attempts,
+    });
   });
 }

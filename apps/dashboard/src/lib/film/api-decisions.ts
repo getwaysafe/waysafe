@@ -22,6 +22,10 @@ export interface CardAttemptResult {
   amountCents: number;
   decision: "ALLOW" | "DENY";
   reasonCodes: string[];
+  /** The real Authorization row's id (D-45) -- the join key for finding
+   * this exact decision's own EvidenceEvent in the fetched chain, for the
+   * real Act 3 receipt. */
+  authorizationId: string;
 }
 
 function requireString(value: unknown, field: string): string {
@@ -63,6 +67,33 @@ export function normalizeCardAttempt(raw: unknown): CardAttemptResult {
     amountCents: requireNumber(r.amount_cents, "amount_cents"),
     decision: r.approved ? "ALLOW" : "DENY",
     reasonCodes: requireStringArray(r.reason_codes, "reason_codes"),
+    authorizationId: requireString(r.authorization_id, "authorization_id"),
+  };
+}
+
+export interface CardReplayResult {
+  mandateVersionId: string;
+  policyHash: string;
+  attempts: CardAttemptResult[];
+}
+
+/** `raw` is `POST /v1/demo/enforcement/stripe-issuing`'s full response body
+ * (proxied by `/api/demo/card`). `mandate_version_id`/`policy_hash` are the
+ * real mandate's own values (D-45) -- the Act 3 receipt cites these
+ * directly rather than a placeholder, so this throws just like
+ * `normalizeCardAttempt` does when either is missing. */
+export function normalizeCardReplayResult(raw: unknown): CardReplayResult {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("refusing to render: card replay result is not an object");
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.attempts)) {
+    throw new Error('refusing to render: card replay result has no "attempts" array');
+  }
+  return {
+    mandateVersionId: requireString(r.mandate_version_id, "mandate_version_id"),
+    policyHash: requireString(r.policy_hash, "policy_hash"),
+    attempts: r.attempts.map(normalizeCardAttempt),
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeCardAttempt,
+  normalizeCardReplayResult,
   normalizeStablecoinPayResult,
   normalizeStablecoinRejection,
 } from "./api-decisions";
@@ -12,6 +13,7 @@ describe("/film API decision normalizers -- the 'refuses to render' invariant (D
       amount_cents: 124_000,
       approved: false,
       reason_codes: ["DENY_MERCHANT_NOT_ALLOWLISTED"],
+      authorization_id: "auth_01demo",
     };
 
     it("passes a real, well-formed result through unchanged", () => {
@@ -20,6 +22,7 @@ describe("/film API decision normalizers -- the 'refuses to render' invariant (D
         amountCents: 124_000,
         decision: "DENY",
         reasonCodes: ["DENY_MERCHANT_NOT_ALLOWLISTED"],
+        authorizationId: "auth_01demo",
       });
     });
 
@@ -39,6 +42,56 @@ describe("/film API decision normalizers -- the 'refuses to render' invariant (D
     it("refuses to render a non-object payload", () => {
       expect(() => normalizeCardAttempt(null)).toThrow(/refusing to render/i);
       expect(() => normalizeCardAttempt("ALLOW")).toThrow(/refusing to render/i);
+    });
+
+    it("refuses to render when the real authorization_id is missing -- no receipt to point a receipt view at", () => {
+      const { authorization_id: _authorizationId, ...withoutId } = valid;
+      expect(() => normalizeCardAttempt(withoutId)).toThrow(/refusing to render/i);
+    });
+  });
+
+  describe("normalizeCardReplayResult", () => {
+    const validAttempt = {
+      label: "$1,240.00 -- unknown merchant, card ending 4421",
+      amount_cents: 124_000,
+      approved: false,
+      reason_codes: ["DENY_MERCHANT_NOT_ALLOWLISTED"],
+      authorization_id: "auth_01demo",
+    };
+    const valid = {
+      mandate_version_id: "mdv_01demo",
+      policy_hash: "7c1e9a2b3c4d5e6fa94f",
+      attempts: [validAttempt],
+    };
+
+    it("passes a real, well-formed response through unchanged", () => {
+      expect(normalizeCardReplayResult(valid)).toEqual({
+        mandateVersionId: "mdv_01demo",
+        policyHash: "7c1e9a2b3c4d5e6fa94f",
+        attempts: [
+          {
+            label: validAttempt.label,
+            amountCents: 124_000,
+            decision: "DENY",
+            reasonCodes: ["DENY_MERCHANT_NOT_ALLOWLISTED"],
+            authorizationId: "auth_01demo",
+          },
+        ],
+      });
+    });
+
+    it("refuses to render when the real mandate_version_id is missing", () => {
+      const { mandate_version_id: _mandateVersionId, ...withoutId } = valid;
+      expect(() => normalizeCardReplayResult(withoutId)).toThrow(/refusing to render/i);
+    });
+
+    it("refuses to render when the real policy_hash is missing", () => {
+      const { policy_hash: _policyHash, ...withoutHash } = valid;
+      expect(() => normalizeCardReplayResult(withoutHash)).toThrow(/refusing to render/i);
+    });
+
+    it("refuses to render when attempts is not an array", () => {
+      expect(() => normalizeCardReplayResult({ ...valid, attempts: "none" })).toThrow(/refusing to render/i);
     });
   });
 

@@ -14,6 +14,14 @@ interface CardAttempt {
   amount_cents: number;
   approved: boolean;
   reason_codes: string[];
+  authorization_id: string | null;
+}
+
+interface CardReplayResponse {
+  instrument_id: string;
+  mandate_version_id: string;
+  policy_hash: string;
+  attempts: CardAttempt[];
 }
 
 /**
@@ -41,7 +49,7 @@ export async function POST(request: Request) {
     detail: "hand-authored issuing_authorization.request payloads, run through the real adapter and evaluate()",
   });
 
-  const result = await callDemoRoute<{ instrument_id: string; attempts: CardAttempt[] } | { error: string }>(
+  const result = await callDemoRoute<CardReplayResponse | { error: string }>(
     "/v1/demo/enforcement/stripe-issuing",
     { mandate_id: body.mandate_id },
   );

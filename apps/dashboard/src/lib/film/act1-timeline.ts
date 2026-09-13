@@ -12,7 +12,6 @@ import { ATTACKER_NOTIFICATIONS, STARTING_CARD_BALANCE_CENTS, STARTING_WALLET_US
 
 export interface TimedNotification {
   index: number;
-  label: string;
   rail: "card" | "stablecoin";
   /** ms since the "drain" beat itself started. */
   atMs: number;
@@ -24,10 +23,11 @@ export interface TimedNotification {
  * 200-agent fleet can afford. */
 export const NOTIFICATION_TIMES_MS = [1_800, 5_200, 7_600] as const;
 
+/** Timing only -- the display copy for each notification lives in
+ * `constants.ts`'s `ATTACKER_NOTIFICATIONS`, indexed by `.index`. */
 export function buildAct1Notifications(): TimedNotification[] {
   return ATTACKER_NOTIFICATIONS.map((n, i) => ({
     index: i,
-    label: n.label,
     rail: n.rail,
     atMs: NOTIFICATION_TIMES_MS[i]!,
   }));

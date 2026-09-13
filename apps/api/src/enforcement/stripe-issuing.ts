@@ -385,6 +385,13 @@ export interface IssuingDecision {
    * evidence or an authorization row against (see
    * handleIssuingAuthorizationRequest). */
   mandateId: string | null;
+  /** D-45: the saved Authorization's own id -- the same value stamped as
+   * `subject_id` on the `enforcement.stripe_issuing.decision` EvidenceEvent
+   * below, so a caller that needs to show *this specific* decision's real
+   * evidence (a receipt view, `/film`'s Act 3) can find it without a second,
+   * fuzzier lookup. Null alongside `mandateId` for the same reason: no
+   * instrument resolved, nothing saved. */
+  authorizationId: string | null;
 }
 
 /**
@@ -427,7 +434,7 @@ export async function handleIssuingAuthorizationRequest(
         },
       ],
     };
-    return { response: adapter.toResponse(result, authorization), mandateId: null };
+    return { response: adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
   }
 
   const instrument = await repos.instruments.getInstrument(parsed.instrumentRef);
@@ -441,7 +448,7 @@ export async function handleIssuingAuthorizationRequest(
         },
       ],
     };
-    return { response: adapter.toResponse(result, authorization), mandateId: null };
+    return { response: adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
   }
 
   const mandateId = instrument.mandate_id;
@@ -530,5 +537,5 @@ export async function handleIssuingAuthorizationRequest(
     }),
   );
 
-  return { response: adapter.toResponse(stored.result, authorization), mandateId };
+  return { response: adapter.toResponse(stored.result, authorization), mandateId, authorizationId: stored.authorization.id };
 }

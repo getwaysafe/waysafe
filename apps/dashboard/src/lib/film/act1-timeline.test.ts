@@ -11,7 +11,6 @@ describe("/film Act 1 timeline (D-44)", () => {
     const notifications = buildAct1Notifications();
     expect(notifications).toHaveLength(ATTACKER_NOTIFICATIONS.length);
     notifications.forEach((n, i) => {
-      expect(n.label).toBe(ATTACKER_NOTIFICATIONS[i]!.label);
       expect(n.rail).toBe(ATTACKER_NOTIFICATIONS[i]!.rail);
       expect(n.atMs).toBe(NOTIFICATION_TIMES_MS[i]);
       if (i > 0) expect(n.atMs).toBeGreaterThan(notifications[i - 1]!.atMs);

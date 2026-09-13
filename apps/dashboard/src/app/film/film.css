@@ -1,18 +1,27 @@
-/* D-44: /film -- a three-act, human-scale launch video. Fixed 1920x1080
-   design, scaled to fit the viewport in FilmClient.tsx, same approach
-   /story already uses (see story.css's own header comment). Scoped to
-   this route via film/layout.tsx. */
+/**
+ * D-45: /film's stylesheet, rewritten wholesale to match
+ * design/film-storyboard/ exactly -- palette, fonts, and every shared class
+ * below are copied from the storyboard's own (identical, per-file) <style>
+ * block, renamed with a film- prefix so nothing collides with the rest of
+ * the dashboard. Frame-specific positioning stays inline in FilmClient.tsx,
+ * the same way the storyboard itself places everything with inline styles
+ * -- copying exact pixel values is what "matches the storyboard exactly"
+ * means here, not re-deriving a class-based layout system it doesn't have.
+ *
+ * Font sizes below are the storyboard's own, not the old D-44 follow-up's
+ * generic 18/22/40px floors -- see DECISIONS.md's rebuild entry for why a
+ * considered, complete type scale (including realistic small phone-chrome
+ * text) supersedes that stopgap rather than being overridden by it.
+ */
 
 .film-viewport {
   position: fixed;
   inset: 0;
-  background: #030405;
+  background: #07111f;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  color: #e6edf3;
 }
 
 .film-stage {
@@ -21,518 +30,357 @@
   height: 1080px;
   flex: 0 0 auto;
   transform-origin: center center;
-  background: #030405;
   overflow: hidden;
 }
+
+.film-frame {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  font-family: var(--font-dm-sans), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: #07111f;
+}
+
+/* D-45: 300ms cross-fade between frames -- keyed by frameId in FilmClient so
+   this class re-triggers via remount on every frame change. */
+@keyframes film-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.film-frame-enter {
+  animation: film-fade-in 300ms ease-out;
+}
+
+.film-display {
+  font-family: var(--font-bricolage), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-variation-settings: "opsz" 96;
+  letter-spacing: -0.03em;
+  line-height: 0.98;
+}
+
+.film-mono {
+  font-family: var(--font-jetbrains-mono), "SF Mono", Menlo, Consolas, monospace;
+}
+
+.film-lb {
+  display: inline-block;
+  width: 150px;
+}
+
+.film-kicker {
+  font-family: var(--font-jetbrains-mono), "SF Mono", Menlo, Consolas, monospace;
+  font-size: 20px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.film-link {
+  color: #38bdf8;
+  text-decoration: none;
+}
+.film-link:hover {
+  color: #0ea5e9;
+}
+
+/* --- phone shell (390x820 screen, no fake status bar) ---------------------- */
+
+.film-phone {
+  position: absolute;
+  width: 410px;
+  height: 840px;
+  border-radius: 58px;
+  background: #020617;
+  box-shadow: 0 60px 120px -30px rgba(2, 6, 23, 0.45), 0 0 0 2px #1e293b inset;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.film-screen {
+  position: relative;
+  width: 390px;
+  height: 820px;
+  border-radius: 48px;
+  overflow: hidden;
+  font-family: var(--font-dm-sans), "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+.film-screen-top {
+  padding: 64px 26px 0 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.film-greet {
+  font-size: 15px;
+  font-weight: 500;
+}
+.film-name {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+}
+.film-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.film-balcard {
+  margin: 26px 22px 0 22px;
+  padding: 22px 22px 20px 22px;
+  border-radius: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.film-balcard-lbl {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+.film-balcard-amt {
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-top: 8px;
+}
+.film-balcard-sub {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.film-walletrow {
+  margin: 12px 22px 0 22px;
+  padding: 18px 22px;
+  border-radius: 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.film-wallet-t {
+  font-size: 13px;
+  font-weight: 500;
+}
+.film-wallet-v {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.film-wallet-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.film-section {
+  margin: 26px 26px 0 26px;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.film-section-h {
+  font-size: 16px;
+  font-weight: 600;
+}
+.film-activity-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.film-rows {
+  margin: 8px 12px 0 12px;
+  display: flex;
+  flex-direction: column;
+}
+.film-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  min-height: 60px;
+}
+.film-row-ic {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.film-row-tx {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-grow: 1;
+  min-width: 0;
+}
+.film-row-t1 {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.film-row-t2 {
+  font-size: 12.5px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.film-row-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.film-row-am {
+  font-size: 15px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+.film-row-st {
+  font-size: 11px;
+  font-weight: 600;
+  text-align: right;
+  margin-top: 2px;
+  letter-spacing: 0.02em;
+}
+
+.film-tabs {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 92px;
+  padding: 12px 22px 0 22px;
+  border-top: 1px solid #e2e8f0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.film-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* --- notifications --------------------------------------------------------- */
+
+.film-notif {
+  box-sizing: border-box;
+  position: absolute;
+  left: 9px;
+  width: 372px;
+  padding: 14px 16px 14px 14px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 40px -12px rgba(2, 6, 23, 0.35);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  backdrop-filter: blur(20px);
+}
+.film-notif-app {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.film-notif-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-grow: 1;
+  min-width: 0;
+}
+.film-notif-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: #64748b;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.film-notif-ttl {
+  font-size: 15px;
+  font-weight: 600;
+  color: #07111f;
+}
+.film-notif-msg {
+  font-size: 13.5px;
+  color: #334155;
+  line-height: 1.3;
+}
+
+/* --- corner chrome (not in the storyboard -- see D-45's own note) --------- */
 
 .film-overlay {
   position: absolute;
   pointer-events: none;
 }
-
 .film-dramatization-tag {
-  position: absolute;
   left: 24px;
   top: 20px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #fbbf24;
-  pointer-events: none;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
 }
-
 .film-real-tag {
-  position: absolute;
   left: 24px;
   top: 20px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  color: #5eead4;
-  pointer-events: none;
+  letter-spacing: 0.06em;
+  color: #38bdf8;
 }
-
 .film-keys {
-  position: absolute;
   right: 24px;
   bottom: 20px;
-  font-size: 18px;
-  color: #5c6675;
-  pointer-events: none;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  font-family: var(--font-jetbrains-mono), monospace;
 }
-
 .film-back {
-  position: absolute;
   right: 24px;
   top: 20px;
-  font-size: 18px;
+  font-size: 14px;
   pointer-events: auto;
-}
-
-.film-link {
-  pointer-events: auto;
-  color: #5eead4;
-  text-decoration: none;
-  border-bottom: 1px solid rgba(94, 234, 212, 0.4);
-}
-.film-link:hover {
-  border-bottom-color: #5eead4;
-}
-
-.film-caption-big {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 44%;
-  text-align: center;
-  font-size: 40px;
-  font-weight: 800;
-  color: #f3f6fa;
-  padding: 0 160px;
-  line-height: 1.3;
-}
-
-.film-caption-big--danger {
-  color: #fca5a5;
-}
-.film-caption-big--waysafe {
-  color: #5eead4;
-}
-
-/* --- Device frame (Act 1) ------------------------------------------- */
-
-.film-device-wrap {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.film-device {
-  width: 420px;
-  height: 860px;
-  border-radius: 48px;
-  background: #0a0e14;
-  border: 10px solid #1a2230;
-  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.6);
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.film-device--muted {
-  filter: grayscale(1) brightness(0.55);
-  opacity: 0.75;
-}
-
-.film-device--flash {
-  animation: film-flash 350ms ease-in-out 2;
-}
-@keyframes film-flash {
-  0%, 100% { background: #0a0e14; }
-  50% { background: #2a0d0d; }
-}
-
-.film-notch {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 140px;
-  height: 24px;
-  background: #050709;
-  border-radius: 0 0 16px 16px;
-}
-
-.film-device-status {
-  padding: 40px 24px 12px;
-  font-size: 22px;
-  color: #7d8797;
-  display: flex;
-  justify-content: space-between;
-}
-
-.film-balances {
-  padding: 4px 24px 16px;
-  display: flex;
-  gap: 18px;
-}
-
-.film-balance {
-  flex: 1;
-  background: #10151d;
-  border: 1px solid #1f2937;
-  border-radius: 12px;
-  padding: 10px 12px;
-}
-
-.film-balance-label {
-  font-size: 22px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #7d8797;
-}
-
-.film-balance-value {
-  font-size: 22px;
-  font-weight: 800;
-  color: #e6edf3;
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-}
-
-.film-balance-value--zero {
-  color: #fca5a5;
-}
-
-.film-agent-panel {
-  margin: 0 20px;
-  background: #10151d;
-  border: 1px solid #1f2937;
-  border-radius: 14px;
-  padding: 14px;
-  flex: 0 0 auto;
-}
-
-.film-agent-title {
-  font-size: 22px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #7d8797;
-  margin-bottom: 8px;
-}
-
-.film-agent-task {
-  font-size: 22px;
-  color: #cdd6e0;
-  padding: 6px 0;
-  border-bottom: 1px solid #141b26;
-}
-.film-agent-task:last-child {
-  border-bottom: none;
-}
-
-.film-notification-stack {
-  margin-top: auto;
-  padding: 0 16px 20px;
-  display: flex;
-  flex-direction: column-reverse;
-  gap: 8px;
-}
-
-.film-notification {
-  background: #1a1010;
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-size: 22px;
-  color: #fca5a5;
-  animation: film-notification-in 260ms ease-out;
-}
-
-@keyframes film-notification-in {
-  from {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.film-notification--right {
-  background: #101a17;
-  border-color: rgba(94, 234, 212, 0.4);
-  color: #dde4ec;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.film-decline-badge {
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: #3d1414;
-  color: #fca5a5;
-  white-space: nowrap;
-}
-
-.film-notification-reason {
-  font-size: 22px;
-  color: #7d8797;
-  margin-top: 4px;
-}
-
-.film-replayed-tag {
-  flex-basis: 100%;
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  color: #fbbf24;
-  margin-top: 4px;
-}
-
-/* --- Act 2 split -------------------------------------------------------- */
-
-.film-split {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  padding-top: 110px;
-}
-
-.film-split-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  position: relative;
-}
-
-.film-split-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  margin-bottom: 18px;
-}
-.film-split-title--left {
-  color: #f87171;
-}
-.film-split-title--right {
-  color: #5eead4;
-}
-
-.film-split-divider {
-  position: absolute;
-  top: 100px;
-  bottom: 0;
-  left: 50%;
-  width: 1px;
-  background: #1a2230;
-}
-
-.film-device--small {
-  width: 300px;
-  height: 620px;
-  border-width: 8px;
-  border-radius: 36px;
-}
-
-.film-muted-icon {
-  position: absolute;
-  top: 130px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 18px;
-  color: #5c6675;
-  letter-spacing: 0.06em;
-}
-
-/* --- Quote card ----------------------------------------------------------- */
-
-.film-quote-wrap {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(3, 4, 5, 0.92);
-}
-
-.film-quote-card {
-  max-width: 1200px;
-  padding: 48px 64px;
-  border: 1px solid #2b3542;
-  border-radius: 18px;
-  background: #0a0e14;
-}
-
-.film-quote-text {
-  font-size: 40px;
-  font-style: italic;
-  color: #f3f6fa;
-  line-height: 1.45;
-}
-
-.film-quote-attribution {
-  margin-top: 20px;
-  font-size: 18px;
-  color: #7d8797;
-}
-
-/* --- Allow beat / receipt / chain / aftermath, Act 3 ------------------- */
-
-.film-panel-wrap {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.film-panel {
-  min-width: 640px;
-  max-width: 900px;
-  background: #0a0e14;
-  border: 1px solid #1f2937;
-  border-radius: 16px;
-  padding: 28px 32px;
-}
-
-.film-panel-title {
-  font-size: 18px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #7d8797;
-  margin-bottom: 14px;
-}
-
-.film-panel-body {
-  font-size: 22px;
-  color: #dde4ec;
-  line-height: 1.6;
-}
-
-.film-mono {
-  font-family: ui-monospace, monospace;
-  font-size: 18px;
-  color: #9fb0c3;
-  word-break: break-all;
-}
-
-.film-badge {
-  display: inline-block;
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 6px 14px;
-  border-radius: 999px;
-}
-.film-badge--allow {
-  background: #0f3d2e;
-  color: #6ee7b7;
-}
-.film-badge--deny {
-  background: #3d1414;
-  color: #fca5a5;
-}
-.film-badge--rejected {
-  background: #3d2a0f;
-  color: #fbbf24;
-}
-
-.film-chain-list {
-  max-height: 480px;
-  overflow-y: auto;
-  margin-top: 8px;
-}
-
-.film-chain-event {
-  padding: 8px 0;
-  border-bottom: 1px solid #141b26;
-  font-size: 22px;
-}
-
-.film-verify-pass {
-  color: #6ee7b7;
-  font-weight: 700;
-  font-size: 22px;
-}
-.film-verify-fail {
-  color: #fca5a5;
-  font-weight: 700;
-  font-size: 22px;
-}
-
-/* --- Aftermath (reused from /story's D-43 beat, film palette) --------- */
-
-.film-aftermath {
-  position: absolute;
-  inset: 0;
-  background: rgba(3, 4, 5, 0.94);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.film-aftermath-question {
-  font-size: 84px;
-  font-weight: 800;
-  color: #f3f6fa;
-}
-
-.film-aftermath-answers {
-  position: absolute;
-  top: 220px;
-  left: 40px;
-  right: 40px;
-  bottom: 60px;
-  display: flex;
-  gap: 40px;
-}
-
-.film-aftermath-col {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.film-aftermath-col--left {
-  color: #f87171;
-}
-.film-aftermath-col--right {
-  color: #5eead4;
-}
-
-.film-aftermath-answer {
-  font-size: 40px;
-  font-weight: 700;
-  line-height: 1.35;
-  max-width: 760px;
-}
-
-/* --- End card ------------------------------------------------------------ */
-
-.film-end-card {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 22px;
-  background: #030405;
-  text-align: center;
-}
-
-.film-end-line-1 {
-  font-size: 52px;
-  font-weight: 800;
-  color: #f3f6fa;
-  max-width: 1400px;
-  line-height: 1.25;
-}
-
-.film-end-line-2 {
-  font-size: 40px;
-  color: #93a2b6;
-  max-width: 1200px;
-}
-
-.film-end-line-3 {
-  font-size: 18px;
-  color: #5c6675;
-  letter-spacing: 0.06em;
 }
 
 .film-center-hint {
@@ -543,32 +391,16 @@
   justify-content: center;
   flex-direction: column;
   gap: 16px;
-  background: rgba(3, 4, 5, 0.55);
+  background: rgba(3, 4, 5, 0.6);
+  color: #f7f9fc;
+  font-family: var(--font-dm-sans), sans-serif;
 }
-
 .film-center-hint-title {
   font-size: 40px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
-
 .film-center-hint-sub {
   font-size: 18px;
-  color: #93a2b6;
-}
-
-.film-fleet-canvas {
-  position: absolute;
-  inset: 0;
-}
-
-.film-fleet-caption {
-  position: absolute;
-  bottom: 90px;
-  left: 0;
-  right: 0;
-  text-align: center;
-  font-size: 40px;
-  font-weight: 700;
-  color: #5eead4;
+  color: #94a3b8;
 }

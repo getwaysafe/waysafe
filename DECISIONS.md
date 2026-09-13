@@ -3922,6 +3922,198 @@ pre-existing funding gap). Verified live: a fresh `?autoplay=1` load
 shows a plain black frame with no text at all until Act 1 begins, and
 Act 1's phone UI, tags, and captions all render visibly larger.
 
+## D-45 — `/film` rebuilt against `design/film-storyboard/` as the design source of truth
+
+D-44 built `/film`'s honesty boundary and beat machine correctly but
+designed its own visuals from scratch. A separate design pass then
+produced ten static HTML mockups at `design/film-storyboard/` -- exact
+1920x1080 frames, one per visual beat-group, with a shared CSS block
+(palette, phone shell, notification card) and a README documenting
+which beats map to which frame. The task here was narrower than a
+redesign: make `/film` reproduce those ten frames exactly, without
+touching the parts of D-44 that already work -- `phases.ts`'s sixteen
+beats/durations, `?autoplay=1&seed=1`, the black-frame provisioning
+gate (D-44's own follow-up), and above all the honesty boundary itself
+(every card decline replayed from a real Stripe payload, every
+stablecoin decision live against the deployed Safe on Amoy, receipt
+and chain and verify all real `/demo` data, no scripted decision, loud
+failure over fake substitution).
+
+**The storyboard is the design source of truth; values are copied, not
+re-derived.** `design/film-storyboard/*.html`'s inline pixel values,
+colors, radii, shadows, and font sizes are reproduced as given --
+including phone-UI text as small as 11-15px, which is what a real
+phone app actually looks like at this scale. This directly supersedes
+D-44's own follow-up ("captions >=40px, phone UI >=22px, tags >=18px"):
+that floor was a stopgap for a page with no considered type scale yet;
+this page now has one, taken whole from a design pass the earlier
+floor predates. Where the two conflict, the storyboard wins for
+`/film` specifically -- the floor was never a product invariant, just
+the best available fix at the time.
+
+**Palette, fonts, and the phone shell are now shared, not
+per-frame.** `film.css` is rewritten wholesale from the storyboard's
+own (identical, per-file) `<style>` block: midnight `#07111f`, frosted
+white `#f7f9fc`, cyan `#38bdf8`/glow `#29d3ff`, slate
+`#64748b`/`#94a3b8`, hairline `#cbd5e1`, and the reason-code colors
+(`ALLOW #22c55e`, `STEP_UP #f59e0b`, `DENY #ef4444`) as the only colors
+used anywhere on the page. Fonts are Bricolage Grotesque (display),
+DM Sans (body/UI), and JetBrains Mono (technical detail/kickers), self
+-hosted via `next/font/google` in `apps/dashboard/src/app/film/layout.tsx`
+rather than the storyboard's own `<link>` tag -- same families, loaded
+at build time instead of fetched from Google at request time, which
+keeps the page workable offline and avoids a runtime dependency on an
+external font host for what is meant to be a recordable, reliable
+video source. `apps/dashboard/src/app/film/Phone.tsx` is a new shared
+component (390x820 screen in a 410x840 shell) used by five of the ten
+frames, replacing five near-duplicate phone renderings with one
+parameterized on props/state (balance, wallet balance, activity rows,
+notifications) -- no fake iOS status bar or keyboard, matching the
+storyboard, which has neither.
+
+**Frame-to-beat mapping is now code, checked against the README, not
+just eyeballed.** `apps/dashboard/src/lib/film/frame-map.ts` is a new,
+small module exporting `FRAME_FOR_BEAT: Record<BeatId, FrameId>` and
+`frameForBeat()`; `FilmClient.tsx` uses it to pick which of ten render
+functions runs for the current beat, and to compute a per-frame
+elapsed-time clock (`frameElapsedMs`) alongside the existing per-beat
+one, since several frames span more than one beat (frame 03 covers
+both `drain` and `empty`; frame 06 covers `quote` and
+`decline-stablecoin`; frame 07 covers `decline-card-2`, `allow`, and
+`fleet-glimpse`; frame 08 covers `receipt`, `chain`, and `verify`).
+`frame-map.test.ts` parses `design/film-storyboard/README.md`'s own
+table at test time and asserts the code's mapping matches every row --
+so the README and the code cannot silently drift apart the way a
+mapping expressed only in a comment could.
+
+**Copy is asserted against the storyboard's own HTML, not just typed
+by hand.** `constants.copy.test.ts` is a new test that reads each
+storyboard file with `readFileSync` and asserts `constants.ts`'s
+exported strings are literal substrings of it -- including the
+typographic detail (curly apostrophes, em dashes, curly quotes) a
+hand-retyped copy pass tends to silently flatten to ASCII. Eight
+groups covering every frame with prescribed copy are checked this way;
+the two frames whose copy is deliberately real rather than storyboard
+-literal (08's honesty tag, see below; the receipt/chain hex values
+themselves, which are the real ones this run produced) are exactly the
+places the test does not check literal equality, and that omission is
+itself documented in the test file's comments rather than left silent.
+
+**Frame 08's honesty tag deliberately does not match the storyboard's
+own wording, because this film's values are real and the storyboard's
+aren't.** The storyboard's frame 08 reads "real evidence in the
+film -- hashes here are placeholders," which is true of a static
+mockup with no backing API. `/film` is not a mockup: its receipt row
+(`mandateVersionId`, `policyHash`) and its chain row
+(`sequence`/`previous_hash`/`hash`/`signature`) are the genuine values
+this run's real `POST /v1/demo/enforcement/stripe-issuing` call and
+the real evidence chain produced, located via a new
+`findEvidenceEventForAuthorization` lookup
+(`apps/dashboard/src/lib/film/evidence-lookup.ts`) keyed on a real
+`Authorization` id. Copying the storyboard's placeholder-disclaimer
+wording verbatim here would be a *false* honesty tag -- it would tell
+the viewer the numbers are fake when they are not. `RECEIPT_REAL_TAG`
+is therefore new copy, not storyboard copy: "real evidence · verified
+in this run." This is the same honesty-boundary logic D-44 built the
+whole page around, applied to one string the storyboard couldn't have
+gotten right on its own, since it has no live backend to be honest
+about.
+
+**`IssuingDecision` gained one additive field to make the receipt
+real.** `apps/api/src/enforcement/stripe-issuing.ts`'s
+`IssuingDecision` now carries `authorizationId: string | null` (`null`
+on the two no-instrument early-return paths, the real id on a decided
+authorization) so the demo route, then the dashboard proxy, then
+`normalizeCardReplayResult`, can hand `FilmClient` a real id to look up
+in the evidence chain instead of inventing one. Purely additive to an
+internal decision type; no existing caller destructures the full shape
+by equality, confirmed by grep before the change.
+
+**Two smaller copy/structure corrections, caught by actually reading
+the storyboard's static resting state rather than its motion
+description in isolation.** Frame 06's headline
+("You can reason past a rule. You can't reason past a signature.") is
+permanent for the whole `decline-stablecoin` beat, not a transient
+caption as an early draft of this rebuild assumed -- the storyboard
+shows headline and caption simultaneously in its resting frame, and
+only the caption slot (`STABLECOIN_THRESHOLD_CAPTION`) fills in from
+empty at `DECLINE_STABLECOIN_CUT_MS`. And frame 10's second line splits
+into a wordmark (`END_CARD_WORDMARK`) and a tagline
+(`END_CARD_TAGLINE`) as two visually distinct elements in the
+storyboard's markup, not one combined string as D-44 had it.
+
+**The Safe terminal block on frame 06 shows the real revert reason,
+not the storyboard's fixed placeholder text**, via a new
+`SAFE_TERMINAL_REVERTED_PREFIX` constant with the real
+`stablecoinRejection.revertReason` appended at render time -- the same
+real-value-over-placeholder principle applied everywhere else on this
+page.
+
+**Frame 07's fleet visualization does not exist -- it was never
+built, not simplified.** Reading frame 07's actual markup found no
+canvas or fleet content at all: the beat is a caption-text swap on an
+otherwise-unchanged phone/panel layout. `lib/film/fleet-glimpse.ts`
+and its test (a `/story`-style canvas-drawing module D-44 had written
+for this beat) are deleted outright rather than kept as dead code.
+
+**The `allow` beat's wallet balance only drops once settlement
+actually succeeded on-chain.** The storyboard's frame 07 shows a fixed
+2,490.00 USDC post-spend balance. `/film` gates that transition on
+`stablecoinAllow?.settlementTxHash` being present -- if a real ALLOW
+is decided but on-chain settlement hasn't confirmed yet (or the
+cosigner's testnet gas runs out, the standing operational gap this
+file already documents), the balance correctly stays at 2,500.00
+rather than showing money moving that didn't. This is the same choice
+D-42 made for `/demo` and D-44 for `/film`'s original allow panel,
+just carried over to the new layout.
+
+**What did not change:** `phases.ts`'s sixteen beats, their order, and
+their durations; `DECLINE_STABLECOIN_CUT_MS`; the `?autoplay=1&seed=1`
+contract; the black-frame provisioning gate; every fetch call into
+`/demo` plumbing (`/api/demo/mandate` called twice, once with
+`provision_x402: false`, per the `Instrument.mandateId` unique
+constraint D-44 already worked around; `/api/demo/card`,
+`/api/demo/bypass`, `/api/demo/pay`, `/api/demo/evidence`); the
+normalizer-throws-rather-than-defaults pattern in
+`lib/film/api-decisions.ts`; `CARD_REPLAY_TAG`'s wording (unchanged,
+now proven to also appear verbatim in the storyboard's own frames 05
+and 07); the module-scope requirement for any component defined inside
+a clock-driven parent (`Reveal`, `SafeRow`, `ReceiptRow` are all
+module-scope functions in the rewritten `FilmClient.tsx`, the same
+anti-pattern fix D-44 already made, caught again by self-review before
+landing this time rather than by a second round-trip).
+
+**What could not be reproduced pixel-for-pixel:** the storyboard's
+`backdrop-filter: blur()` and multi-layer `box-shadow` values on
+`.film-notif` render with minor sub-pixel differences across browser
+engines (Chromium vs. WebKit disagree slightly on blur radius
+antialiasing) -- copied verbatim from the storyboard's CSS, not
+re-tuned per-browser, since there is no single "correct" rendering to
+snap to and the task said not to re-derive values. The storyboard's
+own bottom-left chrome (frame number, timing, beat ids) is dropped
+entirely per the task's explicit instruction, not an omission.
+
+**Change cost if wrong:** moderate. This is a visual rewrite of an
+already-correct honesty boundary and beat machine; a mistake here is a
+cosmetic regression, not a decision-path one, since `api-decisions.ts`
+still refuses to render on any missing real field regardless of what
+CSS wraps it.
+
+Implemented in `apps/dashboard/src/lib/film/{constants.ts,
+frame-map.ts, evidence-lookup.ts, act1-timeline.ts}` (rewritten/new),
+`apps/dashboard/src/app/film/{FilmClient.tsx, Phone.tsx, icons.tsx,
+layout.tsx, film.css}` (rewritten/new), and
+`apps/api/src/enforcement/stripe-issuing.ts` +
+`apps/api/src/demo/routes.ts` +
+`apps/dashboard/src/app/api/demo/card/route.ts` (the additive
+`authorizationId` threading). New tests: `frame-map.test.ts` (4),
+`constants.copy.test.ts` (8), `evidence-lookup.test.ts` (6); existing
+`phases.test.ts`, `api-decisions.test.ts`, `act1-timeline.test.ts`
+updated for the new fields and passing unchanged otherwise. Full `npm
+test`: 545 passed, 1 skipped, 1 failed on the same pre-existing
+testnet-gas funding gap (`x402.bypass.test.ts`'s broadcast case,
+unrelated to this work). `npx tsc -b` clean.
+
 ---
 
 # Open questions
