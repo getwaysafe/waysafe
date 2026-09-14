@@ -4189,19 +4189,25 @@ ink/teal from the SVG -- reproducing a provided brand asset exactly
 means not reinterpreting its colors by context the way a generic icon's
 `color` prop does.
 
-**The provided full lockup PNG isn't in this repository.** The task
-named two brand assets: `design/brand/waysafe-mark.svg` (present, and
-exactly as specified above) and `design/brand/waysafe-logo.png` (the
-full lockup, black wordmark on white). Only the SVG exists in
-`design/brand/` as of this decision. Rather than block the whole task on
-one missing file, the end card renders a stand-in composition -- the
-real `IconWaysafeMark` plus the existing `END_CARD_WORDMARK` text,
-side by side, sized to approximate the task's own "~880px wide" -- and
-this gap is called out here and in the session's own report rather than
-silently substituting something and calling it the real lockup. **Follow
--up needed:** drop `waysafe-logo.png` into `design/brand/` and swap
-`renderEndcard`'s mark+text composition for the real asset (an `<img>`
-or an inlined raster, decided when the file exists to inline against).
+**The provided full lockup PNG isn't in this repository, and using it is
+now deferred by decision, not an oversight.** The task named two brand
+assets: `design/brand/waysafe-mark.svg` (present, and exactly as
+specified above) and `design/brand/waysafe-logo.png` (the full lockup,
+black wordmark on white). Only the SVG exists in `design/brand/`. A
+follow-up session went looking for the PNG to close this out -- not in
+`design/brand/`, not anywhere else in the repository, not in the
+obvious drop locations outside it (`~/Downloads`, `~/Desktop`) -- and
+rather than keep guessing at where it might be, the decision was made
+explicitly with the user to leave the end card exactly as it already
+is (the real `IconWaysafeMark` plus the existing `END_CARD_WORDMARK`
+text, side by side, sized to approximate the task's own "~880px wide")
+until the real asset is actually supplied. **Follow-up, deferred:**
+once `waysafe-logo.png` is genuinely present in `design/brand/`, inline
+it as a base64 data URL in a small module (avoiding a runtime asset
+fetch from the film) and swap it into `renderEndcard` in place of the
+mark+text stand-in -- on a plain `#FFFFFF` card with rounded corners if
+the PNG's own white doesn't match the end card's `#F7F9FC` closely
+enough to sit directly on it.
 
 **The end card itself switches to the light background, diverging from
 the storyboard's own frame 10 mockup on purpose.** The provided mark is
