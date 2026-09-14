@@ -4,26 +4,32 @@
  * `FilmClient.tsx` only ever calls `resolveBeat(elapsedMs)` and renders the
  * result, never re-derives "what beat is this elapsed time in" itself.
  *
- * Sixteen beats across three acts, summing to exactly 60,000ms:
+ * Sixteen beats across three acts, summing to exactly 70,000ms (D-46
+ * retimed every beat from D-44's original 60s cut; see DECISIONS.md D-46
+ * for why each beat's own new duration was chosen):
  *
- *   Act 1 "Without" (20s):        intro, compromise, drain, empty
- *   Act 2 "With Waysafe" (20s):   replay-intro, decline-card-1, quote,
- *                                 decline-stablecoin, decline-card-2, allow,
- *                                 fleet-glimpse
- *   Act 3 "The evidence" (20s):   receipt, chain, verify, aftermath, endcard
+ *   Act 1 "Without" (19s):       intro 5s, compromise 4s, drain 8s, empty 2s
+ *   Act 2 "With Waysafe" (29s):  replay-intro 4s, decline-card-1 5s, quote 4s,
+ *                                decline-stablecoin 6s, decline-card-2 2s,
+ *                                allow 5s, fleet-glimpse 3s
+ *   Act 3 "The results" (22s):   receipt 4s, chain 3s, verify 4s, results 5s,
+ *                                endcard 6s
  *
- * The task's own text estimates Act 3 at "~15s"; it runs closer to 20s here
- * once every listed beat (a real receipt, the real chain, verify-then-flip,
- * the aftermath beat, the end card) gets enough time to actually read on
- * screen -- recorded as a judgment call in DECISIONS.md D-44, not a
- * deviation to hide. The three acts land on an even 20s each and the whole
- * film on the task's target of 60s.
+ * D-44's acts landed on an even 20s each; D-46 no longer holds to that --
+ * each beat's duration was set individually to what it needs to read on
+ * screen, and the three acts land on 19s/29s/22s as a result, not a target
+ * in themselves.
  *
  * `decline-stablecoin` (D-44 addendum) is itself two captioned sub-moments,
- * not two beats -- `FilmClient.tsx` splits its own 4000ms internally (the
- * cut to the Safe's revert, then the 3-second hold), since both moments are
- * one continuous shot, not a scene change. `quote` (the real Hugging Face
+ * not two beats -- `FilmClient.tsx` splits its own duration internally (the
+ * cut to the Safe's revert, then a hold), since both moments are one
+ * continuous shot, not a scene change. `quote` (the real Hugging Face
  * agent message, D-32) plays immediately before it.
+ *
+ * The beat D-44 called `aftermath` is `results` as of D-46 -- renamed to
+ * match the copy change on frame 09's own kicker ("Act 3 — the results"),
+ * so the beat id and the on-screen label agree instead of one being a
+ * historical leftover of the other.
  */
 
 export type BeatId =
@@ -41,7 +47,7 @@ export type BeatId =
   | "receipt"
   | "chain"
   | "verify"
-  | "aftermath"
+  | "results"
   | "endcard";
 
 export interface Beat {
@@ -53,25 +59,25 @@ export interface Beat {
 /** Within `decline-stablecoin` (D-44 addendum): the ms at which the cut to
  * the Safe's on-chain revert happens, and the caption changes from "You can
  * reason past a rule..." to holding on "The agent's key alone can't
- * sign...". */
+ * sign...". Unchanged by D-46's retiming. */
 export const DECLINE_STABLECOIN_CUT_MS = 1_000;
 
 export const BEATS: readonly Beat[] = [
-  { id: "intro", act: 1, durationMs: 4_000 },
-  { id: "compromise", act: 1, durationMs: 2_000 },
-  { id: "drain", act: 1, durationMs: 13_000 },
-  { id: "empty", act: 1, durationMs: 1_000 },
-  { id: "replay-intro", act: 2, durationMs: 1_500 },
-  { id: "decline-card-1", act: 2, durationMs: 1_500 },
-  { id: "quote", act: 2, durationMs: 3_000 },
-  { id: "decline-stablecoin", act: 2, durationMs: 4_000 },
-  { id: "decline-card-2", act: 2, durationMs: 1_500 },
-  { id: "allow", act: 2, durationMs: 4_000 },
-  { id: "fleet-glimpse", act: 2, durationMs: 4_500 },
-  { id: "receipt", act: 3, durationMs: 3_000 },
+  { id: "intro", act: 1, durationMs: 5_000 },
+  { id: "compromise", act: 1, durationMs: 4_000 },
+  { id: "drain", act: 1, durationMs: 8_000 },
+  { id: "empty", act: 1, durationMs: 2_000 },
+  { id: "replay-intro", act: 2, durationMs: 4_000 },
+  { id: "decline-card-1", act: 2, durationMs: 5_000 },
+  { id: "quote", act: 2, durationMs: 4_000 },
+  { id: "decline-stablecoin", act: 2, durationMs: 6_000 },
+  { id: "decline-card-2", act: 2, durationMs: 2_000 },
+  { id: "allow", act: 2, durationMs: 5_000 },
+  { id: "fleet-glimpse", act: 2, durationMs: 3_000 },
+  { id: "receipt", act: 3, durationMs: 4_000 },
   { id: "chain", act: 3, durationMs: 3_000 },
   { id: "verify", act: 3, durationMs: 4_000 },
-  { id: "aftermath", act: 3, durationMs: 4_000 },
+  { id: "results", act: 3, durationMs: 5_000 },
   { id: "endcard", act: 3, durationMs: 6_000 },
 ] as const;
 

@@ -34,7 +34,7 @@ export const FRAME_FOR_BEAT: Record<BeatId, FrameId> = {
   receipt: "08-receipt-chain-verify",
   chain: "08-receipt-chain-verify",
   verify: "08-receipt-chain-verify",
-  aftermath: "09-aftermath",
+  results: "09-aftermath",
   endcard: "10-endcard",
 };
 

@@ -4114,6 +4114,222 @@ test`: 545 passed, 1 skipped, 1 failed on the same pre-existing
 testnet-gas funding gap (`x402.bypass.test.ts`'s broadcast case,
 unrelated to this work). `npx tsc -b` clean.
 
+## D-46 — `/film`, second pass from the first recording: retiming, the real brand, and a single end-card disclosure
+
+D-45 matched `/film` to the storyboard's own composition, palette, and
+copy. Watching the first real recording produced a second, more specific
+round of notes: pacing per beat (not just the film's total length), the
+placeholder cyan replaced with the actual Waysafe brand, several frames'
+copy sharpened, one revert card that was still describing a threshold
+that no longer matches how the Safe call actually fails, and a judgment
+that four separate honesty tags competing with the decision they're
+labeling is worse disclosure than one the viewer reads once. None of this
+touches the honesty boundary itself -- every decision `/film` shows is
+still the real one, and a real API failure still fails loudly rather than
+substituting a scripted result.
+
+**Retiming: 60s to 70s, set beat by beat rather than by even act
+totals.** D-44 and D-45 held each act to a flat 20s. That constraint
+never had normative weight on its own -- it was a stand-in for "give each
+beat enough time to read," and watching the recording showed several
+beats needed more than an even split gave them (`decline-card-1`'s three-
+line "signed" block and multi-line reason list need more than 1.5s;
+`decline-stablecoin`'s GS020 explanation needs more than 4s once it's
+three real lines instead of a single caption) while others needed less
+proportionally than they got. `phases.ts`'s sixteen beats were retimed
+individually to what each one actually needs on screen; the three acts
+land on 19s/29s/22s as a result of that, not a target anyone set
+independently. `DECLINE_STABLECOIN_CUT_MS` is untouched --the cut point
+within the beat didn't need to move, only the beat's total length.
+`lib/film/act1-timeline.ts`'s `NOTIFICATION_TIMES_MS` rescale
+(1800/5200/7600 -> 1100/3200/4700) keeps the same proportions and the
+same "gaps shrink" shape against `drain`'s new 8000ms (down from
+13000ms), confirmed by the existing `act1-timeline.test.ts` gap-shrink
+assertion, which needed no changes since it asserts the *shape*, not
+literal values.
+
+**The `aftermath` beat is `results`.** Frame 09's own kicker copy became
+"Act 3 — the results" in this same pass (see the copy section below);
+renaming the beat id to match means the id and the on-screen label agree
+instead of one being a naming fossil of the other. Renamed everywhere
+that named it as data (`BeatId` in `phases.ts`, `FRAME_FOR_BEAT` in
+`frame-map.ts`, the beat column of `design/film-storyboard/README.md`'s
+own table) -- the frame's own file name (`09-aftermath.html`) and its
+`FrameId` literal (`"09-aftermath"`) are untouched, since those are the
+storyboard's own naming convention for the frame, not the beat.
+
+**The brand is real now, not a placeholder cyan.** D-43/D-44/D-45 used a
+generic cyan (`#38BDF8`/glow `#29D3FF`) because no brand asset existed
+yet. `design/brand/waysafe-mark.svg` (two overlapping rounded squares,
+ink `#1B1A17`/`#2D2C2A`, teal `#008389`) is now the real mark, inlined as
+`IconWaysafeMark` (`apps/dashboard/src/app/film/icons.tsx`) rather than
+an `<img>` -- a `useId()`-scoped `clipPath` so two simultaneous instances
+(the notification icon and the "Waysafe on" pill) don't collide. The
+accent is `#008389` wherever an element's own immediate surface is light
+(the white phone screen, a white card, a white notification -- these
+appear even on frames whose overall background is dark, like frame 05's
+phone) and the lightened `#22B8BE` wherever the immediate surface is the
+midnight background itself (frame 02's terminal highlight, frame 06's
+headline's second line) -- the accent follows the surface a given
+element actually sits on, not just the frame's own named background, so
+frame 05's white "Waysafe on" pill is `#008389` even though frame 05 as a
+whole is a dark frame. The one deliberately dynamic case is the
+`proof: /demo` corner link (`renderCornerChrome`), a persistent overlay
+shown across every frame regardless of background -- it takes its color
+from the *current* frame's background at render time rather than a
+second static CSS class, since it's the only accent element that
+actually needs to change color as the film plays rather than being fixed
+by its own frame's layout. `#E0F2FE` (the badge/pill background tint)
+became `#DDF3F3`, the fixed pairing the task gave directly.
+
+**The brand mark's own three colors are fixed, not accent-swapped.**
+Unlike every other icon in `icons.tsx` (which take a `color` prop and
+render in `currentColor`), `IconWaysafeMark` hardcodes the mark's own
+ink/teal from the SVG -- reproducing a provided brand asset exactly
+means not reinterpreting its colors by context the way a generic icon's
+`color` prop does.
+
+**The provided full lockup PNG isn't in this repository.** The task
+named two brand assets: `design/brand/waysafe-mark.svg` (present, and
+exactly as specified above) and `design/brand/waysafe-logo.png` (the
+full lockup, black wordmark on white). Only the SVG exists in
+`design/brand/` as of this decision. Rather than block the whole task on
+one missing file, the end card renders a stand-in composition -- the
+real `IconWaysafeMark` plus the existing `END_CARD_WORDMARK` text,
+side by side, sized to approximate the task's own "~880px wide" -- and
+this gap is called out here and in the session's own report rather than
+silently substituting something and calling it the real lockup. **Follow
+-up needed:** drop `waysafe-logo.png` into `design/brand/` and swap
+`renderEndcard`'s mark+text composition for the real asset (an `<img>`
+or an inlined raster, decided when the file exists to inline against).
+
+**The end card itself switches to the light background, diverging from
+the storyboard's own frame 10 mockup on purpose.** The provided mark is
+dark ink, designed to sit on a light ground (its own SVG has no
+background rectangle behind the two colored squares) -- placing it on
+the storyboard's midnight end card would read poorly regardless of
+accent color. `design/film-storyboard/10-endcard.html`'s own composition
+is left unedited except its accent hex (per the task's explicit "hex
+values only" scope for storyboard edits) -- it still shows the old dark
+icon+wordmark layout, now visually stale relative to the real page. This
+is recorded, not hidden: `design/film-storyboard/README.md` says so
+directly under the palette section. `frameBackground()`'s dark-frame
+list dropped `"10-endcard"` accordingly.
+
+**Frame 06's revert card stops describing a threshold check that isn't
+what the Safe call actually returns.** D-45's version showed
+`SAFE_TERMINAL_REVERTED_PREFIX` plus the real revert reason concatenated
+on one line, preceded by the literal `execTransaction(...)` command
+string. Two problems: the raw revert reason from viem is a long,
+multi-line, terminal-formatted error, not something a viewer should ever
+see rendered directly on screen; and the command line added narrative
+noise without adding real information a viewer needs. `lib/film/safe-
+revert.ts` (new) replaces both with a real-result-driven format:
+`GS020` is a real Safe contract error code (the Safe protocol's own
+error registry) whose fixed, stable meaning is "signatures data too
+short" -- exactly what a 1-of-2 signature submission produces, which is
+exactly what this bypass case is by construction. When the real revert
+reason contains `GS020`, the card shows two fixed lines carrying that
+real code's real meaning plus a third line built from the real Safe
+address (shortened 6+4 via the existing `truncateHash`) and the real
+"balance unchanged" figure. Any other revert reason -- a failure this
+bypass case wasn't designed to produce -- falls back to the real message
+itself, ellipsized for legibility, never a fabricated explanation
+standing in for one that doesn't exist. `formatSafeRevertLines` is pure
+and directly tested (`safe-revert.test.ts`, 6 cases: the GS020 path, the
+missing-address fallback, the non-GS020 fallback, a long-string
+ellipsize proof, the still-loading placeholder, and `ellipsize` itself)
+rather than only exercised through the render tree. The panel header
+lost its chain name (`"SAFE · 2 OF 2 · POLYGON AMOY"` ->
+`"SAFE · 2 OF 2 · ON-CHAIN"`) per the task's own instruction; the chain
+is still named once, in the new end-card footnote below.
+
+**One end-card footnote replaces four per-frame honesty tags -- a
+relocation of the disclosure, not its removal.** D-44's follow-up
+established `CARD_REPLAY_TAG` as a persistent per-decline tag for a real
+reason: a viewer watching only the video had no way to tell a replayed
+Stripe decision apart from a live one sitting in the same stack. D-45
+extended that pattern to three more tags (`STABLECOIN_LIVE_TAG`,
+`REAL_DECISION_TAG`, `RECEIPT_REAL_TAG`), one per real decision moment.
+Four tags across a 70-second film is enough that they read as UI chrome
+competing with the decision they're labeling, rather than as
+disclosure. `END_CARD_FOOTNOTE` -- "Card decisions replayed against
+recorded Stripe Issuing authorization requests · on-chain decisions live
+on Polygon Amoy testnet" -- says the same thing once, at the moment a
+viewer has just watched the whole story and is positioned to read it
+carefully, rather than four times while trying to also read a decision.
+`STABLECOIN_LIVE_TAG`, `REAL_DECISION_TAG`, and `RECEIPT_REAL_TAG` are
+deleted outright (D-45 additions, not carrying D-44's own history).
+`CARD_REPLAY_TAG` is kept exported in `constants.ts` per the task's own
+explicit instruction -- its wording is D-44's own follow-up, referenced
+directly in that decision's prose, and preserving the export (even
+unrendered) keeps that historical value inspectable rather than
+deleted -- but `FilmClient.tsx` no longer imports or renders it. This is
+the same amendment pattern D-34 used on D-3 and D-40 used on D-32: the
+underlying requirement (CLAUDE.md's honesty rule) is unchanged, and an
+earlier decision's specific mechanism for satisfying it is superseded by
+a better one found from actually using the thing.
+
+**Copy: five frames' strings sharpened, one row restructured into
+multiple lines.** Frame 03's caption, frame 04's mandate footer, frame
+05's merchant note (plus its "signed" row becoming three lines --
+`DECLINE_SIGNED_LINES`, rendered via a new shared `LabeledLines`
+component alongside frame 05's "reason" row, which now lists every real
+reason code on its own line instead of joining them with a comma and
+risking truncation), frame 07's kicker and headline, frame 08's evidence
+-body sentence 3 and verified-bar text, and frame 09's kicker and both
+answers all changed to the task's own exact new wording.
+`constants.copy.test.ts` gained one new test block (frame 05's merchant
+note and three signed lines) and new assertions in the frame 03/04/07/08
+/09 blocks it already had, so every one of these strings is now checked
+against the storyboard's own HTML the same way D-45 already checked the
+others -- not just typed once and trusted. The storyboard's own ten HTML
+files were updated with the identical new text (and, for frame 06,
+frame 05, and frame 09's decorative chrome-strip beat label, the
+corresponding structural/label changes) so the design source of truth
+and the shipped copy do not silently diverge.
+
+**Notification cards stack flush, no rotation.** `PhoneNotification` lost
+its `rotateDeg` field; `Phone.tsx` no longer applies a `transform:
+rotate(...)` to `.film-notif`. The prior fanned, overlapping look was a
+D-45 storyboard-matching choice for a mockup with only ever one or two
+notifications visible; multiple real attacker notifications stacking
+flush (same left edge, top offsets in fixed `NOTIF_STACK_STEP`
+increments approximating a real card's rendered height plus a 12px gap)
+reads more like an actual notification center and was the task's own
+explicit instruction.
+
+**Change cost if wrong:** low for the copy, timing, and tag changes
+(presentation only, no branch in any tested decision-path module
+changed). Moderate for the brand/color changes, since a wrong context
+call (accent-by-surface rather than accent-by-frame) is a legibility bug
+someone has to notice visually, not something a type error or a unit
+test catches on its own -- mitigated by keeping the rule textually
+explicit in `FilmClient.tsx`'s own comments at each call site.
+
+Implemented in `apps/dashboard/src/lib/film/{phases.ts, frame-map.ts,
+act1-timeline.ts, constants.ts}` (retiming, rename, copy),
+`apps/dashboard/src/lib/film/safe-revert.ts` (new) +
+`safe-revert.test.ts` (new, 6 tests), `apps/dashboard/src/app/film/
+{FilmClient.tsx, Phone.tsx, icons.tsx, film.css}` (brand, revert card,
+end card, notification stacking), and `design/film-storyboard/` (the
+ten frames' accent hexes and the specific copy/label edits above,
+`README.md`'s beat-rename row, palette section, and frame 10 divergence
+note). Tests: `constants.copy.test.ts` extended (9 tests, up from 8);
+`phases.test.ts` updated for the new 70,000ms total and the three acts'
+now-distinct sums; `act1-timeline.ts`'s existing tests pass unchanged
+against the rescaled `NOTIFICATION_TIMES_MS`, since they assert shape
+(strictly increasing, shrinking gaps, zero at the end) rather than
+literal values. Full `npm test` run clean once during this session (553
+passed, 1 skipped -- the pre-existing Stripe Issuing `financial_account`
+`pending`-status SKIP, D-37/D-42); a second full run afterward hit the
+same standing `InsufficientFundsError` CLAUDE.md already documents
+(552 passed, 1 skipped, 1 failed) -- this session's own repeated runs of
+the real x402 broadcast case spent down `WAYSAFE_SAFE_COSIGNER_KEY`'s
+remaining Amoy gas between the two runs, exactly the documented,
+expected depletion pattern, not a regression from anything in this
+decision. `npx tsc -b` clean on every run.
+
 ---
 
 # Open questions

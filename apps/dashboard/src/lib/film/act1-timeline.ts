@@ -17,11 +17,13 @@ export interface TimedNotification {
   atMs: number;
 }
 
-/** Accelerating gaps (3400ms, then 2400ms) -- three notifications is few
- * enough that "faster and faster" has to come from shrinking gaps between
- * named events, not from a dense procedural flurry the way `/story`'s
- * 200-agent fleet can afford. */
-export const NOTIFICATION_TIMES_MS = [1_800, 5_200, 7_600] as const;
+/** Accelerating gaps (2100ms, then 1500ms), rescaled by D-46 to fit the
+ * `drain` beat's new 8000ms duration (D-44's original beat ran 13000ms) --
+ * same proportions, same "faster and faster" shape, just compressed. Three
+ * notifications is few enough that the effect has to come from shrinking
+ * gaps between named events, not from a dense procedural flurry the way
+ * `/story`'s 200-agent fleet can afford. */
+export const NOTIFICATION_TIMES_MS = [1_100, 3_200, 4_700] as const;
 
 /** Timing only -- the display copy for each notification lives in
  * `constants.ts`'s `ATTACKER_NOTIFICATIONS`, indexed by `.index`. */

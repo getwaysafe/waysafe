@@ -20,6 +20,14 @@
  * so a `?autoplay=1` recording never shows provisioning as part of the
  * film (commit 3d605b0). If the real API is unreachable, the film fails
  * loudly with a visible error; it never substitutes a scripted decision.
+ *
+ * D-46 second pass from the first recording: retimed every beat
+ * (`lib/film/phases.ts`, now 70s total; `aftermath` renamed `results`),
+ * rebranded the accent from cyan to the real brand teal/mark
+ * (`IconWaysafeMark`, `icons.tsx`), rewrote several frames' copy, replaced
+ * the per-frame honesty tags with one end-card footnote
+ * (`END_CARD_FOOTNOTE`), and rebuilt frame 06's revert card and frame 10's
+ * end card. See DECISIONS.md D-46 for the reasoning behind each.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -44,7 +52,6 @@ import {
   ALLOW_SIGNED_LINE,
   ALLOW_SPEND_LINE,
   ATTACKER_NOTIFICATIONS,
-  CARD_REPLAY_TAG,
   COMPROMISE_CAPTION,
   COMPROMISE_HEADLINE_LINE_1,
   COMPROMISE_HEADLINE_LINE_2,
@@ -54,11 +61,12 @@ import {
   DECLINE_CARD_1_SUBHEAD,
   DECLINE_CARD_KICKER,
   DECLINE_MERCHANT_NOTE,
-  DECLINE_SIGNED_NOTE,
+  DECLINE_SIGNED_LINES,
   DRAIN_BODY,
   DRAIN_HEADLINE_LINE_1,
   DRAIN_HEADLINE_LINE_2,
   DRAIN_KICKER,
+  END_CARD_FOOTNOTE,
   END_CARD_LINE_1A,
   END_CARD_LINE_1B,
   END_CARD_LINE_3,
@@ -79,21 +87,16 @@ import {
   MANDATE_CARD_LABEL,
   MANDATE_CARD_TITLE,
   QUOTE_KICKER,
-  REAL_DECISION_TAG,
-  RECEIPT_REAL_TAG,
   RECEIPT_TITLE,
   REPLAY_INTRO_KICKER,
+  RESULTS_KICKER,
   SAFE_PANEL_LABEL,
   SAFE_ROW_COSIGNER_SUB,
   SAFE_ROW_COSIGNER_TITLE,
   SAFE_ROW_SESSION_SUB,
   SAFE_ROW_SESSION_TITLE,
-  SAFE_TERMINAL_BALANCE_LINE,
-  SAFE_TERMINAL_COMMAND,
-  SAFE_TERMINAL_REVERTED_PREFIX,
   STABLECOIN_HEADLINE_LINE_1,
   STABLECOIN_HEADLINE_LINE_2,
-  STABLECOIN_LIVE_TAG,
   STABLECOIN_THRESHOLD_CAPTION,
   TERMINAL_COMMAND,
   TERMINAL_LINE_CARD,
@@ -113,9 +116,15 @@ import {
 import { findEvidenceEventForAuthorization, formatPolicyHash, truncateHash } from "@/lib/film/evidence-lookup";
 import { frameForBeat, type FrameId } from "@/lib/film/frame-map";
 import { BEATS, DECLINE_STABLECOIN_CUT_MS, beatStartMs, resolveBeat, totalDurationMs } from "@/lib/film/phases";
+import { formatSafeRevertLines } from "@/lib/film/safe-revert";
 import { initialPlaybackState, restart, tick, togglePlay, type PlaybackState } from "@/lib/story/playback";
-import { IconAlert, IconBed, IconBolt, IconCalendar, IconCheck, IconHarborMark, IconRobot, IconSecure, IconShieldCheck, IconX } from "./icons";
+import { IconAlert, IconBed, IconBolt, IconCalendar, IconCheck, IconHarborMark, IconRobot, IconSecure, IconShieldCheck, IconWaysafeMark, IconX } from "./icons";
 import { Phone, type PhoneNotification, type PhoneRow } from "./Phone";
+
+/** D-46: each stacked notification's vertical increment -- a real card's
+ * rendered height (~84px for a 1-2 line message) plus the task's own
+ * 12px flush gap, no rotation, same left edge (fixed by `.film-notif`). */
+const NOTIF_STACK_STEP = 96;
 
 const CANVAS_W = 1920;
 const CANVAS_H = 1080;
@@ -166,6 +175,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
   const [cardMandateInfo, setCardMandateInfo] = useState<{ mandateVersionId: string; policyHash: string } | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
   const [stablecoinRejections, setStablecoinRejections] = useState<StablecoinRejection[] | null>(null);
+  const [stablecoinSafeAddress, setStablecoinSafeAddress] = useState<string | null>(null);
   const [bypassError, setBypassError] = useState<string | null>(null);
   const [stablecoinAllow, setStablecoinAllow] = useState<StablecoinPayResult | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
@@ -218,6 +228,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         if (bypassRes.status === "fulfilled") {
           try {
             setStablecoinRejections(bypassRes.value.cases.map(normalizeStablecoinRejection));
+            setStablecoinSafeAddress(bypassRes.value.safe_address);
           } catch (err) {
             setBypassError(err instanceof Error ? err.message : String(err));
           }
@@ -376,12 +387,17 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
 
   function renderCornerChrome() {
     const act = resolved.beat.act;
+    // D-46: this link is a persistent overlay shown across every frame,
+    // light and dark alike -- `.film-link`'s CSS default (#008389) only
+    // covers the light case, so the dark frames need the lightened
+    // midnight variant applied inline instead of a second static class.
+    const linkColor = frameBackground(frameId) === "#07111F" ? "#22B8BE" : undefined;
     return (
       <>
         {act < 3 ? <div className="film-dramatization-tag film-overlay">dramatization</div> : null}
         {act === 3 ? <div className="film-real-tag film-overlay">everything from here is real</div> : null}
         <div className="film-keys film-overlay">space: play/pause · r: restart · seed {seed}</div>
-        <a className="film-back film-overlay film-link" href="/demo" style={{ pointerEvents: "auto" }}>
+        <a className="film-back film-overlay film-link" href="/demo" style={{ pointerEvents: "auto", color: linkColor }}>
           proof: /demo ↗
         </a>
       </>
@@ -407,7 +423,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
       case "08-receipt-chain-verify":
         return renderReceiptChainVerify();
       case "09-aftermath":
-        return renderAftermath();
+        return renderResults();
       case "10-endcard":
         return renderEndcard();
       default:
@@ -461,7 +477,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         </div>
         <div className="film-mono" style={{ position: "absolute", left: 140, top: 560, width: 840, padding: "28px 32px", borderRadius: 18, background: "#020817", border: "1px solid #1E293B", fontSize: 22, lineHeight: 1.65, color: "#CBD5E1" }}>
           {terminalLines.map((line, i) => (
-            <div key={line} style={{ color: i === 0 ? "#94A3B8" : i === 3 ? "#38BDF8" : undefined, marginTop: i === 3 ? 6 : 0, opacity: beatElapsedMs >= i * 375 ? 1 : 0, transition: "opacity 180ms" }}>
+            <div key={line} style={{ color: i === 0 ? "#94A3B8" : i === 3 ? "#22B8BE" : undefined, marginTop: i === 3 ? 6 : 0, opacity: beatElapsedMs >= i * 375 ? 1 : 0, transition: "opacity 180ms" }}>
               {line}
             </div>
           ))}
@@ -531,8 +547,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
             const content = ATTACKER_NOTIFICATIONS[n.index]!;
             return {
               key: content.rowTitle,
-              top: 62 + i * 94,
-              rotateDeg: i % 2 === 0 ? -1.2 : 0.8,
+              top: 62 + i * NOTIF_STACK_STEP,
               appIcon: <IconHarborMark />,
               appBg: "#07111F",
               time: content.notifTime,
@@ -557,7 +572,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         <Reveal active={revealedAt(300)} translateY={16}>
           <div style={{ position: "absolute", boxSizing: "border-box", left: 560, top: 600, width: 800, padding: "40px 44px", borderRadius: 28, background: "#FFFFFF", boxShadow: "0 40px 90px -30px rgba(2,6,23,0.35)", display: "flex", flexDirection: "column", gap: 22 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 11, background: "#38BDF8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 11, background: "#008389", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <IconShieldCheck />
               </div>
               <div style={{ display: "flex", flexDirection: "column" }}>
@@ -567,7 +582,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
             </div>
             <div style={{ fontSize: 30, lineHeight: 1.35, color: "#07111F", fontWeight: 500 }}>&ldquo;{FILM_INSTRUCTION}&rdquo;</div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 6, borderTop: "1px solid #CBD5E1", fontSize: 17, color: "#334155" }}>
-              <IconSecure color="#38BDF8" />
+              <IconSecure color="#008389" />
               {MANDATE_CARD_FOOTER}
             </div>
           </div>
@@ -590,9 +605,9 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
           <div className="film-display" style={{ position: "absolute", left: 140, top: 520, fontSize: 64, fontWeight: 500, color: "#F7F9FC" }}>{DECLINE_CARD_1_SUBHEAD}</div>
           <div className="film-mono" style={{ position: "absolute", left: 140, top: 640, display: "flex", flexDirection: "column", gap: 14, fontSize: 24, color: "#CBD5E1" }}>
             <div><span className="film-lb" style={{ color: "#94A3B8" }}>decision</span>{cardAttempt1 ? cardAttempt1.decision : cardError ? "UNAVAILABLE" : "EVALUATING"}</div>
-            <div><span className="film-lb" style={{ color: "#94A3B8" }}>reason</span><span style={{ color: "#FCA5A5" }}>{cardAttempt1 ? cardAttempt1.reasonCodes.join(", ") : "…"}</span></div>
+            <LabeledLines label="reason" lines={cardAttempt1 ? cardAttempt1.reasonCodes : cardError ? ["UNAVAILABLE"] : ["…"]} valueColor="#FCA5A5" />
             <div><span className="film-lb" style={{ color: "#94A3B8" }}>merchant</span>{DECLINE_MERCHANT_NOTE}</div>
-            <div><span className="film-lb" style={{ color: "#94A3B8" }}>signed</span>{DECLINE_SIGNED_NOTE}</div>
+            <LabeledLines label="signed" lines={[...DECLINE_SIGNED_LINES]} />
           </div>
           <div style={{ position: "absolute", left: 140, top: 870, width: 1000, fontSize: 28, lineHeight: 1.35, color: "#94A3B8" }}>{DECLINE_CARD_1_BODY}</div>
         </Reveal>
@@ -600,17 +615,13 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
           variant="light"
           cardBalance={formatUsd(balancesAtMs(0).cardCents)}
           walletBalance={formatUsdcAtomic(balancesAtMs(0).walletAtomic)}
-          activityBadge={{ label: "Waysafe on", icon: <IconRobot size={14} color="#38BDF8" />, bg: "#E0F2FE", color: "#38BDF8" }}
+          activityBadge={{ label: "Waysafe on", icon: <IconWaysafeMark size={14} />, bg: "#DDF3F3", color: "#008389" }}
           rows={[
             { key: "unknown-1", icon: <IconX color="#EF4444" />, iconBg: "#FEE2E2", iconColor: "#EF4444", title: "Unknown merchant", subtitle: "not on your allowlist · just now", amount: "$1,240.00", status: { text: "Declined", color: "#EF4444" }, rowBg: "#FEF2F2" },
             { key: "calendar", icon: <IconCalendar color="#475569" />, iconBg: "#E2E8F0", iconColor: "#475569", title: "Calendar subscription", subtitle: "Renews monthly · yesterday", amount: "$4.99", status: { text: "Approved", color: "#22C55E" } },
           ]}
-          notifications={beatElapsedMs >= 700 ? [{ key: "wf-decline-1", top: 62, appIcon: <IconShieldCheck size={23} />, appBg: "#38BDF8", ringColor: "#EF4444", time: "now", title: WAYSAFE_NOTIF_DECLINE_1_TITLE, message: WAYSAFE_NOTIF_DECLINE_1_MSG }] : []}
+          notifications={beatElapsedMs >= 700 ? [{ key: "wf-decline-1", top: 62, appIcon: <IconWaysafeMark size={23} />, appBg: "#FFFFFF", ringColor: "#EF4444", time: "now", title: WAYSAFE_NOTIF_DECLINE_1_TITLE, message: WAYSAFE_NOTIF_DECLINE_1_MSG }] : []}
         />
-        <div className="film-mono film-overlay" style={{ position: "absolute", left: 24, bottom: 20, fontSize: 16, letterSpacing: "0.06em", color: "#38BDF8", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ width: 9, height: 9, borderRadius: 5, background: "#38BDF8", display: "inline-block" }} />
-          {CARD_REPLAY_TAG}
-        </div>
       </>
     );
   }
@@ -631,11 +642,13 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
     }
 
     const showThreshold = beatElapsedMs >= DECLINE_STABLECOIN_CUT_MS;
-    const revertReason = stablecoinRejection?.revertReason ?? null;
+    const revertLines = bypassError
+      ? ["→ reverted · unavailable"]
+      : formatSafeRevertLines(stablecoinRejection?.revertReason ?? null, stablecoinSafeAddress);
     return (
       <>
         <div className="film-display" style={{ position: "absolute", left: 136, top: 430, width: 1020, fontSize: 92, fontWeight: 600, color: "#F7F9FC" }}>
-          {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#38BDF8" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
+          {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#22B8BE" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
         </div>
         {showThreshold ? (
           <div style={{ position: "absolute", left: 140, top: 890, width: 1020, fontSize: 30, lineHeight: 1.35, color: "#94A3B8" }}>{STABLECOIN_THRESHOLD_CAPTION}</div>
@@ -650,17 +663,13 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
               <SafeRow title={SAFE_ROW_SESSION_TITLE} sub={SAFE_ROW_SESSION_SUB} bg="#475569" icon={<IconCheck size={22} color="#FFFFFF" />} />
               <SafeRow title={SAFE_ROW_COSIGNER_TITLE} sub={SAFE_ROW_COSIGNER_SUB} bg="#EF4444" icon={<IconX size={22} color="#FFFFFF" />} />
               <div className="film-mono" style={{ marginTop: 10, padding: "22px 26px", borderRadius: 20, background: "#020817", border: "1px solid #1E293B", fontSize: 19, lineHeight: 1.6, color: "#CBD5E1" }}>
-                <div style={{ color: "#94A3B8" }}>{SAFE_TERMINAL_COMMAND}</div>
-                <div style={{ color: "#FCA5A5" }}>{SAFE_TERMINAL_REVERTED_PREFIX} · {revertReason ?? (bypassError ? "unavailable" : "…")}</div>
-                <div style={{ color: "#94A3B8" }}>{SAFE_TERMINAL_BALANCE_LINE}</div>
+                {revertLines.map((line, i) => (
+                  <div key={i} style={{ color: i === 0 ? "#FCA5A5" : "#94A3B8" }}>{line}</div>
+                ))}
               </div>
             </div>
           </Reveal>
         ) : null}
-        <div className="film-mono film-overlay" style={{ position: "absolute", left: 24, bottom: 20, fontSize: 16, letterSpacing: "0.06em", color: "#38BDF8", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ width: 9, height: 9, borderRadius: 5, background: "#38BDF8", display: "inline-block" }} />
-          {STABLECOIN_LIVE_TAG}
-        </div>
       </>
     );
   }
@@ -733,14 +742,10 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
           variant="light"
           cardBalance={formatUsd(balancesAtMs(0).cardCents)}
           walletBalance={formatUsdcAtomic(settled ? 2_490_000_000n : balancesAtMs(0).walletAtomic)}
-          activityBadge={{ label: "Waysafe on", icon: <IconRobot size={14} color="#38BDF8" />, bg: "#E0F2FE", color: "#38BDF8" }}
+          activityBadge={{ label: "Waysafe on", icon: <IconWaysafeMark size={14} />, bg: "#DDF3F3", color: "#008389" }}
           rows={rows}
-          notifications={pastAllow ? [{ key: "wf-allow", top: 62, appIcon: <IconShieldCheck size={23} />, appBg: "#38BDF8", ringColor: "#22C55E", time: "now", title: WAYSAFE_NOTIF_ALLOW_TITLE, message: WAYSAFE_NOTIF_ALLOW_MSG }] : []}
+          notifications={pastAllow ? [{ key: "wf-allow", top: 62, appIcon: <IconWaysafeMark size={23} />, appBg: "#FFFFFF", ringColor: "#22C55E", time: "now", title: WAYSAFE_NOTIF_ALLOW_TITLE, message: WAYSAFE_NOTIF_ALLOW_MSG }] : []}
         />
-        <div className="film-mono film-overlay" style={{ position: "absolute", left: 24, bottom: 20, fontSize: 16, letterSpacing: "0.06em", color: "#22C55E", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ width: 9, height: 9, borderRadius: 5, background: "#22C55E", display: "inline-block" }} />
-          {REAL_DECISION_TAG}
-        </div>
       </>
     );
   }
@@ -764,7 +769,7 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         <div style={{ position: "absolute", left: 1040, top: 130, width: 760, padding: "40px 44px 36px 44px", borderRadius: 28, background: "#FFFFFF", boxShadow: "0 50px 100px -30px rgba(2,6,23,0.35)", display: "flex", flexDirection: "column" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <div style={{ width: 44, height: 44, borderRadius: 11, background: "#38BDF8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <div style={{ width: 44, height: 44, borderRadius: 11, background: "#008389", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 <IconShieldCheck />
               </div>
               <div style={{ fontSize: 22, fontWeight: 600, color: "#07111F" }}>{RECEIPT_TITLE}</div>
@@ -796,23 +801,18 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
             </Reveal>
           ) : null}
         </div>
-
-        <div className="film-mono film-overlay" style={{ position: "absolute", left: 24, bottom: 20, fontSize: 16, letterSpacing: "0.06em", color: "#22C55E", display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ width: 9, height: 9, borderRadius: 5, background: "#22C55E", display: "inline-block" }} />
-          {RECEIPT_REAL_TAG}
-        </div>
       </>
     );
   }
 
 
-  // --- Frame 09: aftermath -----------------------------------------------------
+  // --- Frame 09: results (D-46; was "aftermath") -------------------------------
 
-  function renderAftermath() {
+  function renderResults() {
     const showAnswers = beatElapsedMs >= resolved.beat.durationMs * 0.35;
     return (
       <>
-        <div className="film-kicker" style={{ position: "absolute", left: 140, top: 150, color: "#64748B" }}>Act 3 — the aftermath</div>
+        <div className="film-kicker" style={{ position: "absolute", left: 140, top: 150, color: "#64748B" }}>{RESULTS_KICKER}</div>
         <div className="film-display" style={{ position: "absolute", left: 136, top: 250, fontSize: 220, fontWeight: 600, color: "#07111F" }}>{WHO_PAYS_QUESTION}</div>
         {showAnswers ? (
           <Reveal active={revealedAt(0)}>
@@ -831,24 +831,33 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
     );
   }
 
-  // --- Frame 10: endcard -------------------------------------------------------
+  // --- Frame 10: endcard --------------------------------------------------------
+  // D-46: switched to the light background so the real brand lockup reads
+  // correctly (it's a dark-ink mark, designed for a light ground) --
+  // diverging from the storyboard's own dark mockup of this frame on
+  // purpose; see DECISIONS.md D-46.
 
   function renderEndcard() {
+    // `design/brand/waysafe-logo.png` (the provided full lockup) isn't
+    // present in this repo -- see D-46's own note on why this renders the
+    // mark plus the wordmark text as a stand-in composition instead of the
+    // real asset, sized to approximate the same ~880px width.
     return (
       <>
-        <div className="film-display" style={{ position: "absolute", left: 0, right: 0, top: 200, textAlign: "center", fontSize: 120, fontWeight: 600, color: "#F7F9FC", lineHeight: 1.02 }}>
-          {END_CARD_LINE_1A}<br /><span style={{ color: "#94A3B8" }}>{END_CARD_LINE_1B}</span>
+        <div className="film-display" style={{ position: "absolute", left: 0, right: 0, top: 120, textAlign: "center", fontSize: 84, fontWeight: 600, color: "#07111F", lineHeight: 1.08 }}>
+          {END_CARD_LINE_1A}<br />{END_CARD_LINE_1B}
         </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 560, display: "flex", justifyContent: "center", alignItems: "center", gap: 22 }}>
-          <div style={{ width: 72, height: 72, borderRadius: 20, background: "#38BDF8", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <IconShieldCheck size={41} />
-          </div>
-          <div className="film-display" style={{ fontSize: 88, fontWeight: 700, color: "#F7F9FC", letterSpacing: "-0.04em" }}>{END_CARD_WORDMARK}</div>
+        <div style={{ position: "absolute", left: 0, right: 0, top: 400, display: "flex", justifyContent: "center", alignItems: "center", gap: 30, width: 880, marginLeft: "auto", marginRight: "auto" }}>
+          <IconWaysafeMark size={110} />
+          <div className="film-display" style={{ fontSize: 96, fontWeight: 700, color: "#07111F", letterSpacing: "-0.04em" }}>{END_CARD_WORDMARK}</div>
         </div>
-        <div style={{ position: "absolute", left: 0, right: 0, top: 700, textAlign: "center", fontSize: 34, lineHeight: 1.35, color: "#CBD5E1" }}>{END_CARD_TAGLINE}</div>
-        <div className="film-mono" style={{ position: "absolute", left: 0, right: 0, top: 820, textAlign: "center", fontSize: 24, letterSpacing: "0.1em", color: "#38BDF8" }}>
+        <div style={{ position: "absolute", left: 0, right: 0, top: 620, textAlign: "center", fontSize: 32, lineHeight: 1.35, color: "#334155" }}>{END_CARD_TAGLINE}</div>
+        <div className="film-mono" style={{ position: "absolute", left: 0, right: 0, top: 700, textAlign: "center", fontSize: 24, letterSpacing: "0.1em", color: "#008389" }}>
           {END_CARD_LINE_3.replace("/demo", "")}
           <a className="film-link" href="/demo" style={{ pointerEvents: "auto" }}>/demo</a>
+        </div>
+        <div className="film-mono" style={{ position: "absolute", left: 0, right: 0, bottom: 60, textAlign: "center", fontSize: 16, letterSpacing: "0.04em", color: "#64748B" }}>
+          {END_CARD_FOOTNOTE}
         </div>
       </>
     );
@@ -867,6 +876,24 @@ function Reveal({ active, translateY = 0, children }: { active: boolean; transla
   return (
     <div style={{ opacity: active ? 1 : 0, transform: active ? "translateY(0)" : `translateY(${translateY}px)`, transition: "opacity 300ms ease-out, transform 300ms ease-out" }}>
       {children}
+    </div>
+  );
+}
+
+/** D-46: the mono decision block's "reason" and "signed" rows can each
+ * carry more than one line now (real reason codes, one per line, never
+ * truncated; the three real "signed" lines) -- this is the shared stacked-
+ * lines layout both use, module-scope like every other component here that
+ * doesn't close over `FilmClient`'s own clock state. */
+function LabeledLines({ label, lines, valueColor }: { label: string; lines: readonly string[]; valueColor?: string }) {
+  return (
+    <div style={{ display: "flex" }}>
+      <span className="film-lb" style={{ color: "#94A3B8", flexShrink: 0 }}>{label}</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {lines.map((line, i) => (
+          <div key={i} style={{ color: valueColor }}>{line}</div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -893,6 +920,8 @@ function ReceiptRow({ label, value }: { label: string; value: React.ReactNode })
 }
 
 function frameBackground(frameId: FrameId): string {
-  const dark: FrameId[] = ["02-compromise", "03-drain-empty", "06-quote-decline-stablecoin", "10-endcard"];
+  // D-46: the end card moved to the light background -- see its own render
+  // function for why.
+  const dark: FrameId[] = ["02-compromise", "03-drain-empty", "06-quote-decline-stablecoin"];
   return dark.includes(frameId) ? "#07111F" : "#F7F9FC";
 }

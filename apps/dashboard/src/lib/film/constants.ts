@@ -66,7 +66,7 @@ export const COMPROMISE_CAPTION = "credentials dumped from the agent’s environ
 export const DRAIN_KICKER = "Act 1 — the drain";
 export const DRAIN_HEADLINE_LINE_1 = "It doesn’t ask.";
 export const DRAIN_HEADLINE_LINE_2 = "It just spends.";
-export const DRAIN_BODY = "Three notifications. No record of what was authorized.";
+export const DRAIN_BODY = "Three transactions. Three receipts. Nothing says whether any of them were allowed.";
 
 export interface AttackerNotification {
   rail: "card" | "stablecoin";
@@ -136,7 +136,8 @@ export const STARTING_WALLET_USDC_ATOMIC = 2_500_000_000n; // 2,500.000000 USDC,
 export const REPLAY_INTRO_KICKER = "Act 2 — with Waysafe";
 export const MANDATE_CARD_TITLE = "Your mandate";
 export const MANDATE_CARD_LABEL = "IN YOUR OWN WORDS · VERSION 1";
-export const MANDATE_CARD_FOOTER = "Signed with your passkey · frozen · every decision cites it";
+export const MANDATE_CARD_FOOTER =
+  "Signed with your passkey · mandate version locked — edits create a new version · each authorization record stores the mandate version ID and policy hash to prove which rules we enforced.";
 
 /** The instruction actually compiled into the real mandate (both card and
  * stablecoin mandates use it) -- also what's displayed on the mandate
@@ -150,8 +151,16 @@ export const FILM_INSTRUCTION =
 export const DECLINE_CARD_KICKER = "Act 2 — the first attempt";
 export const DECLINED_WORD = "DECLINED";
 export const DECLINE_CARD_1_SUBHEAD = "$1,240.00 never happened.";
-export const DECLINE_MERCHANT_NOTE = "network_id only — a name is not an identity";
-export const DECLINE_SIGNED_NOTE = "ed25519 · chained · 2s window met";
+export const DECLINE_MERCHANT_NOTE = "network_id only — matches the identifier the card network attests";
+/** D-46: the "signed" row became three lines instead of one -- rendered via
+ * `FilmClient.tsx`'s `LabeledLines`, the same stacked-lines layout the
+ * "reason" row above it now uses for multiple, never-truncated reason
+ * codes. */
+export const DECLINE_SIGNED_LINES = [
+  "Signed with Waysafe key",
+  "Linked to previous decision in the chain",
+  "Returned within Stripe’s real-time auth window — same as a card issuer",
+] as const;
 export const DECLINE_CARD_1_BODY = "Balance still $1,329.99. The rail asked Waysafe before it moved a cent.";
 export const WAYSAFE_NOTIF_DECLINE_1_TITLE = "Declined — $1,240.00";
 export const WAYSAFE_NOTIF_DECLINE_1_MSG =
@@ -195,27 +204,34 @@ export const STABLECOIN_HEADLINE_LINE_2 = "You can’t reason past a signature."
 export const STABLECOIN_THRESHOLD_CAPTION =
   "The agent’s key alone can’t sign. Neither can Waysafe’s. It takes both.";
 
-export const SAFE_PANEL_LABEL = "SAFE · 2 OF 2 · POLYGON AMOY";
+/** D-46: no chain name on the frame -- the panel used to say "POLYGON AMOY"
+ * directly. The chain is still real; naming it was just moved off this
+ * label and into the end card's single footnote (`END_CARD_FOOTNOTE`). */
+export const SAFE_PANEL_LABEL = "SAFE · 2 OF 2 · ON-CHAIN";
 export const SAFE_ROW_SESSION_TITLE = "Agent session key";
 export const SAFE_ROW_SESSION_SUB = "signature 1 of 2 · present";
 export const SAFE_ROW_COSIGNER_TITLE = "Waysafe co-signer";
 export const SAFE_ROW_COSIGNER_SUB = "signature 2 of 2 · refused";
-export const SAFE_TERMINAL_COMMAND = "execTransaction(transfer 2,500 USDC)";
-/** The storyboard's own placeholder ("→ reverted · threshold 2, signatures
- * 1") is replaced at render time with the real revert reason from the
- * bypass-proof route (e.g. "→ reverted · GS020") -- see D-45's own note on
- * why a fixed descriptive phrase here would risk asserting something about
- * the real chain call that isn't necessarily what it actually said. */
-export const SAFE_TERMINAL_REVERTED_PREFIX = "→ reverted";
-export const SAFE_TERMINAL_BALANCE_LINE = "wallet balance unchanged · 2,500.00 USDC";
 
-export const STABLECOIN_LIVE_TAG = "live on-chain · Polygon Amoy testnet";
+/**
+ * D-46: the revert card never renders viem's raw multi-line error text --
+ * see `lib/film/safe-revert.ts` for the formatting logic. GS020 is a real
+ * Safe contract error code (the Safe protocol's own error registry) whose
+ * fixed meaning is "signatures data too short" -- exactly what a 1-of-2
+ * signature submission produces, which is exactly what this bypass case
+ * is. These two lines are that real code's stable, real meaning, not an
+ * invented explanation; the address and "reverted" framing on the third
+ * line come from the real result at render time.
+ */
+export const SAFE_REVERT_GS020_LINE_1 = "→ reverted · GS020: signatures data too short";
+export const SAFE_REVERT_GS020_LINE_2 = "1 of 2 signatures — Waysafe’s is missing";
+export const SAFE_REVERT_BALANCE_SUFFIX = "balance unchanged · 2,500.00 USDC";
 
 // --- Frame 07: decline-card-2 + allow + fleet-glimpse ---------------------------
 
-export const ALLOW_KICKER = "Act 2 — the work still gets done";
-export const ALLOW_HEADLINE_LINE_1 = "It still";
-export const ALLOW_HEADLINE_LINE_2 = "works.";
+export const ALLOW_KICKER = "Act 2 — legitimate spend still clears";
+export const ALLOW_HEADLINE_LINE_1 = "Blocked the attack.";
+export const ALLOW_HEADLINE_LINE_2 = "Paid the bill.";
 export const ALLOW_SPEND_LINE = "$10.00 of $20.00 today · recounted from every approved transaction";
 export const ALLOW_SIGNED_LINE = "agent key + Waysafe co-signer · 2 of 2 · settled on-chain";
 export const ALLOW_BODY =
@@ -223,8 +239,6 @@ export const ALLOW_BODY =
 export const WAYSAFE_NOTIF_ALLOW_TITLE = "Approved — 10.00 USDC API credits";
 export const WAYSAFE_NOTIF_ALLOW_MSG =
   "Within your mandate. Both signatures present. $10.00 of $20.00 used today.";
-
-export const REAL_DECISION_TAG = "real decision · live on-chain · Polygon Amoy testnet";
 
 export const FLEET_GLIMPSE_CAPTION = "now multiply by every agent in the company.";
 
@@ -236,38 +250,29 @@ export const EVIDENCE_HEADLINE_LINE_2 = "attempt.";
 export const EVIDENCE_HEADLINE_LINE_3 = "Signed.";
 export const EVIDENCE_BODY =
   "Each decision is written to a log. Every entry is signed by Waysafe and includes the hash of the entry before it. " +
-  "Change any past entry and every entry after it stops verifying. Anyone with Waysafe’s public key can check the " +
+  "Alter one past decision and every later one exposes it. Anyone with Waysafe’s public key can check the " +
   "entire record — without access to Waysafe’s systems.";
 
 export const RECEIPT_TITLE = "Authorization receipt";
-export const VERIFIED_BAR_TEXT = "Verified independently — without trusting Waysafe";
+export const VERIFIED_BAR_TEXT = "Verified in your browser — Waysafe wasn’t asked.";
 export const VERIFIED_BAR_FN = "verifyEvidenceIndependently()";
 
-/**
- * D-45: deliberately NOT the storyboard's own placeholder wording
- * ("real evidence in the film · hashes here are placeholders"). The
- * storyboard's own frame 08 disclaimer exists because that static mockup
- * has no real backend -- its hashes are invented for the layout. `/film`'s
- * receipt/chain rows are the real thing (an authorization id looked up in
- * the real evidence chain, D-45), so the honest tag says that instead.
- */
-export const RECEIPT_REAL_TAG = "real evidence · verified in this run";
+// --- Frame 09: results (D-46; was "aftermath") -------------------------------
 
-// --- Frame 09: aftermath -----------------------------------------------------
-
-export const AFTERMATH_KICKER = "Act 3 — the aftermath";
+export const RESULTS_KICKER = "Act 3 — the results";
 export const WHO_PAYS_QUESTION = "Who pays?";
 export const WHO_PAYS_LEFT_KICKER = "WITHOUT";
 export const WHO_PAYS_RIGHT_KICKER = "WITH WAYSAFE";
-export const WHO_PAYS_LEFT_ANSWER = "Unknown. No record of what was authorized. Every transaction is a dispute.";
+export const WHO_PAYS_LEFT_ANSWER =
+  "No record of what was allowed. The card charges become disputes. The USDC is just gone.";
 /**
- * This is the strong claim -- "signed, independently verifiable" -- rather
- * than `/story`'s softer D-43 version ("attributed, hashed, and
+ * This is the strong claim -- "signed, verifiable in your browser" --
+ * rather than `/story`'s softer D-43 version ("attributed, hashed, and
  * timestamped"), because `/film`'s Act 3 evidence really is signed and
- * really is independently verified in this run (see D-45).
+ * really is verified in the browser in this run (see D-45).
  */
 export const WHO_PAYS_RIGHT_ANSWER =
-  "Every attempt attributed, signed, independently verifiable. The incident report already exists.";
+  "Every attempt attributed, signed, verifiable in your browser. The record already exists.";
 
 // --- Frame 10: endcard -------------------------------------------------------
 
@@ -284,3 +289,14 @@ export const END_CARD_WORDMARK = "Waysafe";
  */
 export const END_CARD_TAGLINE = "the authorization and evidence layer for agent spending, across every rail.";
 export const END_CARD_LINE_3 = "waysafe.ai · proof: /demo";
+/**
+ * D-46: the single disclosure this whole film carries for an external
+ * audience -- replacing the four separate per-frame honesty tags (the card
+ * lane's `CARD_REPLAY_TAG`, and the now-removed `STABLECOIN_LIVE_TAG`,
+ * `REAL_DECISION_TAG`, `RECEIPT_REAL_TAG`). Not a removal of the
+ * disclosure, a relocation: one footnote a viewer can read once, instead of
+ * a tag competing for attention on every decision frame. See DECISIONS.md
+ * D-46 for why.
+ */
+export const END_CARD_FOOTNOTE =
+  "Card decisions replayed against recorded Stripe Issuing authorization requests · on-chain decisions live on Polygon Amoy testnet";

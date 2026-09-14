@@ -80,12 +80,16 @@
   font-weight: 500;
 }
 
+/* D-46: brand teal, not the earlier cyan -- #008389 is the default (most
+   `.film-link` uses sit on a light frame); `renderCornerChrome()` overrides
+   this inline with #22b8be on the frames where it doesn't, since this link
+   is a persistent overlay shown across both light and dark frames. */
 .film-link {
-  color: #38bdf8;
+  color: #008389;
   text-decoration: none;
 }
 .film-link:hover {
-  color: #0ea5e9;
+  color: #006d71;
 }
 
 /* --- phone shell (390x820 screen, no fake status bar) ---------------------- */
@@ -360,13 +364,16 @@
   letter-spacing: 0.06em;
   color: #94a3b8;
 }
+/* D-46: Act 3 is now always a light frame (08/09/10 are all light), so this
+   always renders on light backgrounds -- #008389 unconditionally, unlike
+   `.film-link` above which spans both. */
 .film-real-tag {
   left: 24px;
   top: 20px;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #38bdf8;
+  color: #008389;
 }
 .film-keys {
   right: 24px;

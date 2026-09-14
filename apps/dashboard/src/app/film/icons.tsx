@@ -6,9 +6,37 @@
  * baked in per icon since they vary slightly by icon.
  */
 
+import { useId } from "react";
+
 interface IconProps {
   size?: number;
   color?: string;
+}
+
+/**
+ * D-46: the real brand mark (`design/brand/waysafe-mark.svg`), inlined as a
+ * component rather than an `<img>` -- two overlapping rounded squares (ink
+ * `#1B1A17`/`#2D2C2A`) with the teal overlap (`#008389`), path-for-path
+ * from the provided SVG. Fixed brand colors, not `currentColor` -- unlike
+ * every other icon here, this one's palette is the brand's own and doesn't
+ * change with the frame's light/dark accent. `useId` keeps the `clipPath`
+ * id collision-free if the mark renders more than once on the page at
+ * once (the notification icon and the "Waysafe on" pill both use it).
+ */
+export function IconWaysafeMark({ size = 24 }: { size?: number }) {
+  const clipId = useId();
+  return (
+    <svg width={size} height={size * (256 / 304)} viewBox="0 0 304 256">
+      <defs>
+        <clipPath id={clipId}>
+          <rect x="0" y="0" width="190" height="191" rx="34" />
+        </clipPath>
+      </defs>
+      <rect x="0" y="0" width="190" height="191" rx="34" fill="#1B1A17" />
+      <rect x="112" y="64" width="191" height="191" rx="34" fill="#2D2C2A" />
+      <rect x="112" y="64" width="78" height="127" fill="#008389" clipPath={`url(#${clipId})`} />
+    </svg>
+  );
 }
 
 export function IconBed({ size = 20, color = "currentColor" }: IconProps) {

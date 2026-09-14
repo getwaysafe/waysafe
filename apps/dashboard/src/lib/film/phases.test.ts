@@ -1,16 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { BEATS, DECLINE_STABLECOIN_CUT_MS, beatStartMs, resolveBeat, totalDurationMs } from "./phases";
 
-describe("/film beat state machine (D-44)", () => {
-  it("sums to exactly 60 seconds, the task's own target", () => {
-    expect(totalDurationMs()).toBe(60_000);
+describe("/film beat state machine (D-44, retimed by D-46)", () => {
+  it("sums to exactly 70 seconds, D-46's retimed target", () => {
+    expect(totalDurationMs()).toBe(70_000);
   });
 
-  it("each act lands on 20s", () => {
+  it("each act lands on its own D-46 total (19s / 29s / 22s)", () => {
     const byAct = (act: 1 | 2 | 3) => BEATS.filter((b) => b.act === act);
+    const expected = { 1: 19_000, 2: 29_000, 3: 22_000 } as const;
     for (const act of [1, 2, 3] as const) {
       const sum = byAct(act).reduce((s, b) => s + b.durationMs, 0);
-      expect(sum).toBe(20_000);
+      expect(sum).toBe(expected[act]);
     }
   });
 

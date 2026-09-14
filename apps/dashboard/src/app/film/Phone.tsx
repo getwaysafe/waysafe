@@ -26,7 +26,6 @@ export interface PhoneRow {
 export interface PhoneNotification {
   key: string;
   top: number;
-  rotateDeg?: number;
   appIcon: ReactNode;
   appBg: string;
   ringColor?: string;
@@ -158,13 +157,16 @@ export function Phone({
           <TabIcon color={t.tabOff} label="Activity" kind="activity" />
         </div>
 
+        {/* D-46: stacked flush -- same left edge (fixed by `.film-notif`
+            itself), no rotation, no per-card offsets. Each card's `top` is
+            the caller's own fixed stacking increment (see
+            `FilmClient.tsx`'s `NOTIF_STACK_STEP`). */}
         {(notifications ?? []).map((n) => (
           <div
             className="film-notif"
             key={n.key}
             style={{
               top: n.top,
-              transform: n.rotateDeg ? `rotate(${n.rotateDeg}deg)` : undefined,
               boxShadow: n.ringColor
                 ? `0 18px 40px -12px rgba(2,6,23,0.35), 0 0 0 1.5px ${n.ringColor} inset`
                 : undefined,

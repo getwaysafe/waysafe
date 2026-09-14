@@ -253,7 +253,20 @@ chain) untouched. `IssuingDecision` gained an additive
 real evidence event instead of showing placeholders — and frame 08's
 honesty tag deliberately does not match the storyboard's own wording,
 since the storyboard is a static mockup disclosing placeholder hashes
-and this page's hashes are genuinely real.
+and this page's hashes are genuinely real. `D-46` is a second pass from
+watching the first real recording: every beat in `phases.ts` was retimed
+individually (60s → 70s total; the `aftermath` beat is now `results`,
+matching frame 09's own new kicker copy), the placeholder cyan accent
+was replaced with the real Waysafe brand mark and teal
+(`design/brand/waysafe-mark.svg`, inlined as `IconWaysafeMark` —
+`design/brand/waysafe-logo.png`, the full lockup, isn't in the repo yet,
+so the end card renders a mark+wordmark stand-in and says so), several
+frames' copy was sharpened, frame 06's revert card now formats the real
+Safe error (`GS020`) into legible lines instead of ever showing viem's
+raw revert text (`lib/film/safe-revert.ts`), and the four separate
+per-frame honesty tags were consolidated into one end-card footnote —
+a relocation of the disclosure CLAUDE.md's honesty rule requires, not a
+removal of it.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
