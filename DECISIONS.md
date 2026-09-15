@@ -4752,9 +4752,62 @@ reason, not a regression) both ran clean. Verified live, repeatedly,
 against the real Stripe sandbox and a real `stripe listen` tunnel at
 every stage of this fix, not only at the end.
 
----
+### Follow-up -- no faster test-mode funding path exists for a v2 Money Management financial account; the SKIP stands
 
-# Open questions
+D-48 found the card lane blocked until 2026-09-22 by the v2 financial
+account's own simulated ACH settlement timing. This follow-up checked,
+against the real sandbox API, whether a faster test-mode path exists to
+get funds *available* sooner. It does not, as far as this account's
+current API surface goes -- checked directly, not assumed:
+
+- **`stripe test_helpers` lists no `money_management` resource at
+  all.** Its full resource list (`stripe test_helpers --help`):
+  `confirmation_tokens`, `customers`, `issuing`, `refunds`, `terminal`,
+  `test_clocks`, `treasury`. No v2 Money Management test helper exists
+  in this API version to instantly credit a financial account for
+  testing.
+- **The one plausible sibling, Treasury's own
+  `test_helpers.treasury.received_credits.create` (v1 Treasury's real,
+  documented instant-test-credit mechanism), does not apply to this
+  account.** Called directly against this exact financial account id
+  (`--financial-account fa_test_65VMX2oxvcxmPn0ZXck16VMWviUVSQkN5vtTn9OT1oOH56
+  --amount 100 --currency usd --network ach`): a real 400,
+  `"Unrecognized request URL (POST: /v1/test_helpers/treasury/received_credits)...
+  Have you onboarded to Treasury?"` -- confirming this account has v2
+  Money Management, not v1 Treasury, and the two are not
+  interchangeable for this purpose even though they share the same
+  underlying "financial account" concept and even the same `fa_...` id
+  shape.
+- **Direct guesses at a v2-native test-helper path (`/v2/test_helpers/
+  money_management/received_credits`, `/v2/test_helpers/money_management/
+  financial_accounts/:id/settle`) both 404 with `"The API method cannot
+  be found"`** -- a routing 404, not a permissions error, meaning
+  neither endpoint exists in this API version at all, not that this key
+  lacks access to it.
+- **A smaller authorization would not help.** `balance.available.usd.value`
+  is exactly `0`; any authorization amount greater than zero exceeds an
+  available balance of zero, so amount was never the variable -- this
+  wasn't tested with a live authorization because the arithmetic doesn't
+  leave room for a different outcome, not because it was overlooked.
+- **Not conclusively ruled out: whether a fresh inbound transfer over a
+  different network (e.g. `us_domestic_wire` instead of `ach`) would
+  carry a shorter `schedule_funds_availability` window than the existing
+  transfer's ~7 days.** A real attempt to create one via `stripe post
+  /v2/money_management/inbound_transfers` hit this CLI version's own v2
+  calling convention (it wants a single JSON `data` argument, not
+  `-d key=value` pairs) before producing a result -- not pursued further
+  in this session per the time this investigation was given. Left
+  explicitly open rather than reported as tested.
+
+**No code change.** Nothing in this codebase can shorten Stripe's own
+settlement timing, and no faster funding mechanism was found within this
+session's investigation to document as a step. The bypass test's SKIP
+on `insufficient_funds` stands exactly as D-48 left it, honestly, until
+2026-09-22 -- or until someone confirms the wire-network question above
+and it turns out to help.
+
+Implemented: nothing (investigation only). `git commit` records the
+finding in this file; no source changed.
 
 ## OQ-1 — The demo script contradicts the demo instruction
 
