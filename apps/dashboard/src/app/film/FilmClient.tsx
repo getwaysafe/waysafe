@@ -153,6 +153,16 @@ function formatUsdcAtomic(atomic: bigint): string {
   return `${usdc.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDC`;
 }
 
+/** D-47: frame 03's countdown target -- a bare whole number ("2,500", "0"),
+ * matching the line's own fixed "2,500 USDC →" lead-in rather than
+ * repeating the "USDC" suffix or adding decimals a whole-dollar step never
+ * needs (there's exactly one wallet notification, so this only ever reads
+ * the starting figure or zero). */
+function formatUsdcWhole(atomic: bigint): string {
+  const usdc = Number(atomic) / 1_000_000;
+  return usdc.toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const json = await res.json().catch(() => ({}));
@@ -528,12 +538,17 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         <div className="film-display" style={{ position: "absolute", left: 136, top: 280, width: 1000, fontSize: 140, fontWeight: 600, color: "#F7F9FC" }}>
           {DRAIN_HEADLINE_LINE_1}<br />{DRAIN_HEADLINE_LINE_2}
         </div>
+        {/* D-47: the right-hand figure counts down in sync with the phone's
+            own balance card -- both read the same `balances` value, so both
+            step at the exact instant each notification lands (no separate
+            easing/tween of their own: the phone's balance card has none
+            either, it just re-renders the new value). */}
         <div style={{ position: "absolute", left: 140, top: 600, display: "flex", flexDirection: "column", gap: 18 }}>
           <div className="film-display" style={{ fontSize: 96, fontWeight: 500, color: "#FCA5A5", letterSpacing: "-0.02em" }}>
-            $1,329.99 <span style={{ color: "#94A3B8", fontWeight: 300 }}>→</span> $0.00
+            $1,329.99 <span style={{ color: "#94A3B8", fontWeight: 300 }}>→</span> {formatUsd(balances.cardCents)}
           </div>
           <div className="film-display" style={{ fontSize: 96, fontWeight: 500, color: "#FCA5A5", letterSpacing: "-0.02em" }}>
-            2,500 USDC <span style={{ color: "#94A3B8", fontWeight: 300 }}>→</span> 0
+            2,500 USDC <span style={{ color: "#94A3B8", fontWeight: 300 }}>→</span> {formatUsdcWhole(balances.walletAtomic)}
           </div>
         </div>
         <div style={{ position: "absolute", left: 140, top: 880, width: 900, fontSize: 32, lineHeight: 1.3, color: "#94A3B8" }}>{DRAIN_BODY}</div>
@@ -647,7 +662,12 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
       : formatSafeRevertLines(stablecoinRejection?.revertReason ?? null, stablecoinSafeAddress);
     return (
       <>
-        <div className="film-display" style={{ position: "absolute", left: 136, top: 430, width: 1020, fontSize: 92, fontWeight: 600, color: "#F7F9FC" }}>
+        {/* D-47: each sentence stays on its own line -- a wider container
+            (1100px, up from 1020px) at the task's specified 100px, plus
+            `whiteSpace: nowrap` (the explicit `<br>` between the two
+            sentences still forces the line break; nowrap only stops either
+            sentence's own text from wrapping a second time). */}
+        <div className="film-display" style={{ position: "absolute", left: 136, top: 430, width: 1100, fontSize: 100, fontWeight: 600, color: "#F7F9FC", whiteSpace: "nowrap" }}>
           {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#22B8BE" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
         </div>
         {showThreshold ? (
@@ -779,8 +799,22 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
             </div>
           </div>
 
-          <ReceiptRow label="attempt" value={cardAttempt1 ? `$1,240.00 · unknown_merchant_9911 · card •••• 4421` : cardError ? "unavailable" : "evaluating…"} />
-          <ReceiptRow label="reason" value={<span style={{ color: "#EF4444" }}>{cardAttempt1?.reasonCodes.join(", ") ?? "…"}</span>} />
+          <ReceiptRow
+            wrap
+            label="attempt"
+            value={cardAttempt1 ? `$1,240.00 · unknown_merchant_9911 · card •••• 4421` : cardError ? "unavailable" : "evaluating…"}
+          />
+          <ReceiptRow
+            wrap
+            label="reason"
+            value={
+              cardAttempt1 ? (
+                <StackedLines lines={cardAttempt1.reasonCodes} color="#EF4444" />
+              ) : (
+                <span style={{ color: "#EF4444" }}>{cardError ? "unavailable" : "…"}</span>
+              )
+            }
+          />
           <ReceiptRow label="mandate" value={cardMandateInfo ? `${truncateHash(cardMandateInfo.mandateVersionId, 6, 4)} · version 1 · passkey` : "…"} />
           <ReceiptRow label="policy hash" value={cardMandateInfo ? formatPolicyHash(cardMandateInfo.policyHash) : "…"} />
 
@@ -885,15 +919,25 @@ function Reveal({ active, translateY = 0, children }: { active: boolean; transla
  * truncated; the three real "signed" lines) -- this is the shared stacked-
  * lines layout both use, module-scope like every other component here that
  * doesn't close over `FilmClient`'s own clock state. */
+/** D-47: the bare "one value per line" stack, factored out of
+ * `LabeledLines` so frame 08's receipt reason row can reuse the exact same
+ * rendering frame 05 already uses for reason codes, rather than a second,
+ * independently-written stacking layout. */
+function StackedLines({ lines, color }: { lines: readonly string[]; color?: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      {lines.map((line, i) => (
+        <div key={i} style={{ color }}>{line}</div>
+      ))}
+    </div>
+  );
+}
+
 function LabeledLines({ label, lines, valueColor }: { label: string; lines: readonly string[]; valueColor?: string }) {
   return (
     <div style={{ display: "flex" }}>
       <span className="film-lb" style={{ color: "#94A3B8", flexShrink: 0 }}>{label}</span>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {lines.map((line, i) => (
-          <div key={i} style={{ color: valueColor }}>{line}</div>
-        ))}
-      </div>
+      <StackedLines lines={lines} color={valueColor} />
     </div>
   );
 }
@@ -910,11 +954,25 @@ function SafeRow({ title, sub, bg, icon }: { title: string; sub: string; bg: str
   );
 }
 
-function ReceiptRow({ label, value }: { label: string; value: React.ReactNode }) {
+/** D-47: `wrap` turns off the ellipsis-and-truncate default for a row whose
+ * real value can be longer than the card is wide (the attempt line; the
+ * reason row, whose value is `StackedLines` rather than a single string) --
+ * `mandate`/`policy hash`/`chain`/`signature` stay truncated-by-`truncateHash`
+ * as before, so they don't need it. */
+function ReceiptRow({ label, value, wrap }: { label: string; value: React.ReactNode; wrap?: boolean }) {
   return (
-    <div style={{ display: "flex", gap: 24, alignItems: "baseline", padding: "14px 0", borderBottom: "1px solid #CBD5E1" }}>
+    <div style={{ display: "flex", gap: 24, alignItems: wrap ? "flex-start" : "baseline", padding: "14px 0", borderBottom: "1px solid #CBD5E1" }}>
       <div className="film-mono" style={{ width: 220, flexShrink: 0, fontSize: 15, letterSpacing: "0.08em", color: "#64748B", textTransform: "uppercase" }}>{label}</div>
-      <div className="film-mono" style={{ fontSize: 20, color: "#07111F", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+      <div
+        className="film-mono"
+        style={
+          wrap
+            ? { flex: 1, minWidth: 0, fontSize: 20, color: "#07111F", whiteSpace: "normal", wordBreak: "break-word" }
+            : { fontSize: 20, color: "#07111F", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }
+        }
+      >
+        {value}
+      </div>
     </div>
   );
 }

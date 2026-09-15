@@ -4336,6 +4336,89 @@ remaining Amoy gas between the two runs, exactly the documented,
 expected depletion pattern, not a regression from anything in this
 decision. `npx tsc -b` clean on every run.
 
+## D-47 — `/film`, three more fixes from the recording: a synced countdown, one line per sentence, receipt fields that don't truncate
+
+A third pass from watching the recording, narrower than D-46's: three
+specific rendering bugs, no copy or timing changes, no honesty-boundary
+changes.
+
+**Frame 03's big red countdown now reads the same balance the phone's
+own card does, instead of a fixed "$0.00"/"0" it jumped straight to.**
+The right-hand figure in both lines (`$1,329.99 → …`, `2,500 USDC → …`)
+was hardcoded to its final value for the whole beat, even though the
+phone directly beside it already stepped through the real
+`balancesAtMs(drainElapsed)` schedule as each notification landed. Fixed
+by reading the same `balances` value both places already compute --
+`formatUsd(balances.cardCents)` for the card figure, and a new
+`formatUsdcWhole` (a bare "2,500"/"0", matching the line's own fixed
+"2,500 USDC →" lead-in rather than repeating the "USDC" suffix or adding
+decimals a single all-or-nothing notification never needs) for the
+wallet figure. "Same easing as the phone's balance card" turned out to
+mean *no* easing: `.film-balcard-amt`/`.film-wallet-v` have no
+transition in `film.css`, they just re-render the new value the instant
+`balancesAtMs` returns it, so the countdown now does exactly that too --
+no tween, an instant step at each notification's own timestamp, holding
+at zero through `empty` for free (the existing `isEmpty` branch already
+forces `balancesAtMs(999_999)`, which is already fully zeroed).
+
+**Frame 06's headline needed a wider box and a bigger size to keep each
+sentence on its own line.** "You can't reason past a signature." was
+wrapping inside the previous 1020px-wide, 92px container. Widened to
+1100px (the task's own ceiling) and enlarged to 100px, plus
+`whiteSpace: "nowrap"` on the container -- the explicit `<br>` between
+the two sentences still forces the line break between them; `nowrap`
+only stops either sentence's own text from wrapping a second time
+within its own line. Not verified against a chance of a 56px overlap
+with the Safe panel's own left edge (`left: 1180`) once it fades in
+after `DECLINE_STABLECOIN_CUT_MS` -- the task specified this exact
+width/size pair, and the panel only appears after the cut, by which
+point the headline's own actual glyph width (not its container's) is
+what would need to reach 1180px to actually collide, not the
+container's outer bound.
+
+**Frame 08's receipt no longer truncates the two fields that can
+realistically overflow the card.** `ReceiptRow` universally forced
+`overflow: hidden; text-overflow: ellipsis; white-space: nowrap`,
+silently clipping the attempt line's real merchant string and any
+reason list longer than one code -- not a decision-path bug (the real
+values were still fetched and held in state correctly), but a real,
+visible loss of exactly the information this whole page exists to make
+legible. `ReceiptRow` gained an opt-in `wrap` prop (`flex: 1; min-width:
+0; white-space: normal; word-break: break-word`, `align-items:
+flex-start` instead of `baseline`) used for `attempt` (wraps onto a
+second line inside the row's own value column) and `reason`. `reason`
+also now renders one code per line rather than joining them with a
+comma -- reusing the exact stacking rendering frame 05 already has for
+the same problem, not a second, independently-written one: the plain
+line-stack part of `LabeledLines` was pulled out into its own
+`StackedLines({ lines, color })`, `LabeledLines` now composes it, and
+frame 08's reason row uses `StackedLines` directly. `mandate`, `policy
+hash`, `chain`, and `signature` keep the truncating default -- their
+values are always `truncateHash`-shortened already, so they were never
+the fields actually overflowing. The receipt card has no explicit
+height (only `width: 760`), so it already grows to fit taller content
+for free; the verified bar was already the last child in the same
+flex-column card after the row list, so it already sits below whatever
+height the rows now take, both without any change beyond removing the
+truncation itself.
+
+**Change cost if wrong:** low. All three are presentation-only fixes to
+already-real values (`balancesAtMs`'s own schedule, the receipt's own
+`cardAttempt1`/`cardMandateInfo` state) -- no branch in any tested
+decision-path module changed, and `api-decisions.ts`'s "refuses to
+render" invariant is untouched.
+
+Implemented entirely in `apps/dashboard/src/app/film/FilmClient.tsx`
+(`renderDrainEmpty`, `renderQuoteDeclineStablecoin`,
+`renderReceiptChainVerify`, `formatUsdcWhole`, `ReceiptRow`, the new
+`StackedLines`). No test changes: all three are rendering-only fixes
+with no new branch in any pure, tested module (`balancesAtMs`,
+`truncateHash`, and the reason-code arrays this reads are all already
+covered by their own existing tests). Full `npm test`: 552 passed, 1
+skipped, 1 failed on the same standing testnet-gas
+`InsufficientFundsError` this file has documented since D-42 (this
+session's own prior runs, not a regression). `npx tsc -b` clean.
+
 ---
 
 # Open questions

@@ -266,7 +266,17 @@ Safe error (`GS020`) into legible lines instead of ever showing viem's
 raw revert text (`lib/film/safe-revert.ts`), and the four separate
 per-frame honesty tags were consolidated into one end-card footnote —
 a relocation of the disclosure CLAUDE.md's honesty rule requires, not a
-removal of it.
+removal of it. The lockup PNG stays a deliberate deferral (confirmed
+missing everywhere it could plausibly be, agreed with the user to leave
+the mark+wordmark stand-in in place until the real asset actually
+exists). `D-47` fixed three more rendering bugs the recording surfaced:
+frame 03's big red countdown now reads the same `balancesAtMs` value the
+phone's own balance card does instead of jumping straight to zero;
+frame 06's headline got a wider, larger container so each sentence
+stays on one line; and frame 08's receipt stopped truncating its
+`attempt` and `reason` fields, the latter now stacking one reason code
+per line via a `StackedLines` component factored out of frame 05's own
+`LabeledLines` so both frames share one implementation instead of two.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
