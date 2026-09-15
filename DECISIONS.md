@@ -2450,6 +2450,46 @@ one. `npm run typecheck` and the full `npm test` (399 passed, 1 skipped --
 now labeled "status \"pending\", not \"active\"" instead of the old
 generic message) both ran clean.
 
+### Follow-up -- a fixed port so a `stripe listen` tunnel can actually be pointed at this test
+
+The bypass test binds to port 0 (an ephemeral port Fastify picks fresh
+every run) specifically so `stripe listen --forward-to` could be run
+manually alongside it -- but port 0's own value isn't known until
+`app.listen()` has already returned, which is *after* the test process
+has started. A `stripe listen` tunnel started ahead of time (the only
+way to have it running *before* the bypass attempt fires, since Stripe's
+webhook has to already be wired up when the simulated authorization is
+created) can never know what port to forward to. The manual-verification
+path this test's own `beforeAll` comment describes was never actually
+usable as written.
+
+Fixed with one new, optional env var, `STRIPE_ISSUING_TEST_PORT`: unset,
+`app.listen({ port: 0, ... })` is exactly as before (every other run of
+this suite, including CI, is unaffected); set, the test binds that exact
+port instead, so a tunnel can be started once, left running, and pointed
+at a port that doesn't change between runs. The startup `console.warn`
+now says `(fixed via STRIPE_ISSUING_TEST_PORT)` next to the address when
+this path is taken, so the hint accurately reflects which case produced
+it rather than always describing a fresh ephemeral port. No value from
+`.env` is read or printed anywhere in this change -- `STRIPE_ISSUING_TEST_PORT`
+is a plain port number, not a secret, and the only thing logged is the
+port itself (already logged unconditionally before this change) and
+whether it came from the env var.
+
+**Change cost if wrong:** trivial. The env var is additive and
+opt-in; unset (the default, and CI's own state), behavior is
+byte-for-byte the same as before this follow-up.
+
+Implemented entirely in
+`apps/api/src/enforcement/stripe-issuing.bypass.test.ts`. Ran directly,
+twice -- once with `STRIPE_ISSUING_TEST_PORT` unset (confirmed the log
+still shows an ephemeral port with no `(fixed via ...)` suffix) and once
+with it set to a specific port (confirmed the server actually bound that
+exact port and the suffix appeared) -- both times reaching the suite's
+existing SKIP path (Stripe declining for its own reasons before any
+webhook fired, this sandbox's standing state), never a false pass.
+`npx tsc -b` clean.
+
 ## D-38 — `individual.card_issuing.user_terms_acceptance` is sourced only from the principal's own WebAuthn authentication (D-20), never synthesized
 
 **How this surfaced.** Probing D-37's remaining blocker (the financial

@@ -138,12 +138,20 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     // http://localhost:<port>/v1/enforcement/stripe-issuing` can actually
     // deliver the real webhook during manual verification. Nothing in this
     // test relies on that tunnel existing -- see the SKIP path below.
+    //
+    // Port 0 (the default) picks a fresh ephemeral port every run, which a
+    // `stripe listen` tunnel can never be pointed at in advance since it
+    // isn't known until this test is already running. STRIPE_ISSUING_TEST_PORT
+    // opts into a fixed port instead, so a tunnel can be started ahead of
+    // time and left running across repeated test runs.
+    const fixedPort = process.env.STRIPE_ISSUING_TEST_PORT ? Number(process.env.STRIPE_ISSUING_TEST_PORT) : undefined;
     app = buildServer({ logger: false, repos });
-    await app.listen({ port: 0, host: "127.0.0.1" });
+    await app.listen({ port: fixedPort ?? 0, host: "127.0.0.1" });
     const address = app.server.address();
     const port = typeof address === "object" && address ? address.port : "unknown";
     console.warn(
-      `[stripe-issuing bypass test] listening on http://127.0.0.1:${port} -- to actually exercise the ` +
+      `[stripe-issuing bypass test] listening on http://127.0.0.1:${port}` +
+        `${fixedPort ? " (fixed via STRIPE_ISSUING_TEST_PORT)" : ""} -- to actually exercise the ` +
         `live webhook path, run: stripe listen --forward-to http://127.0.0.1:${port}/v1/enforcement/stripe-issuing ` +
         `--events issuing_authorization.request, using its printed signing secret as STRIPE_ISSUING_WEBHOOK_SECRET.`,
     );
