@@ -231,7 +231,17 @@ export const SAFE_ROW_COSIGNER_SUB = "signature 2 of 2 · refused";
  */
 export const SAFE_REVERT_GS020_LINE_1 = "→ reverted · GS020: signatures data too short";
 export const SAFE_REVERT_GS020_LINE_2 = "1 of 2 signatures — Waysafe’s is missing";
-export const SAFE_REVERT_BALANCE_SUFFIX = "balance unchanged · 2,500.00 USDC";
+/**
+ * D-49 follow-up: dropped the dollar figure. The address on this line is
+ * the real deployed Safe (`0xFeCB8688...`) -- anyone can look it up on the
+ * Amoy explorer -- but "2,500.00 USDC" is Act 1's own dramatized wallet
+ * figure, and the real Safe holds 20 test USDC. A real, checkable address
+ * next to a dramatized balance is a credibility risk this line doesn't
+ * need to take: "balance unchanged" is still true and still real (the
+ * revert itself proves no transfer happened) without asserting a specific
+ * number nothing here actually verified.
+ */
+export const SAFE_REVERT_BALANCE_SUFFIX = "balance unchanged";
 
 // --- Frame 07: decline-card-2 + allow + fleet-glimpse ---------------------------
 

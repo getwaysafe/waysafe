@@ -5032,6 +5032,49 @@ testnet-gas `InsufficientFundsError` this file has documented since
 D-42 (this session's own earlier live `curl` verification of the ALLOW
 flow spent the remaining gas), not a regression. `npx tsc -b` clean.
 
+### Follow-up -- dropped the dollar figure next to the real Safe address on frame 06's revert card
+
+Frame 06's revert card's third line read "Safe 0xFeCB…CFb8 · balance
+unchanged · 2,500.00 USDC". The address is the real deployed Safe --
+`0xFeCB8688...`, truncated -- and anyone watching the film can look it
+up on the Amoy explorer. "2,500.00 USDC" is Act 1's own dramatized
+wallet figure (`STARTING_WALLET_USDC_ATOMIC`), not this Safe's real
+balance, which is 20 test USDC. A real, checkable on-chain address
+sitting directly next to a fabricated balance is a credibility risk
+this line didn't need to take: the first person to actually check the
+address sees a number that doesn't match anything real, which reads as
+the film fabricating on-chain data even though every other figure on
+this exact line (the address, "reverted", "balance unchanged" itself)
+is real.
+
+**Fixed by dropping the number, not by making it real.** Making it
+real (querying the Safe's actual USDC balance at render time) was
+rejected as more machinery than this line needs: "balance unchanged" is
+already a true, real claim on its own -- the revert itself is the proof
+no transfer happened -- and doesn't require citing a specific figure to
+be honest. `SAFE_REVERT_BALANCE_SUFFIX` is now just `"balance
+unchanged"`. The line's other two real facts (the address,
+`formatSafeRevertLines`'s own GS020 handling) are untouched.
+
+**Change cost if wrong:** trivial -- one string constant, no logic
+changed, `formatSafeRevertLines`'s own tests already interpolate the
+constant rather than hardcoding it, so they needed no edits and prove
+the new value flows through correctly.
+
+Implemented in `apps/dashboard/src/lib/film/constants.ts`
+(`SAFE_REVERT_BALANCE_SUFFIX`). `constants.copy.test.ts`'s own doc
+comment updated to describe the new value (no assertion changes needed
+-- this constant was never checked for literal-copy match, since it's
+combined with a real address at render time, same reasoning as before);
+`design/film-storyboard/06-quote-decline-stablecoin.html`'s matching
+line updated to the same new text so the storyboard and the shipped
+copy don't diverge. `safe-revert.test.ts` passed unchanged (its
+assertions interpolate `SAFE_REVERT_BALANCE_SUFFIX` rather than
+hardcoding it). Full `npm test`: all film-specific suites green (61
+tests across 8 files); the one other failure in a full repo-wide run is
+the same standing testnet-gas `InsufficientFundsError`, not a
+regression. `npx tsc -b` clean.
+
 ---
 
 # Open questions

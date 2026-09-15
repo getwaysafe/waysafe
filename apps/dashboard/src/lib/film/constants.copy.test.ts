@@ -13,7 +13,9 @@
  * predecessor's honesty wording (removed by D-46, see its own note),
  * `END_CARD_FOOTNOTE` (D-46 -- a brand-new disclosure, not storyboard
  * copy), the real Safe revert lines beyond their two fixed GS020
- * sentences (D-46's `SAFE_REVERT_BALANCE_SUFFIX` composes a real address in
+ * sentences (`SAFE_REVERT_BALANCE_SUFFIX` -- "balance unchanged" as of
+ * the D-49 follow-up, which dropped the dramatized dollar figure that
+ * used to sit next to it -- is combined with the real Safe's own address
  * at render time, tested separately in `safe-revert.test.ts`), and
  * `AGENT_REASONING_QUOTE`/`AGENT_REASONING_ATTRIBUTION` (D-47 follow-up --
  * kept exported for DECISIONS.md D-32's own citation, but no longer

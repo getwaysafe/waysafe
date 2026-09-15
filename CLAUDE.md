@@ -336,7 +336,13 @@ with the caption and the Safe panel below it as a `justifyContent:
 "space-between"` flex row (900px + 600px of 1640px, leaving exactly
 140px as the panel's own gap) that places the panel at the identical
 screen position it already had -- proven by the row's own arithmetic,
-not assumed.
+not assumed. A second D-49 follow-up dropped "2,500.00 USDC" from that
+same frame's revert card: the line already names the real deployed
+Safe's own address, checkable on the Amoy explorer, and that address
+holds 20 test USDC, not the dramatized 2,500 figure sitting next to
+it -- a real, checkable address next to a fabricated number is a
+credibility risk on its own. "Balance unchanged" alone is still true
+and still real; it just no longer cites a number nothing here verified.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
