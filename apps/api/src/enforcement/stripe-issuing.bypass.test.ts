@@ -175,7 +175,10 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
             organizationId: ORG,
             mandateId,
             cardholderName: "Waysafe Bypass Test",
+            cardholderFirstName: "Waysafe",
+            cardholderLastName: "Bypass Test",
             cardholderPhone: "+15555550100",
+            cardholderDob: { day: 1, month: 1, year: 1990 },
             currency: "USD",
             billingAddress: {
               line1: "123 Market St",

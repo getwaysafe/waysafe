@@ -287,7 +287,23 @@ position. All eight left-aligned frames (01/02/03/05/06/07/08/09 --
 `LEFT_COLUMN_STYLE` flex column that reflows automatically instead of
 assuming a height. The same pass replaced frame 06's raw agent quote
 with a plain-English paraphrase (`AGENT_REASONING_QUOTE` stays exported
-for D-32's own citation, just no longer rendered).
+for D-32's own citation, just no longer rendered). `D-48` diagnosed, live
+against the real Stripe sandbox, why the Issuing bypass test's own
+`stripe listen` tunnel never sees a real `issuing_authorization.request`
+webhook: three real, code-fixable defects in `provisionCardForMandate`
+(a cardholder missing `individual.first_name`/`last_name`, a card never
+given an explicit `status: "active"` -- Stripe's own field doc says it
+defaults to `inactive` -- and a cardholder missing `individual.dob`,
+plus the brief asynchronous identity-review window Stripe attaches to a
+new cardholder once `dob` is present, now polled for with a bounded
+`waitForCardholderReview`), each confirmed by triggering it and reading
+the real decline reason before and after the fix. The one remaining
+blocker is genuine Stripe-side ACH-style settlement timing, not
+anything in this codebase: the financial account's $1,000 test funding
+is real but its `inbound_pending` balance doesn't become `available`
+until 2026-09-22. `card_issuing`'s capability status is `"unrequested"`
+on this account -- a real, separately-flagged finding -- but not
+confirmed as blocking, since the funds check sits in front of it.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

@@ -428,15 +428,22 @@ describe("provisionCardForMandate (D-37/D-38)", () => {
       id: "ich_fake",
       ...params,
     }));
+    // D-48: `provisionCardForMandate` polls this once after creating a
+    // cardholder (see `waitForCardholderReview`) -- this fake account's
+    // cardholder is never actually under Stripe's real async review, so
+    // reporting it already clear lets these tests reach the same
+    // card-creation step they always did, in one call, unaffected by that
+    // polling loop's own timing.
+    const cardholderRetrieve = vi.fn(async (id: string) => ({ id, requirements: { disabled_reason: null } }));
     const cardCreate = vi.fn(async (params: Record<string, unknown>) => ({ id: "ic_fake", ...params }));
     const cardUpdate = vi.fn(async (id: string, params: Record<string, unknown>) => ({ id, ...params }));
     const stripe = {
       issuing: {
-        cardholders: { create: cardholderCreate },
+        cardholders: { create: cardholderCreate, retrieve: cardholderRetrieve },
         cards: { create: cardCreate, update: cardUpdate },
       },
     } as unknown as Stripe;
-    return { stripe, cardholderCreate, cardCreate, cardUpdate };
+    return { stripe, cardholderCreate, cardholderRetrieve, cardCreate, cardUpdate };
   }
 
   function baseParams(mandateId: string) {
@@ -444,7 +451,10 @@ describe("provisionCardForMandate (D-37/D-38)", () => {
       organizationId: ORG,
       mandateId,
       cardholderName: "Waysafe Test",
+      cardholderFirstName: "Waysafe",
+      cardholderLastName: "Test",
       cardholderPhone: "+15555550100",
+      cardholderDob: { day: 1, month: 1, year: 1990 },
       currency: "USD" as const,
       billingAddress: {
         line1: "123 Market St",

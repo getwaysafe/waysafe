@@ -4578,6 +4578,180 @@ stablecoin.html`'s own quote block was updated to the same new copy so
 the two don't silently diverge. Full `npm test`: all film-specific
 suites green (62 tests across 8 files); `npx tsc -b` clean.
 
+## D-48 — Why the Stripe Issuing bypass test never sees a real webhook, checked against the live account, not assumed
+
+The bypass test (D-32/D-33/D-37) has run SKIPPED against a real,
+provisioned card and a real declined authorization for a long time, on
+the theory that no webhook tunnel was pointed at it. D-37's own follow-up
+fixed that specific gap (a fixed `STRIPE_ISSUING_TEST_PORT` a `stripe
+listen` tunnel can actually target). With a real tunnel running,
+correctly bound to the test's own fixed port, and financial account now
+open with $1,000 in test funding, the test still reported SKIPPED --
+this decision is the investigation into why, done entirely against the
+real sandbox account, each fact checked with its own API call rather than
+assumed from documentation.
+
+**Fact 1: with a live, correctly-targeted tunnel running, Stripe made
+zero delivery attempts.** `stripe listen --forward-to
+http://127.0.0.1:4411/v1/enforcement/stripe-issuing --events
+issuing_authorization.request`, run alongside `STRIPE_ISSUING_TEST_PORT=4411
+npx vitest run apps/api/src/enforcement/stripe-issuing.bypass.test.ts` --
+the tunnel's own log showed nothing beyond its own "Ready!" banner, every
+single run. This rules out a delivery, connectivity, or signature-
+verification failure downstream of Stripe attempting the call: Stripe
+never tried.
+
+**Fact 2: the test's own call reaches Stripe's real, non-simulated
+decision pipeline -- confirmed by reading the actual declined
+authorization object, not assumed from the test helper's name.**
+`stripe.testHelpers.issuing.authorizations.create(...)` is a test-mode
+helper, but `stripe get /v1/issuing/authorizations/:id` on the resulting
+object shows a real `request_history` entry with Stripe's own account-
+level decline reasons (`card_inactive`, `cardholder_verification_required`,
+`insufficient_funds` -- each observed directly, in that order, across this
+investigation's own fix sequence below) -- the same object shape and the
+same reason enum (`card_inactive` | ... | `insufficient_funds` | ... |
+`webhook_approved` | `webhook_declined` | `webhook_timeout` | `webhook_error`,
+read directly from stripe-node's own shipped
+`Issuing.Authorizations.RequestHistory.Reason` type) a real card-present
+authorization would produce. Only the four `webhook_*` values indicate
+the request stage was ever reached; every reason actually observed in
+this investigation was one of the others -- meaning the request never
+got that far, not that the webhook was consulted and something else went
+wrong after.
+
+**Fact 3: three separate, real, code-fixable defects in
+`provisionCardForMandate`, each verified by triggering it, reading the
+real decline reason, fixing the one field responsible, and confirming
+the reason changed as a direct result -- not by reading Stripe's docs
+and guessing which fields matter.**
+
+1. The cardholder was created with only a top-level `name`, never
+   `individual.first_name`/`individual.last_name`. Stripe's cardholder
+   object showed `requirements.past_due: ["individual.first_name",
+   "individual.last_name"]`, `requirements.disabled_reason:
+   "requirements.past_due"`, and its card `status: "inactive"` --
+   Stripe auto-declines any authorization against an inactive card with
+   `reason: "card_inactive"`, entirely at the account level, before a
+   request-stage webhook would ever be consulted. Fixed by adding both
+   fields (new required params, `cardholderFirstName`/`cardholderLastName`).
+2. Even with the cardholder fixed, the card still came back
+   `status: "inactive"` and still auto-declined with `card_inactive` --
+   a second, independent cause. Stripe-node's own field doc on
+   `CardCreateParams.status` says plainly: "Whether authorizations can
+   be approved on this card... **Defaults to `inactive`**." Nothing in
+   this codebase ever set it. Fixed with one explicit field,
+   `status: "active"`, at card creation.
+3. With both of those fixed, authorizations still auto-declined, now
+   with `reason: "cardholder_verification_required"` --
+   `requirements.past_due` was empty (so nothing *looked* required), but
+   the cardholder was still missing `individual.dob`. Added it (a new
+   required `cardholderDob` param -- synthetic test-mode data, like the
+   existing `cardholderPhone`, since this cardholder is a compliance
+   artifact Stripe's Issuing product requires and never a representation
+   of Waysafe's actual principal).
+
+Each of these three was confirmed to be the actual cause, not a
+plausible-sounding guess: after fixing exactly one field, the next real
+authorization attempt's own `request_history[0].reason` changed to
+something new, in the order listed above, ending at `card.status:
+"active"`, `cardholder.status: "active"`, `requirements: {disabled_reason:
+null, past_due: []}` -- fully clear.
+
+**Fact 3b, a fourth issue, timing rather than a missing field: a new
+individual cardholder with a DOB goes through a brief asynchronous
+Stripe-side identity check.** Immediately after creating a cardholder
+with `dob` set, `requirements.disabled_reason` reads `"under_review"` --
+and any authorization against a card under it still declines with
+`cardholder_verification_required` until that clears. Measured directly,
+repeatedly, against this sandbox: it clears within 1-2 seconds every
+time, never longer, in six separate timed trials one second apart. Fixed
+with `waitForCardholderReview` -- a bounded poll (10 attempts / 500ms,
+5s worst case) between cardholder creation and card creation, so every
+caller gets a cardholder that's actually ready rather than inheriting
+the same timing gap. Not a fix for a hypothetical: without it, this
+investigation's own test runs kept landing back on
+`cardholder_verification_required` even with `dob` correctly set,
+because the automated sequence (create cardholder, create card, update
+metadata, simulate authorization) completes faster than Stripe's own
+review window.
+
+**Fact 4: the one remaining decline reason is genuine Stripe-side
+funding-settlement timing, not a setting to enable or a field to fix.**
+With all four of the above resolved, the real authorization's decline
+reason is now `insufficient_funds`. Traced directly:
+`stripe get /v2/money_management/financial_accounts/:id` shows
+`balance.available.usd.value: 0` against `balance.inbound_pending.usd.value:
+100000` ($1,000.00) -- the funding is real, but not yet available.
+`stripe get /v2/money_management/transactions` shows why: the inbound
+transfer's own `schedule_funds_availability` gives
+`effective_at: "2026-09-22T03:29:24.011Z"`, about a week after the
+transfer was created (2026-09-15). Stripe's test mode is realistically
+simulating actual ACH settlement timing for a Money Management inbound
+transfer here, the same way D-42 already found it does for on-chain gas
+and D-36 found it does for a charge's own `balance_transaction` timing --
+not a bug, not a dashboard toggle, a real wait. **Nothing to click here;
+re-run this suite on or after 2026-09-22, or fund the account through a
+mechanism that settles faster if one exists (not investigated in this
+session).**
+
+**A fifth fact, found but not confirmed to be *the* blocker, and not
+fixable by this codebase at all: `card_issuing` is not a requested
+capability on this Stripe account.** `stripe get
+/v1/account/capabilities/card_issuing` returns `"status": "unrequested"`,
+`"requested": false`; the account's own `settings.card_issuing.tos_acceptance`
+shows `date: null, ip: null` -- this Stripe account itself has never
+accepted Stripe's Issuing program terms at the account level (distinct
+from `individual.card_issuing.user_terms_acceptance`, the *cardholder's*
+own acceptance D-38 already sources honestly). Object creation
+(cardholders, cards, financial accounts, simulated authorizations) all
+work regardless, consistent with Stripe test mode being more permissive
+about capability status than production -- but whether the capability
+being fully requested/active is *also* required specifically for
+real-time authorization webhook delivery was not established either way
+in this session, because the funds-availability block (Fact 4) sits in
+front of it: this investigation could not get an authorization far
+enough through Stripe's own decline sequence to test what happens once
+funds are actually available. **What to do, if anything:** in the
+Stripe Dashboard, under Settings, request/enable the Issuing capability
+and accept its program agreement for this account (the exact control
+Stripe shows depends on account type and isn't independently re-verified
+here -- CLAUDE.md's own instruction against generating or guessing URLs
+applies to giving a precise deep link). Recommended regardless of
+whether it turns out to be blocking, since an account actively creating
+Issuing cards with a fully unrequested Issuing capability is itself an
+unusual, worth-fixing state -- but not confirmed as *the* fix for this
+specific symptom.
+
+**The honesty boundary itself needed no change and got none.** The test
+still reports SKIPPED, honestly, for a real reason (Stripe's own funds
+timing) instead of a false pass -- exactly the posture D-33 established
+and D-37 already extended to two more real SKIP reasons. No branch was
+added that treats a non-`webhook_*` decline as anything but what it is.
+
+**Change cost if wrong:** low for the three field fixes (each is
+additive -- a previously-required-but-missing Stripe field, now sent --
+verified against real Stripe behavior at every step, not merely
+type-checked). Low for the `waitForCardholderReview` poll -- bounded,
+never throws, and a caller whose authorization attempt still lands on
+`cardholder_verification_required` after the poll gets the same honest
+decline it always would have. Zero for the funds-timing finding, since
+nothing in this codebase changed because of it.
+
+Implemented in `apps/api/src/enforcement/stripe-issuing.ts`
+(`provisionCardForMandate` gained required `cardholderFirstName`/
+`cardholderLastName`/`cardholderDob` params, an explicit `status: "active"`
+on card creation, and the new `waitForCardholderReview` helper). Both
+real call sites updated (`stripe-issuing.bypass.test.ts`) and the mocked
+unit-test call site (`stripe-issuing.test.ts`, whose `fakeStripe()` gained
+a `cardholders.retrieve` mock reporting already-clear so the new poll
+doesn't change those tests' own timing). `npm run typecheck` and the
+full `npm test` (553 passed, 1 skipped -- this same bypass test, still
+honestly SKIPPED on the real, now-precisely-diagnosed `insufficient_funds`
+reason, not a regression) both ran clean. Verified live, repeatedly,
+against the real Stripe sandbox and a real `stripe listen` tunnel at
+every stage of this fix, not only at the end.
+
 ---
 
 # Open questions

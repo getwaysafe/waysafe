@@ -140,6 +140,22 @@ async function requireCardIssuingTermsAcceptance(
   };
 }
 
+/** D-48: polls a freshly-created cardholder until Stripe's own transient
+ * `"under_review"` disabled_reason clears (see `provisionCardForMandate`'s
+ * own call site for why this exists). Bounded at 10 attempts / 500ms --
+ * 5s worst case against a delay measured at 1-2s -- and simply returns if
+ * it never clears in that window rather than throwing: a slow clear is
+ * Stripe's own timing, not a failure this function can diagnose further,
+ * and the caller's own authorization attempt will surface the real
+ * decline reason if it's still pending. */
+async function waitForCardholderReview(stripe: Stripe, cardholderId: string, attempts = 10, delayMs = 500): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    const current = await stripe.issuing.cardholders.retrieve(cardholderId);
+    if (current.requirements.disabled_reason !== "under_review") return;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 /**
  * Creates a Stripe Issuing cardholder and card whose spend authority *is*
  * the named mandate, and the Instrument row (D-35) that makes that spend
@@ -176,6 +192,29 @@ async function requireCardIssuingTermsAcceptance(
  * `mandate.authenticated`, so a receipt can show exactly when and from
  * where the principal's acceptance was asserted to Stripe -- not merely
  * when the mandate itself was authenticated.
+ *
+ * D-48: `individual.first_name`/`individual.last_name` are also required --
+ * checked directly against a real declined authorization's own
+ * `request_history` reason (`card_inactive`), not assumed. Without them,
+ * Stripe leaves the cardholder's `requirements.past_due` non-empty
+ * (`["individual.first_name", "individual.last_name"]`), which disables the
+ * cardholder and creates every card under it `status: "inactive"` --
+ * Stripe then auto-declines any authorization attempt against an inactive
+ * card by its own account-level control, before the request ever reaches
+ * the `issuing_authorization.request` webhook stage at all. The top-level
+ * `name` field (a display name Stripe also accepts on its own) does not
+ * satisfy this requirement; the two `individual.*` fields are a distinct,
+ * separately-checked pair.
+ *
+ * D-48: `individual.dob` closes a second, separate pre-webhook auto-decline
+ * -- without it, `requirements.past_due` stays empty (so it doesn't look
+ * required) but every authorization still auto-declines with
+ * `cardholder_verification_required`, again before the webhook stage.
+ * There is no real date of birth to source here -- this cardholder is a
+ * compliance artifact Stripe's Issuing product requires for any
+ * `individual`-type cardholder, not a representation of Waysafe's actual
+ * principal -- so, like `cardholderPhone`, it is synthetic test-mode data
+ * every real caller passes the same fixed value for.
  */
 export async function provisionCardForMandate(
   stripe: Stripe,
@@ -184,7 +223,10 @@ export async function provisionCardForMandate(
     organizationId: string;
     mandateId: string;
     cardholderName: string;
+    cardholderFirstName: string;
+    cardholderLastName: string;
     cardholderPhone: string;
+    cardholderDob: { day: number; month: number; year: number };
     currency: Currency;
     billingAddress: Stripe.Issuing.CardholderCreateParams.Billing.Address;
   },
@@ -198,6 +240,9 @@ export async function provisionCardForMandate(
     phone_number: params.cardholderPhone,
     type: "individual",
     individual: {
+      first_name: params.cardholderFirstName,
+      last_name: params.cardholderLastName,
+      dob: params.cardholderDob,
       card_issuing: {
         user_terms_acceptance: {
           ip: acceptance.ip,
@@ -209,10 +254,29 @@ export async function provisionCardForMandate(
     metadata: { waysafe_mandate_id: params.mandateId },
   });
 
+  // D-48: a brand-new individual cardholder with a DOB goes through a
+  // brief asynchronous identity check on Stripe's side --
+  // `requirements.disabled_reason: "under_review"` immediately after
+  // creation. Measured directly against this sandbox, repeatedly: it
+  // clears on its own within 1-2 seconds, never longer. Until it clears,
+  // any authorization against a card under this cardholder auto-declines
+  // with `cardholder_verification_required` -- another pre-webhook
+  // decline, same effect as the inactive-card case above. Polling once
+  // here means every caller gets a cardholder that's actually ready to
+  // authorize, not the same timing gap pushed onto whoever calls this
+  // next.
+  await waitForCardholderReview(stripe, cardholder.id);
+
   const card = await stripe.issuing.cards.create({
     cardholder: cardholder.id,
     currency: params.currency.toLowerCase(),
     type: "virtual",
+    // D-48: Stripe's own field doc says it plainly -- "Defaults to
+    // `inactive`." An inactive card is auto-declined by Stripe's own
+    // account-level control before an authorization ever reaches the
+    // request stage, so no `issuing_authorization.request` webhook fires
+    // for it at all. Explicit, not a workaround for anything unusual.
+    status: "active",
     financial_account_v2: financialAccount,
     metadata: { waysafe_mandate_id: params.mandateId },
   } as CardCreateParamsWithFinancialAccountV2);
