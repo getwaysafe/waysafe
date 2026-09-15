@@ -4974,6 +4974,64 @@ tracked by git). New test:
 `npm test`: all film-specific suites green (63 tests across 9 files,
 including the new layout guard); `npx tsc -b` clean.
 
+### Follow-up -- capping the headline's own width couldn't fix the Safe-panel overlap; the frame needed restructuring, not resizing
+
+D-49's own fix (cap the headline container at 1000px, drop its font to
+84px) still overlapped the Safe panel. The reason: `whiteSpace: nowrap`
+means a container's `width` never constrains that text at all -- it
+only controls whether text *wraps*, which nowrap already forbids
+regardless of width. The real, measured width of "You can't reason
+past a signature." (34 characters, the longer of the two sentences) is
+~1430px at 84px in the actual recording -- ~430px wider than the
+1000px container D-49 capped it to, so it overflowed that container by
+exactly the amount needed to keep running under the panel. No font
+size shrinks that sentence enough to fit 1000px without becoming
+illegibly small at 1080p; the container width was the wrong thing to
+constrain.
+
+**Restructured instead of resized.** The headline now spans the
+frame's full working width -- one `{ ...LEFT_COLUMN_STYLE, width: 1640 }`
+container (the same 1640px frame 09's own two-column layout already
+uses), at 92px. Arithmetic, checked, not re-guessed: 1430px measured at
+84px scales to `1430 * (92/84) ≈ 1566px` at 92px -- comfortably inside
+the 1640px container, a 74px margin to spare. Below the headline, a
+two-column row holds the caption (`STABLECOIN_THRESHOLD_CAPTION`,
+900px, left) and the Safe panel (600px, right) as flex siblings with
+`justifyContent: "space-between"`: `900 + 600 = 1500` of the row's own
+1640px, leaving exactly `1640 - 1500 = 140` px as the single gap
+between them. That gap places the panel's own left edge at
+`140 + 1640 - 600 = 1180` and its right edge at `1180 + 600 = 1780` --
+identical to its previous fixed position, and exactly
+"right-aligned to the frame's 140px margin" as asked
+(`1920 - 140 = 1780`): the panel's real screen position doesn't change
+at all, only the mechanism that places it there does, and the row
+arithmetic above proves it rather than assuming it. The panel's own
+contents, sizing, and `Reveal` wrapper (`active={revealedAt(0)}`,
+already a no-op outside the `quote` sub-beat since `revealedAt(0)` is
+always true there) are untouched. No child in this frame carries its
+own `top` any more -- kicker (in the `quote` sub-beat), headline, and
+the two-column row are all flex children of one container, the same
+pattern every other frame already uses. The `quote` sub-beat itself
+(kicker + paraphrase headline + source line, occupying the frame alone)
+is untouched.
+
+**Change cost if wrong:** low. Scoped entirely to
+`renderQuoteDeclineStablecoin`'s non-`quote` branch; the panel's own
+real position is proven unchanged by the arithmetic above, and
+`api-decisions.ts`'s decision-rendering path is untouched.
+
+Implemented in `apps/dashboard/src/app/film/FilmClient.tsx`
+(`renderQuoteDeclineStablecoin`). No test changes needed:
+`FilmClient.layout.test.ts`'s existing "exactly nine containers, none
+with a bare `top`" assertions already cover this frame's two containers
+(the `quote` sub-beat and this one) and pass unchanged, since this fix
+removes a `top` usage rather than adding one. Full `npm test`: all
+film-specific suites green (63 tests across 9 files); the one other
+failure in a full repo-wide run is the same standing, pre-existing
+testnet-gas `InsufficientFundsError` this file has documented since
+D-42 (this session's own earlier live `curl` verification of the ALLOW
+flow spent the remaining gas), not a regression. `npx tsc -b` clean.
+
 ---
 
 # Open questions

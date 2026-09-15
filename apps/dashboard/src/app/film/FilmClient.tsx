@@ -716,42 +716,52 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
       ? ["→ reverted · unavailable"]
       : formatSafeRevertLines(stablecoinRejection?.revertReason ?? null, stablecoinSafeAddress);
     return (
-      <>
-        <div style={LEFT_COLUMN_STYLE}>
-          {/* D-49: D-47's own 1100px-wide, 100px fix ran directly under the
-              Safe panel (which starts at x=1180 -- 140-4+1100=1236, a 56px
-              overlap). Capped at 1000px, comfortably clear of the panel
-              (140-4+1000=1136, a 44px gap before it), and dropped to 84px
-              so "You can't reason past a signature." (the longer of the
-              two sentences) still fits on one line inside that width --
-              `whiteSpace: nowrap` still forbids either sentence from
-              wrapping a second time; the explicit `<br>` between them
-              still forces the line break between the two. */}
-          <div className="film-display" style={{ marginLeft: -4, width: 1000, fontSize: 84, fontWeight: 600, color: "#F7F9FC", whiteSpace: "nowrap" }}>
-            {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#22B8BE" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
-          </div>
-          {showThreshold ? (
-            <div style={{ width: 1020, fontSize: 30, lineHeight: 1.35, color: "#94A3B8" }}>{STABLECOIN_THRESHOLD_CAPTION}</div>
-          ) : null}
+      // D-49 follow-up: capping the headline's own width couldn't fix this
+      // -- "You can't reason past a signature." (34 chars) measures ~1430px
+      // at 84px in the actual recording, so even D-49's capped 1000px
+      // container was overflowing it by ~430px and running under the panel
+      // regardless of the container's own bound (`whiteSpace: nowrap` means
+      // the container's `width` never constrains the text at all; it only
+      // constrains wrapping, which nowrap already disables). Restructured
+      // instead: the headline now spans the frame's full working width
+      // (1640px, left 140 -- same width frame 09's own two-column frame
+      // uses), where the same 34-char sentence at 92px measures
+      // ~1566px (1430 * 92/84) -- comfortably inside 1640px, a 74px margin
+      // to spare, verified arithmetically, not re-guessed. Below it, a
+      // two-column row holds the caption (900px, left) and the Safe panel
+      // (600px, right) as flex siblings with `justifyContent:
+      // "space-between"` -- 900 + 600 = 1500 of the row's own 1640px,
+      // leaving exactly 140px as the one gap between them, which places
+      // the panel at left 1180 / right 1780 -- identical to its previous
+      // fixed position (right-aligned to the frame's own 140px margin:
+      // 1920 - 140 = 1780), so the panel's own real position doesn't
+      // change, only the mechanism placing it there. No child carries its
+      // own `top` any more, same pattern as every other frame.
+      <div style={{ ...LEFT_COLUMN_STYLE, width: 1640 }}>
+        <div className="film-display" style={{ marginLeft: -4, fontSize: 92, fontWeight: 600, color: "#F7F9FC", whiteSpace: "nowrap" }}>
+          {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#22B8BE" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
         </div>
         {showThreshold ? (
-          <Reveal active={revealedAt(0)}>
-            <div style={{ position: "absolute", left: 1180, top: 270, width: 600, display: "flex", flexDirection: "column", gap: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 6px 10px 6px" }}>
-                <div style={{ fontSize: 20, fontWeight: 600, color: "#F7F9FC" }}>{ATTACKER_NOTIFICATIONS[1]!.notifTitle}</div>
-                <div className="film-mono" style={{ fontSize: 15, letterSpacing: "0.08em", color: "#94A3B8" }}>{SAFE_PANEL_LABEL}</div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <div style={{ width: 900, fontSize: 30, lineHeight: 1.35, color: "#94A3B8" }}>{STABLECOIN_THRESHOLD_CAPTION}</div>
+            <Reveal active={revealedAt(0)}>
+              <div style={{ width: 600, display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 6px 10px 6px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 600, color: "#F7F9FC" }}>{ATTACKER_NOTIFICATIONS[1]!.notifTitle}</div>
+                  <div className="film-mono" style={{ fontSize: 15, letterSpacing: "0.08em", color: "#94A3B8" }}>{SAFE_PANEL_LABEL}</div>
+                </div>
+                <SafeRow title={SAFE_ROW_SESSION_TITLE} sub={SAFE_ROW_SESSION_SUB} bg="#475569" icon={<IconCheck size={22} color="#FFFFFF" />} />
+                <SafeRow title={SAFE_ROW_COSIGNER_TITLE} sub={SAFE_ROW_COSIGNER_SUB} bg="#EF4444" icon={<IconX size={22} color="#FFFFFF" />} />
+                <div className="film-mono" style={{ marginTop: 10, padding: "22px 26px", borderRadius: 20, background: "#020817", border: "1px solid #1E293B", fontSize: 19, lineHeight: 1.6, color: "#CBD5E1" }}>
+                  {revertLines.map((line, i) => (
+                    <div key={i} style={{ color: i === 0 ? "#FCA5A5" : "#94A3B8" }}>{line}</div>
+                  ))}
+                </div>
               </div>
-              <SafeRow title={SAFE_ROW_SESSION_TITLE} sub={SAFE_ROW_SESSION_SUB} bg="#475569" icon={<IconCheck size={22} color="#FFFFFF" />} />
-              <SafeRow title={SAFE_ROW_COSIGNER_TITLE} sub={SAFE_ROW_COSIGNER_SUB} bg="#EF4444" icon={<IconX size={22} color="#FFFFFF" />} />
-              <div className="film-mono" style={{ marginTop: 10, padding: "22px 26px", borderRadius: 20, background: "#020817", border: "1px solid #1E293B", fontSize: 19, lineHeight: 1.6, color: "#CBD5E1" }}>
-                {revertLines.map((line, i) => (
-                  <div key={i} style={{ color: i === 0 ? "#FCA5A5" : "#94A3B8" }}>{line}</div>
-                ))}
-              </div>
-            </div>
-          </Reveal>
+            </Reveal>
+          </div>
         ) : null}
-      </>
+      </div>
     );
   }
 

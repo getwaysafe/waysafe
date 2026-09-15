@@ -316,16 +316,27 @@ separate one (fixed by realigning `.env.local`, not a code change; the
 code itself now also renders a real call failure as its own distinct
 error block rather than a bare "UNAVAILABLE" sitting where a decision
 value would go); frame 06's headline still ran under the Safe panel
-after D-47's own fix (capped narrower, sized down, this time checked
-against the panel's actual position); frame 09 got the one-flex-column
-treatment the other eight frames already had, now including its
-two-column answer block; and frame 05's decision block traded a fade
-for a hard cut so its full-opacity state can never be caught
-mid-transition. A real bounding-box regression test wasn't practical
-(`environment: "node"`, no layout engine even with jsdom, and real
-per-frame content needs a live API round trip) -- said so plainly and
-added a structural guard instead
-(`FilmClient.layout.test.ts`), verified against a real regression.
+after D-47's own fix (capped narrower, sized down); frame 09 got the
+one-flex-column treatment the other eight frames already had, now
+including its two-column answer block; and frame 05's decision block
+traded a fade for a hard cut so its full-opacity state can never be
+caught mid-transition. A real bounding-box regression test wasn't
+practical (`environment: "node"`, no layout engine even with jsdom, and
+real per-frame content needs a live API round trip) -- said so plainly
+and added a structural guard instead (`FilmClient.layout.test.ts`),
+verified against a real regression. A D-49 follow-up found that fix
+itself was still wrong, not just under-verified: `whiteSpace: nowrap`
+means a container's own `width` never constrains that text at all, so
+capping the width to 1000px did nothing to the sentence's real
+~1430px-measured render width, which kept running under the panel
+regardless. Restructured instead of resized: the headline now spans
+the frame's full 1640px working width at 92px (1430px scales to
+~1566px there, verified arithmetically, comfortably inside 1640px),
+with the caption and the Safe panel below it as a `justifyContent:
+"space-between"` flex row (900px + 600px of 1640px, leaving exactly
+140px as the panel's own gap) that places the panel at the identical
+screen position it already had -- proven by the row's own arithmetic,
+not assumed.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
