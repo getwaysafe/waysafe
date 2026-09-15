@@ -656,14 +656,24 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
           <Reveal active={revealedAt(400)}>
             <div className="film-display" style={{ fontSize: 64, fontWeight: 500, color: "#F7F9FC" }}>{DECLINE_CARD_1_SUBHEAD}</div>
           </Reveal>
-          <Reveal active={revealedAt(400)}>
+          {/* D-49: a hard cut, not a `Reveal` fade -- this block was
+              reported rendering at partial opacity, hard to read. A CSS
+              opacity transition's *end state* is always fully opaque once
+              its target style holds, but there is no such guarantee about
+              what a screen recording captures if it samples mid-transition;
+              the only way to make "opacity 1, guaranteed" true at every
+              instant once visible is to not animate opacity for this block
+              at all. Timing (`revealedAt(400)`) is unchanged -- it still
+              appears at the same instant it always did, just without a
+              fade. */}
+          {revealedAt(400) ? (
             <div className="film-mono" style={{ display: "flex", flexDirection: "column", gap: 14, fontSize: 24, color: "#CBD5E1" }}>
               <div><span className="film-lb" style={{ color: "#94A3B8" }}>decision</span>{cardAttempt1 ? cardAttempt1.decision : cardError ? "UNAVAILABLE" : "EVALUATING"}</div>
               <LabeledLines label="reason" lines={cardAttempt1 ? cardAttempt1.reasonCodes : cardError ? ["UNAVAILABLE"] : ["…"]} valueColor="#FCA5A5" />
               <div><span className="film-lb" style={{ color: "#94A3B8" }}>merchant</span>{DECLINE_MERCHANT_NOTE}</div>
               <LabeledLines label="signed" lines={[...DECLINE_SIGNED_LINES]} />
             </div>
-          </Reveal>
+          ) : null}
           <Reveal active={revealedAt(400)}>
             <div style={{ width: 1000, fontSize: 28, lineHeight: 1.35, color: "#94A3B8" }}>{DECLINE_CARD_1_BODY}</div>
           </Reveal>
@@ -708,15 +718,16 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
     return (
       <>
         <div style={LEFT_COLUMN_STYLE}>
-          {/* D-47: each sentence stays on its own line -- a wider
-              container (1100px, up from 1020px) at the task's specified
-              100px, plus `whiteSpace: nowrap` (the explicit `<br>` between
-              the two sentences still forces the line break; nowrap only
-              stops either sentence's own text from wrapping a second
-              time). Kept exactly as D-47 landed it -- see the follow-up's
-              own note on why this child's width (1100px) is deliberately
-              wider than the shared left-column container (1040px). */}
-          <div className="film-display" style={{ marginLeft: -4, width: 1100, fontSize: 100, fontWeight: 600, color: "#F7F9FC", whiteSpace: "nowrap" }}>
+          {/* D-49: D-47's own 1100px-wide, 100px fix ran directly under the
+              Safe panel (which starts at x=1180 -- 140-4+1100=1236, a 56px
+              overlap). Capped at 1000px, comfortably clear of the panel
+              (140-4+1000=1136, a 44px gap before it), and dropped to 84px
+              so "You can't reason past a signature." (the longer of the
+              two sentences) still fits on one line inside that width --
+              `whiteSpace: nowrap` still forbids either sentence from
+              wrapping a second time; the explicit `<br>` between them
+              still forces the line break between the two. */}
+          <div className="film-display" style={{ marginLeft: -4, width: 1000, fontSize: 84, fontWeight: 600, color: "#F7F9FC", whiteSpace: "nowrap" }}>
             {STABLECOIN_HEADLINE_LINE_1}<br /><span style={{ color: "#22B8BE" }}>{STABLECOIN_HEADLINE_LINE_2}</span>
           </div>
           {showThreshold ? (
@@ -762,7 +773,10 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
         title: "API credits",
         subtitle: "500 credits · just now",
         amount: "10.00 USDC",
-        status: { text: stablecoinAllow ? stablecoinAllow.decision : payError ? "UNAVAILABLE" : "EVALUATING", color: "#22C55E" },
+        status: {
+          text: stablecoinAllow ? stablecoinAllow.decision : payError ? "FAILED" : "EVALUATING",
+          color: stablecoinAllow ? "#22C55E" : payError ? "#EF4444" : "#22C55E",
+        },
         rowBg: "#F0FDF4",
       });
     }
@@ -800,14 +814,26 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
           <div className="film-display" style={{ marginLeft: -4, width: 1000, fontSize: 120, fontWeight: 600, color: "#07111F", whiteSpace: "nowrap" }}>
             {ALLOW_HEADLINE_LINE_1}<br />{ALLOW_HEADLINE_LINE_2}
           </div>
+          {/* D-49: a real call failure is never allowed to render as if it
+              were just another decision value sitting next to ALLOW/DENY --
+              `payError` gets its own distinctly-styled failure block
+              instead of a plain "UNAVAILABLE" string in the decision slot,
+              so a viewer (or a future reader of this code) can't mistake a
+              broken call for a real, if unavailable, decision. */}
           {pastAllow ? (
             <Reveal active={revealedAt(0)}>
-              <div className="film-mono" style={{ display: "flex", flexDirection: "column", gap: 14, fontSize: 24, color: "#334155" }}>
-                <div><span className="film-lb" style={{ color: "#64748B" }}>decision</span><span style={{ color: "#22C55E", fontWeight: 500 }}>{stablecoinAllow ? stablecoinAllow.decision : payError ? "UNAVAILABLE" : "EVALUATING"}</span></div>
-                <div><span className="film-lb" style={{ color: "#64748B" }}>reason</span>{stablecoinAllow ? stablecoinAllow.reasonCodes.join(", ") : "…"}</div>
-                <div><span className="film-lb" style={{ color: "#64748B" }}>spend</span>{ALLOW_SPEND_LINE}</div>
-                <div><span className="film-lb" style={{ color: "#64748B" }}>signed</span>{ALLOW_SIGNED_LINE}</div>
-              </div>
+              {payError ? (
+                <div className="film-mono" style={{ padding: "16px 20px", borderRadius: 12, background: "#FEF2F2", border: "1px solid #FCA5A5", color: "#B91C1C", fontSize: 22, fontWeight: 600 }}>
+                  ALLOW call failed — {payError}
+                </div>
+              ) : (
+                <div className="film-mono" style={{ display: "flex", flexDirection: "column", gap: 14, fontSize: 24, color: "#334155" }}>
+                  <div><span className="film-lb" style={{ color: "#64748B" }}>decision</span><span style={{ color: "#22C55E", fontWeight: 500 }}>{stablecoinAllow ? stablecoinAllow.decision : "EVALUATING"}</span></div>
+                  <div><span className="film-lb" style={{ color: "#64748B" }}>reason</span>{stablecoinAllow ? stablecoinAllow.reasonCodes.join(", ") : "…"}</div>
+                  <div><span className="film-lb" style={{ color: "#64748B" }}>spend</span>{ALLOW_SPEND_LINE}</div>
+                  <div><span className="film-lb" style={{ color: "#64748B" }}>signed</span>{ALLOW_SIGNED_LINE}</div>
+                </div>
+              )}
             </Reveal>
           ) : null}
           {pastAllow ? (
@@ -908,23 +934,35 @@ export function FilmClient({ seed, autoplay }: { seed: number; autoplay: boolean
     const showAnswers = beatElapsedMs >= resolved.beat.durationMs * 0.35;
     return (
       <>
-        <div style={LEFT_COLUMN_STYLE}>
+        {/* D-49: kicker, headline, and the two-column answer block are now
+            flex children of one container -- the two-column block used to
+            sit at a fixed `top: 560` assuming the headline above it never
+            grew past a certain height, which "Who pays?" (220px display
+            font) could overrun. Widened to 1640px (vs the standard
+            1040px `LEFT_COLUMN_STYLE`) since this frame's answer columns
+            genuinely span most of the frame's width, same as the
+            storyboard's own composition -- narrowing them to fit the
+            standard width would be a real design change this fix isn't
+            asking for. */}
+        <div style={{ ...LEFT_COLUMN_STYLE, width: 1640 }}>
           <div className="film-kicker" style={{ color: "#64748B" }}>{RESULTS_KICKER}</div>
           <div className="film-display" style={{ marginLeft: -4, fontSize: 220, fontWeight: 600, color: "#07111F" }}>{WHO_PAYS_QUESTION}</div>
+          {showAnswers ? (
+            <Reveal active={revealedAt(0)}>
+              <div style={{ display: "flex", gap: 40 }}>
+                <div style={{ width: 780, display: "flex", flexDirection: "column", gap: 22 }}>
+                  <div className="film-kicker" style={{ color: "#EF4444" }}>{WHO_PAYS_LEFT_KICKER}</div>
+                  <div style={{ fontSize: 40, lineHeight: 1.28, color: "#07111F", fontWeight: 500 }}>{WHO_PAYS_LEFT_ANSWER}</div>
+                </div>
+                <div style={{ width: 1, alignSelf: "stretch", background: "#CBD5E1" }} />
+                <div style={{ width: 780, display: "flex", flexDirection: "column", gap: 22 }}>
+                  <div className="film-kicker" style={{ color: "#22C55E" }}>{WHO_PAYS_RIGHT_KICKER}</div>
+                  <div style={{ fontSize: 40, lineHeight: 1.28, color: "#07111F", fontWeight: 500 }}>{WHO_PAYS_RIGHT_ANSWER}</div>
+                </div>
+              </div>
+            </Reveal>
+          ) : null}
         </div>
-        {showAnswers ? (
-          <Reveal active={revealedAt(0)}>
-            <div style={{ position: "absolute", left: 140, top: 560, width: 780, display: "flex", flexDirection: "column", gap: 22 }}>
-              <div className="film-kicker" style={{ color: "#EF4444" }}>{WHO_PAYS_LEFT_KICKER}</div>
-              <div style={{ fontSize: 40, lineHeight: 1.28, color: "#07111F", fontWeight: 500 }}>{WHO_PAYS_LEFT_ANSWER}</div>
-            </div>
-            <div style={{ position: "absolute", left: 960, top: 560, width: 1, height: 230, background: "#CBD5E1" }} />
-            <div style={{ position: "absolute", left: 1000, top: 560, width: 780, display: "flex", flexDirection: "column", gap: 22 }}>
-              <div className="film-kicker" style={{ color: "#22C55E" }}>{WHO_PAYS_RIGHT_KICKER}</div>
-              <div style={{ fontSize: 40, lineHeight: 1.28, color: "#07111F", fontWeight: 500 }}>{WHO_PAYS_RIGHT_ANSWER}</div>
-            </div>
-          </Reveal>
-        ) : null}
       </>
     );
   }

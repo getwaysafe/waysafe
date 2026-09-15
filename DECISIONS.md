@@ -4809,6 +4809,175 @@ and it turns out to help.
 Implemented: nothing (investigation only). `git commit` records the
 finding in this file; no source changed.
 
+## D-49 — `/film`, a third recording pass: a real ALLOW that never rendered, two more overlaps, and a mono block that read as half-transparent
+
+A third recording surfaced four more issues -- one a genuine data-not-
+reaching-the-renderer bug, two more instances of D-47 follow-up's own
+overlap class the flex-column fix hadn't yet reached, and one legibility
+report. Copy, timing, and the honesty boundary are all unchanged; every
+fix here is presentational or a real, verified operational
+misconfiguration outside this codebase's own source.
+
+**Bug 1's root cause, diagnosed against the running API, not
+guessed: an operational key mismatch from the same-day Safe
+redeployment, not a code defect.** Frame 07's decision block showed
+"decision UNAVAILABLE" / "reason —" while the phone's dramatized
+"Approved" notification (a fixed string shown on beat timing alone,
+same pattern as every other Act 2 notification, not linked to
+`stablecoinAllow`) kept appearing regardless -- the two were never
+supposed to be the same signal, but the mismatch was the tell that
+`/api/demo/pay` was failing outright. Reproduced directly with `curl`
+against the real running dashboard: a real HTTP 500,
+`"payment_failed"`, log entry `"payment attempt failed" ->
+"Transactions can only be signed by Safe owners"`. Traced further, also
+directly: `stripe`-adjacent tooling wasn't the path here -- this is a
+Safe contract call -- so the real owners of the redeployed Safe
+(`0xFeCB8688Da42bC47AF08348E032007978C83CFb8`) were read on-chain via
+`getOwners()`: `[0x1Cc8E8Fa..., 0xfed88A56...]`, which are exactly
+`address_of(WAYSAFE_X402_TEST_SESSION_KEY)` (root `.env`, the bypass
+test's own session key) and `address_of(WAYSAFE_SAFE_COSIGNER_KEY)`.
+`apps/dashboard/.env.local`'s own, separate
+`WAYSAFE_DEMO_AGENT_SESSION_KEY` -- the film/demo's own "agent runtime"
+identity, deliberately kept independent of anything Waysafe-internal
+per D-42's own reasoning -- derived to a *third*, different address,
+never registered as an owner of this specific redeployment. Today's
+redeploy used the bypass test's session key as the Safe's owner; the
+dashboard's own separate session key was never updated to match. Fixed
+by pointing `WAYSAFE_DEMO_AGENT_SESSION_KEY` at the same private key
+value as `WAYSAFE_X402_TEST_SESSION_KEY` (a local, untracked `.env.local`
+edit -- no new on-chain deployment, no additional test-gas spent) and
+restarting the dashboard process to pick it up. Verified end to end
+afterward with a real `curl` round trip: a genuine `ALLOW`, a real
+co-signature, and a real broadcast `execTransaction` settlement hash.
+**Root cause, one line:** today's Safe redeployment registered the
+bypass test's own session key as an owner instead of the dashboard
+demo's separate one, so the demo's real signature was rejected on-chain
+and `/api/demo/pay` failed outright.
+
+**The code-level half of bug 1: a real failure must never render as if
+it were just another decision value.** Even with the key mismatch
+fixed, a *future* real failure (a different key drifting out of sync,
+an RPC hiccup, gas depletion) would previously still print a plain
+`"UNAVAILABLE"` string sitting in the same slot `ALLOW`/`DENY` would
+occupy -- easy to misread as a decision this system made, rather than a
+sign the call itself never completed. `payError` now renders its own
+distinctly-styled failure block (`"ALLOW call failed — {message}"`, a
+red-bordered panel) in place of the whole decision/reason/spend/signed
+group, and the phone's own "API credits" row status recolors to red
+(`"FAILED"`) instead of green `"UNAVAILABLE"` -- a viewer (or a future
+reader of this code) can no longer mistake a broken call for a real,
+if-unavailable, decision.
+
+**Frame 06's headline still ran under the Safe panel after D-47's own
+fix -- the fix itself, not just its timing, was wrong.** D-47's
+follow-up widened this headline to 1100px at 100px to keep both
+sentences on one line each, but never checked that width against the
+panel's own position (`left: 1180`): `140 - 4 + 1100 = 1236`, a real
+56px overlap. Capped at 1000px (`140 - 4 + 1000 = 1136`, a 44px gap
+before the panel) and dropped to 84px -- verified by the same
+character-width reasoning D-47 used, scaled down proportionally, not
+reverified in a live render (see this decision's own note on why that
+verification is still outstanding).
+
+**Frame 09 got the same one-flex-column treatment D-47's follow-up gave
+the other eight frames, closing a real gap in that fix's own stated
+scope.** The two-column `WITHOUT` / `WITH WAYSAFE` answer block sat at
+a fixed `top: 560`, assuming the "Who pays?" headline above it (220px
+display font) never grew past a certain height -- exactly the same
+fixed-`top`-assumes-a-height defect D-47's follow-up fixed everywhere
+else, just not here yet, since that fix's own scope only mentioned
+kicker/headline for this particular frame. Kicker, headline, and the
+two-column block are now all flex children of one container, widened
+to 1640px (rather than the standard 1040px `LEFT_COLUMN_STYLE`) since
+this frame's answer columns genuinely span most of the frame's width by
+design, matching the storyboard's own composition -- narrowing them to
+fit the standard width would have been a real, unrequested design
+change, not a bugfix.
+
+**Frame 05's mono decision block: a hard cut instead of a fade, because
+a fade's guarantee is about its end state, not about what a recording
+samples mid-flight.** A CSS opacity transition always *reaches* full
+opacity once its target style holds -- but that says nothing about
+whether a given screen capture happens to land while it's still
+animating, and this is exactly the kind of block (real decision data,
+meant to be read, not glanced past) where "usually fully visible
+shortly after it appears" isn't good enough. Replaced the `Reveal`-
+wrapped fade for this one block with a direct conditional render: gone
+entirely, or present at opacity 1, nothing in between, ever. Timing
+(`revealedAt(400)`) is unchanged; only the transition itself was
+removed. The other `Reveal`-wrapped elements on the same frame
+(subhead, body) keep their fades -- only the one block actually
+reported as hard to read changed.
+
+**The regression guard: a real, honest substitute for the
+bounding-box test asked for, not a vacuous stand-in for it.**
+Rendering each frame at 1920x1080 and asserting no two real bounding
+boxes overlap is not practical in this repository's test harness, for
+two independently-sufficient reasons, checked rather than assumed:
+`vitest.config.ts` runs this suite with `environment: "node"` -- no DOM
+at all, not even jsdom, and jsdom would not actually help even if
+added, since it has no real layout or font-metrics engine and
+`getBoundingClientRect()` always returns a zero-sized rect regardless
+of real CSS; and `FilmClient`'s real per-frame content only exists
+after its own `useEffect` completes a real, unmocked round trip through
+five `/api/demo/*` routes, so even a real browser-based harness would
+need substantial fetch/timer-mocking infrastructure this project
+doesn't have today just to reach a given frame deterministically.
+Reported plainly rather than writing a test that passes vacuously on
+zero-sized rects. What was written instead, in
+`apps/dashboard/src/app/film/FilmClient.layout.test.ts`, is a real,
+non-vacuous guard against the actual mechanical defect behind this
+whole class of bug: it parses `FilmClient.tsx`'s own source (no
+rendering at all, pure text), locates every one of the nine current
+`LEFT_COLUMN_STYLE` containers by counting div nesting depth from each
+container's own opening tag (correctly treating a self-closing
+`<div ... />`, like frame 09's own divider, as never opening a new
+level -- an actual bug in the first version of this depth counter,
+caught by the sanity check below returning 8 instead of the true 9
+before the fix), and asserts none of them contain a bare `top` style
+key (`marginTop`/`paddingTop`/`borderTop` and friends are deliberately
+excluded via a negative lookbehind, since those are unrelated,
+legitimate spacing properties several of these very spans genuinely
+use). A "finds exactly nine containers" sanity check guards against the
+test silently checking zero spans if `LEFT_COLUMN_STYLE` is ever
+renamed. Verified this actually catches the regression it targets, not
+just that it passes today: temporarily reintroduced a `top` into one
+container, confirmed the test failed with the real container index
+identified, then reverted before committing.
+
+**Verified live, to the extent this harness allows.** Frame 01 (the
+only frame reachable in this session's real time budget, given the
+same `document.hidden` `requestAnimationFrame`-throttling limitation
+this project has documented since D-43) renders correctly at the
+retained layout. Frames 06/07/09's specific visual fixes are verified
+by `npx tsc -b`, the full test suite, the new layout guard, and close
+manual review of each edited render function -- not by watching a live
+playthrough land on those exact beats. A real, foreground recording
+pass should still confirm each one before this gets reported a fourth
+time.
+
+**Change cost if wrong:** low for the presentational fixes (widths,
+font sizes, the flex restructure, the hard-cut opacity) -- each is
+scoped to one frame's own render function, and `api-decisions.ts`'s
+"refuses to render" invariant is untouched. Zero for the session-key
+realignment: a local, untracked `.env.local` value, not a code or
+schema change, reversible by restarting the dashboard again with the
+old value.
+
+Implemented in `apps/dashboard/src/app/film/FilmClient.tsx`
+(`renderAllowFleetGlimpse`'s decision block and phone-row status,
+`renderQuoteDeclineStablecoin`'s headline, `renderResults` fully
+restructured, `renderDeclineCard1`'s mono block) and
+`apps/dashboard/.env.local` (`WAYSAFE_DEMO_AGENT_SESSION_KEY`, not
+tracked by git). New test:
+`apps/dashboard/src/app/film/FilmClient.layout.test.ts` (2 tests). Full
+`npm test`: all film-specific suites green (63 tests across 9 files,
+including the new layout guard); `npx tsc -b` clean.
+
+---
+
+# Open questions
+
 ## OQ-1 — The demo script contradicts the demo instruction
 
 **Resolved by D-27: the strict reading ("Never spend more than $150" →

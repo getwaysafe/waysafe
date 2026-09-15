@@ -303,7 +303,29 @@ anything in this codebase: the financial account's $1,000 test funding
 is real but its `inbound_pending` balance doesn't become `available`
 until 2026-09-22. `card_issuing`'s capability status is `"unrequested"`
 on this account -- a real, separately-flagged finding -- but not
-confirmed as blocking, since the funds check sits in front of it.
+confirmed as blocking, since the funds check sits in front of it. A
+follow-up checked for a faster test-mode funding path and found none in
+this account's current API surface (no `money_management` test helper
+exists; the one plausible sibling, Treasury's own instant test credit,
+real-400s against this account since it's v2 Money Management, not v1
+Treasury) -- the SKIP stands as D-48 left it. `D-49` fixed a third
+recording pass's four bugs: frame 07's real ALLOW wasn't reaching the
+renderer because today's Safe redeployment registered the bypass
+test's own session key as owner instead of the dashboard demo's
+separate one (fixed by realigning `.env.local`, not a code change; the
+code itself now also renders a real call failure as its own distinct
+error block rather than a bare "UNAVAILABLE" sitting where a decision
+value would go); frame 06's headline still ran under the Safe panel
+after D-47's own fix (capped narrower, sized down, this time checked
+against the panel's actual position); frame 09 got the one-flex-column
+treatment the other eight frames already had, now including its
+two-column answer block; and frame 05's decision block traded a fade
+for a hard cut so its full-opacity state can never be caught
+mid-transition. A real bounding-box regression test wasn't practical
+(`environment: "node"`, no layout engine even with jsdom, and real
+per-frame content needs a live API round trip) -- said so plainly and
+added a structural guard instead
+(`FilmClient.layout.test.ts`), verified against a real regression.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
