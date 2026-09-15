@@ -177,20 +177,26 @@ export const CARD_REPLAY_TAG = "replayed Stripe authorization request — live s
 
 // --- Frame 06: quote + decline-stablecoin ---------------------------------------
 
-export const QUOTE_KICKER = "Act 2 — what the agent said";
+export const QUOTE_KICKER = "Act 2 — what the agent told itself";
 
 /**
- * The one real quotation on the page. This is the exact sentence
- * DECISIONS.md D-32 already records from the real July 2026 Hugging Face
- * agentic-container intrusion -- reproduced here, not reworded.
- * Attribution is to that same incident, as directed; not independently
- * re-verified against a specific published URL in this session (see
- * CLAUDE.md's instruction against generating or guessing URLs) --
- * DECISIONS.md D-32 is this repo's own citable record of it.
+ * D-47 follow-up: the raw quotation reads as jargon on screen, so this
+ * beat now shows a plain-English paraphrase of what it means instead.
+ * `AGENT_REASONING_QUOTE`/`AGENT_REASONING_ATTRIBUTION` stay exported and
+ * unchanged -- DECISIONS.md D-32 cites `AGENT_REASONING_QUOTE` directly as
+ * this repo's own citable record of the real July 2026 Hugging Face
+ * agentic-container intrusion, so the constant stays for that record even
+ * though `FilmClient.tsx` no longer renders it (the same pattern D-46 used
+ * to keep `CARD_REPLAY_TAG` exported after it stopped being rendered).
  */
 export const AGENT_REASONING_QUOTE =
   "External infrastructure exploit is outside intended scope. However task impossible, peers doing it. We should continue.";
 export const AGENT_REASONING_ATTRIBUTION = "— an agent’s reasoning log, Hugging Face intrusion, July 2026";
+
+export const QUOTE_HEADLINE_LINE_1 = "It knew it was out of bounds.";
+export const QUOTE_HEADLINE_LINE_2 = "It kept going anyway.";
+export const QUOTE_SOURCE_LINE =
+  "paraphrased from the agents’ own reasoning log — Hugging Face intrusion, July 2026";
 
 /**
  * `decline-stablecoin`'s permanent two-line headline (frame 06's `<br>`-

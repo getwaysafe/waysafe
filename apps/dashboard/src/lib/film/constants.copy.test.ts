@@ -12,17 +12,18 @@
  * receipt/chain's own hex values (D-45), `RECEIPT_REAL_TAG`'s
  * predecessor's honesty wording (removed by D-46, see its own note),
  * `END_CARD_FOOTNOTE` (D-46 -- a brand-new disclosure, not storyboard
- * copy), and the real Safe revert lines beyond their two fixed GS020
+ * copy), the real Safe revert lines beyond their two fixed GS020
  * sentences (D-46's `SAFE_REVERT_BALANCE_SUFFIX` composes a real address in
- * at render time, tested separately in `safe-revert.test.ts`).
+ * at render time, tested separately in `safe-revert.test.ts`), and
+ * `AGENT_REASONING_QUOTE`/`AGENT_REASONING_ATTRIBUTION` (D-47 follow-up --
+ * kept exported for DECISIONS.md D-32's own citation, but no longer
+ * rendered anywhere, so there is nothing left to check them against).
  */
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  AGENT_REASONING_ATTRIBUTION,
-  AGENT_REASONING_QUOTE,
   ALLOW_HEADLINE_LINE_1,
   ALLOW_HEADLINE_LINE_2,
   ALLOW_KICKER,
@@ -40,6 +41,10 @@ import {
   EVIDENCE_BODY,
   FILM_INSTRUCTION,
   MANDATE_CARD_FOOTER,
+  QUOTE_HEADLINE_LINE_1,
+  QUOTE_HEADLINE_LINE_2,
+  QUOTE_KICKER,
+  QUOTE_SOURCE_LINE,
   RESULTS_KICKER,
   SAFE_PANEL_LABEL,
   STABLECOIN_HEADLINE_LINE_1,
@@ -93,10 +98,12 @@ describe("/film constants match design/film-storyboard/ word for word (D-45)", (
     }
   });
 
-  it("frame 06: the quote, its attribution, both signature captions, and the D-46 panel label", () => {
+  it("frame 06: the D-47 paraphrase kicker/headline/source line, both signature captions, and the D-46 panel label", () => {
     const html = storyboard("06-quote-decline-stablecoin.html");
-    expect(html).toContain(AGENT_REASONING_QUOTE);
-    expect(html).toContain(AGENT_REASONING_ATTRIBUTION);
+    expect(html).toContain(QUOTE_KICKER);
+    expect(html).toContain(QUOTE_HEADLINE_LINE_1);
+    expect(html).toContain(QUOTE_HEADLINE_LINE_2);
+    expect(html).toContain(QUOTE_SOURCE_LINE);
     expect(html).toContain(STABLECOIN_HEADLINE_LINE_1);
     expect(html).toContain(STABLECOIN_HEADLINE_LINE_2);
     expect(html).toContain(STABLECOIN_THRESHOLD_CAPTION);

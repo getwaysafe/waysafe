@@ -277,6 +277,17 @@ stays on one line; and frame 08's receipt stopped truncating its
 `attempt` and `reason` fields, the latter now stacking one reason code
 per line via a `StackedLines` component factored out of frame 05's own
 `LabeledLines` so both frames share one implementation instead of two.
+A D-47 follow-up fixed the real bug those per-frame patches kept
+running into: every left-aligned frame positioned its kicker/headline/
+mono-block/caption with independent, hardcoded `top` values, so real
+data growing any child's height (three reason codes, a three-line
+`signed` row) could push it into whatever came next at a fixed
+position. All eight left-aligned frames (01/02/03/05/06/07/08/09 --
+04/10 are fully centered, a different layout, untouched) now share one
+`LEFT_COLUMN_STYLE` flex column that reflows automatically instead of
+assuming a height. The same pass replaced frame 06's raw agent quote
+with a plain-English paraphrase (`AGENT_REASONING_QUOTE` stays exported
+for D-32's own citation, just no longer rendered).
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers

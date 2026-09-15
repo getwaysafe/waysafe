@@ -4419,6 +4419,125 @@ skipped, 1 failed on the same standing testnet-gas
 `InsufficientFundsError` this file has documented since D-42 (this
 session's own prior runs, not a regression). `npx tsc -b` clean.
 
+### Follow-up -- a plain-English paraphrase on frame 06, and one left-column layout rule for every frame that has one
+
+A second recording surfaced two more issues: frame 06's raw agent quote
+reads as jargon on screen, and a real structural bug -- every left-aligned
+frame positioned its kicker/headline/mono-block/caption with independent,
+hardcoded `top` values, an assumption that quietly broke the moment any of
+those children's real height grew past what its neighbor's fixed position
+assumed. D-46/D-47 kept making this worse without meaning to: three real
+reason codes, a three-line "signed" row, a three-line revert card, a
+100px-tall two-sentence headline -- every one of these real-data-driven
+size increases was a candidate to collide with whatever fixed `top` came
+next. It surfaced concretely on frame 05 (the "Balance still…" caption
+sitting on top of the `signed` rows) and frame 07 (the decision block
+sitting on top of "Paid the bill."), but the root cause was present on
+every frame built the same way, not just those two.
+
+**Frame 06: a plain-English headline instead of the raw quote.** The
+quote sub-beat now shows `QUOTE_HEADLINE_LINE_1`/`QUOTE_HEADLINE_LINE_2`
+("It knew it was out of bounds." / "It kept going anyway.") plus
+`QUOTE_SOURCE_LINE`, a paraphrase attribution -- a viewer reads what the
+quote *means* without needing "External infrastructure exploit is
+outside intended scope" to parse as English on a first watch.
+`AGENT_REASONING_QUOTE`/`AGENT_REASONING_ATTRIBUTION` stay exported,
+unchanged, and unrendered -- DECISIONS.md D-32 cites `AGENT_REASONING_QUOTE`
+directly as this repo's own citable record of the real incident, so the
+constant has to survive independent of whether anything on screen still
+shows it, the same reasoning D-46 already used to keep `CARD_REPLAY_TAG`
+exported after it stopped being rendered. `QUOTE_KICKER`'s value changed
+("Act 2 — what the agent said" -> "Act 2 — what the agent told itself")
+to match; the rest of frame 06 (the "You can reason past a rule…"
+headline, the Safe panel, and every beat's own timing) is untouched.
+
+**The durable fix: one left-column container per frame, real content
+reflowing everything after it instead of assuming a fixed position.**
+Every left-aligned frame's kicker/headline/mono-block/caption is now one
+`position: absolute` container (`left: 140, top: 150, width: 1040,
+bottom: 120, display: flex, flexDirection: "column", gap: 36,
+justifyContent: "flex-start"` -- `LEFT_COLUMN_STYLE` in
+`FilmClient.tsx`, one shared object instead of eight independently
+copy-pasted style literals) with each visible piece as a flex child in
+document order. No child carries its own `top` any more; a child that
+still needs its own explicit `width` (a headline's own wrap width, a
+mono block's own padding) keeps it, since width controls text wrapping,
+not vertical position -- the bug was specifically about `top`, not about
+every positioning property. `Reveal`-wrapped children stayed
+`Reveal`-wrapped, just as individual flex children instead of one
+`Reveal` wrapping a whole absolutely-positioned group, so each piece's
+own fade-in timing is unaffected. Applied to the eight frames whose left
+column is actually left-aligned this way: 01, 02, 03, 05, 06 (both its
+sub-beats), 07, 08, 09. Frames 04 and 10 are deliberately untouched --
+both are fully centered (`left: 0, right: 0, textAlign: "center"`)
+compositions with no left-aligned stack at all, so the specific box this
+fix prescribes (`left: 140, width: 1040`) doesn't describe their layout
+and was never exposed to the bug it fixes.
+
+**Two children explicitly keep a wider-than-the-container `width` on
+purpose, not by oversight.** Frame 06's decline-stablecoin headline
+keeps D-47's own `width: 1100` (wider than the shared container's
+1040px) so "You can't reason past a signature." still fits on one line
+per the task's own explicit instruction to leave that fix intact --
+flexbox doesn't clip a child whose own width exceeds its container's,
+so this renders exactly as it did under D-47, just without a `top` of
+its own any more. Frame 07's headline dropped from `font-size: 150` to
+`120` (matching a follow-up task item, not this one, but landed in the
+same pass) with `whiteSpace: "nowrap"` added so "Blocked the attack."
+and "Paid the bill." each stay on their own line, the same technique
+D-47 already used for frame 06's headline.
+
+**A four-pixel optical correction survived the refactor as `marginLeft`,
+not a per-child `left`.** Every converted `.film-display` headline
+previously sat 4px left of its kicker/caption siblings (`left: 136`
+against their `left: 140`) -- a deliberate optical correction for the
+Bricolage Grotesque display face's own left side-bearing at large sizes,
+not an accident. A `position: static` flex child ignores `left`/`top`
+entirely (those properties only apply to positioned elements), so the
+correction moved to `marginLeft: -4` on each affected headline (`-8` on
+frame 05's 230px "DECLINED", which had its own larger offset) --
+preserving the same visual alignment through a mechanism that still
+works once the child is no longer absolutely positioned.
+
+**Verified live, to the extent this harness allows.** Confirmed frame 01
+renders correctly at the new shared container's spacing (kicker,
+headline, and body each land where they did before, since the flex
+column's cumulative height with `gap: 36` closely tracks the old fixed
+`top` values for the frames that already had generous spacing). The same
+`document.hidden`-throttling limitation D-43 first recorded for this
+automation harness (a backgrounded tab starves `requestAnimationFrame`
+in large, unpredictable bursts) prevented catching frames 05/06/07/08 --
+the exact frames this fix targets -- live in this session; `npx tsc -b`
+and the full test suite are what actually verify the change's
+correctness here, not a frame-by-frame visual pass. A real, foreground
+recording pass should confirm the collision is actually gone before this
+gets recorded a third time.
+
+**Change cost if wrong:** moderate. This is a real layout bug fix, not a
+copy or timing change, and the one thing not independently verified live
+in this session is the exact thing being fixed (whether the collision is
+actually gone on 05/07). The structural approach itself (flexbox
+reflowing real content instead of assuming a fixed height) is sound
+regardless of the exact pixel outcome, and a wrong gap/width value here
+is a visual nit to correct, not a decision-path regression --
+`api-decisions.ts`'s "refuses to render" invariant and every real
+data-fetching path are untouched.
+
+Implemented entirely in `apps/dashboard/src/app/film/FilmClient.tsx`
+(the new `LEFT_COLUMN_STYLE` constant; `renderIntro`, `renderCompromise`,
+`renderDrainEmpty`, `renderDeclineCard1`, `renderQuoteDeclineStablecoin`,
+`renderAllowFleetGlimpse`, `renderReceiptChainVerify`, `renderResults`
+all restructured to use it) and `apps/dashboard/src/lib/film/constants.ts`
+(`QUOTE_KICKER`'s new value, `QUOTE_HEADLINE_LINE_1`/`QUOTE_HEADLINE_LINE_2`/
+`QUOTE_SOURCE_LINE` new). `constants.copy.test.ts` updated: frame 06's
+test now checks the new kicker/headline/source line instead of
+`AGENT_REASONING_QUOTE`/`AGENT_REASONING_ATTRIBUTION` (still exported,
+no longer checked against the storyboard since nothing renders them to
+compare against), and `design/film-storyboard/06-quote-decline-
+stablecoin.html`'s own quote block was updated to the same new copy so
+the two don't silently diverge. Full `npm test`: all film-specific
+suites green (62 tests across 8 files); `npx tsc -b` clean.
+
 ---
 
 # Open questions
