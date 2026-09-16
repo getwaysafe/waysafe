@@ -5077,6 +5077,137 @@ regression. `npx tsc -b` clean.
 
 ---
 
+## D-50 — `apps/site`: the public marketing site, static-exported, with a `/proof` page built from one real captured run
+
+The product has had a real API, dashboard, and a cinematic demo for a
+while but nowhere public to point a first-time reader -- no
+`waysafe.ai`. This adds `apps/site`, a fourth Next.js app, alongside
+`apps/dashboard` rather than folded into it, for the same reason
+`packages/sdk` is separate from `packages/core`: different audience,
+different deploy target, different lifecycle. It ships three pages --
+`/` (hero, the real film, the honesty section), `/docs` (generated from
+the real SDK and reason-code source, not invented), and `/proof` (one
+real run's evidence, captured and committed as static JSON, not a live
+endpoint) -- and nothing else. No analytics, no third-party scripts, no
+tracking, no server.
+
+**Static export (`output: "export"`), deliberately, not the dashboard's
+server-rendered pattern.** A marketing site has no per-request data:
+every page here is either fixed copy or a single frozen JSON snapshot.
+`next build` now emits `apps/site/out/` as plain files -- deployable to
+any static host with zero runtime, zero database, and zero dependency
+on the live API being up. `apps/site/package.json` has no
+`@waysafe/sdk`/`@waysafe/core` dependency at all: the `/docs` page's
+method and reason-code tables are hand-transcribed from
+`packages/sdk/src/index.ts` and `packages/core/src/reason-codes.ts`
+rather than imported, since a docs page that imports the workspace
+package would need it built first and would silently drift from its
+own prose if the source changed without a matching page edit -- the
+transcription is the thing this decision holds accountable, not a
+build dependency. Follows the same `tsconfig.typecheck.json` exclusion
+pattern D-31 set for `apps/dashboard`: `apps/site/**` is excluded from
+the repo-wide `tsc -p tsconfig.typecheck.json` sweep and relies on
+`next build`'s own internal typecheck instead, since neither Next app
+is a project-referenced package the way `packages/core`/`packages/sdk`/
+`apps/api` are. New root scripts `dev:site`/`build:site` mirror
+`dev:dashboard`'s own naming exactly.
+
+**`/proof`'s data required discovering a real gap between `authorize()`
+and the evidence chain, not just calling the SDK.** The obvious way to
+capture "one real run" would have been a quickstart-style script:
+compile a mandate, authenticate it, call `authorize()`, read back
+`listEvidence()`. That produces decisions, but reading
+`apps/api/src/authorization/service.ts` shows `authorize()` never
+writes a decision-level evidence event -- only `verifyAgentKey()`'s own
+success/failure gets chained (`agent_key.verified`/
+`agent_key.rejected`). The events that actually carry a
+`decision`/`reason_codes` payload
+(`enforcement.stripe_issuing.decision`, `enforcement.x402.decision`)
+are written only by the rail-initiated enforcement adapters from D-32/
+D-40, and the only place that already drives those for real is
+`/api/demo/*` -- the same routes `FilmClient.tsx` (D-44) calls. So the
+capture used that path instead: two mandates (one card, one x402 --
+`Instrument.mandateId`'s `@unique` constraint from D-44 still applies),
+two DENYed card authorizations replayed against the real
+`StripeIssuingAdapter`, three real on-chain bypass rejections, and one
+genuine `ALLOW` on the x402/Safe path. All seven resulting evidence
+events landed as one contiguous run
+(`passkey.registered` ×2, `mandate.authenticated` ×2,
+`enforcement.stripe_issuing.decision` ×2,
+`enforcement.x402.decision` ×1) -- confirmed contiguous and
+uncontaminated by any other org activity by checking the hash chain
+boundary directly (the event immediately before this run's first event
+hashes to exactly that first event's own `previous_hash`), not assumed
+from timestamps. `verifyEvidenceIndependently` (the standalone SDK
+function, not the class method that just asks the server) ran against
+that slice and the org's real published key, returning
+`{ ok: true, signed: true }` -- committed alongside the raw events, not
+just the verdict, so a reader can rerun the check themselves.
+
+**The same testnet-gas fact D-42/D-49 already documented shows up
+honestly in this capture too.** The genuine `ALLOW` decision computed
+correctly, but on-chain settlement did not complete in this run --
+`WAYSAFE_SAFE_COSIGNER_KEY`'s EOA balance was insufficient for another
+broadcast at capture time, same standing condition D-42 named. The
+captured JSON records this as `settlement: { ok: false, note: "..." }`,
+never a fabricated `tx_hash`; the `/proof` page renders a plain
+"NOT SETTLED" state for it rather than hiding the field. This is one
+static run, not a live dashboard -- a future real settlement would need
+a fresh capture, not a page code change.
+
+Committed twice, deliberately: `apps/site/public/proof/proof.json` (a
+fetchable static asset -- a reader can `curl` the deployed site's own
+copy independent of the page) and `apps/site/src/data/proof.json` (the
+identical bytes, imported directly at build time so the page has zero
+client-side fetch and zero loading state for data that will never
+change without a new commit).
+
+**Brand and copy discipline.** Palette, type stack (Bricolage
+Grotesque/DM Sans/JetBrains Mono via `next/font/google`, matching
+`apps/dashboard/src/app/film/layout.tsx`'s own pattern exactly), and the
+brand mark (`design/brand/waysafe-mark.svg`, inlined as a
+`WaysafeMark` component the same way `IconWaysafeMark` inlines it for
+`/film` -- duplicated rather than shared via a package, since neither
+app depends on the other) are all reused from the film/storyboard
+rather than redesigned. The recorded film
+(`apps/site/public/media/waysafe-film.mp4`, renamed from its working
+filename, not re-encoded) sits directly under the hero with a poster
+frame extracted at 2 seconds -- via a small local Swift/AVFoundation
+script, since this machine has no `ffmpeg`. Every claim on `/` and
+`/docs` traces to something this repo can back: the "Status, honestly"
+section's three sentences match D-42/D-49's own status language, the
+reason-code table is `REASON_CODE_DESCRIPTIONS` verbatim (D-45's own
+"copy the source exactly" discipline, applied to prose sourced from
+`packages/core` instead of a storyboard), and nowhere claims live card
+authorization works today. No invented customers, logos, or metrics
+appear anywhere on the site.
+
+**390px responsiveness was verified, not assumed -- and the obvious way
+to check it doesn't work.** Chrome enforces a real minimum OS window
+width (well above 390px), so resizing the actual browser window can't
+produce a genuine 390px viewport; `window.innerWidth` after a
+requested 390px resize still read over 1200px. Verified instead with a
+same-origin `<iframe>` fixed at `390x844` injected into a loaded page
+-- an iframe establishes its own viewport for CSS media-query
+evaluation, so `@media (max-width: ...)` rules inside it evaluate
+against the iframe's real 390px width, not the outer window's. Checked
+this way: the hero, nav, and "How it works" three-column grid (which
+collapses to one column under 720px) render correctly with no
+horizontal page overflow (`document.documentElement.scrollWidth`
+confirmed equal to `clientWidth`), and the `/docs` and `/proof` tables
+-- too wide to reflow at this width -- scroll horizontally inside their
+own `.table-scroll` container rather than blowing out the page,
+confirmed by reading the container's `scrollWidth` against its
+`clientWidth` directly rather than trusting the screenshot. Added a
+scroll-shadow affordance to `.table-scroll` under 720px afterward,
+since a horizontally-scrollable table with no visual hint of that is a
+real discoverability gap on a touch device, even though it isn't a
+layout bug.
+
+`npm run typecheck` (the `tsc -b` project-reference build plus the
+`tsconfig.typecheck.json` sweep, both unaffected by `apps/site` per its
+exclusion above) and `npm run build:site` are both green.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

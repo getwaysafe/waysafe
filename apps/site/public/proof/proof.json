@@ -1,0 +1,234 @@
+{
+  "captured_at": "2026-09-16T03:21:27.978Z",
+  "note": "One real run against the local Waysafe stack (apps/api + apps/dashboard's /api/demo routes), captured once and committed as static JSON. Not a live endpoint.",
+  "mandates": [
+    {
+      "label": "x402 (stablecoin) mandate",
+      "mandate_id": "mdt_01m2m39htjpkzxzb9v5bxy8fk3",
+      "policy_hash": "682927ac078bd3f75a77a8995a65bf2dfc22a599ee9683136a58eade64150cba",
+      "instrument_id": "inst_01m2m39m3wew5md4nn8fnmaatb",
+      "safe_address": "0xFeCB8688Da42bC47AF08348E032007978C83CFb8",
+      "summary": "Up to $20/day, $10 per transaction, only the allowed merchant."
+    },
+    {
+      "label": "Card mandate",
+      "mandate_id": "mdt_01m2m39mr0dehakcatmb8trt1h",
+      "policy_hash": "9bfb6bad76453190bddf1f82b61149320eb4abd76fb10cff25c2777d292497cb",
+      "summary": "Up to $20/day, $10 per transaction, only the allowed merchant."
+    }
+  ],
+  "card_attempts": [
+    {
+      "label": "$1,240.00 -- unknown merchant, card ending 4421",
+      "amount_cents": 124000,
+      "decision": "DENY",
+      "reason_codes": [
+        "DENY_MERCHANT_NOT_ALLOWLISTED",
+        "DENY_TRANSACTION_LIMIT_EXCEEDED",
+        "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+      ],
+      "authorization_id": "auth_01m2m3a32rshz5aere0e1ebvcy"
+    },
+    {
+      "label": "$89.99 -- recurring, unknown",
+      "amount_cents": 8999,
+      "decision": "DENY",
+      "reason_codes": [
+        "DENY_MERCHANT_NOT_ALLOWLISTED",
+        "DENY_TRANSACTION_LIMIT_EXCEEDED",
+        "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+      ],
+      "authorization_id": "auth_01m2m3a3td2f28rv9ge60ebmhs"
+    }
+  ],
+  "onchain_rejections": [
+    {
+      "name": "session_key_alone",
+      "description": "The stolen session key alone, threshold 2, only 1 signature present.",
+      "rejected": true,
+      "revert_reason_summary": "GS020: signatures data too short"
+    },
+    {
+      "name": "forged_envelope",
+      "description": "A genuine Waysafe co-signature plus a fabricated session-key signature.",
+      "rejected": true,
+      "revert_reason_summary": "The contract function \"execTransaction\" reverted with the following reason:"
+    },
+    {
+      "name": "session_key_no_waysafe",
+      "description": "A real session-key signature with no Waysafe signature at all.",
+      "rejected": true,
+      "revert_reason_summary": "GS020: signatures data too short"
+    }
+  ],
+  "allow_attempt": {
+    "decision": "ALLOW",
+    "reason_codes": [
+      "ALLOW_WITHIN_MANDATE"
+    ],
+    "mandate_id": "mdt_01m2m39htjpkzxzb9v5bxy8fk3",
+    "safe_address": "0xFeCB8688Da42bC47AF08348E032007978C83CFb8",
+    "settlement": {
+      "ok": false,
+      "note": "Decision was real (ALLOW); on-chain settlement did not complete in this run (testnet gas)."
+    }
+  },
+  "evidence": {
+    "public_key": "MCowBQYDK2VwAyEAYlvrdOK8J275U6kFy+421nPqnWGpEQr0zBoOun3RJzk=",
+    "algorithm": "Ed25519",
+    "events": [
+      {
+        "id": "ev_01m2m39k2qcqzabjtvpr09z8e9",
+        "organization_id": "org_demo",
+        "sequence": 413,
+        "type": "passkey.registered",
+        "subject_type": "principal",
+        "subject_id": "prin_01m2m39he5y2vx6gpjnmxpjn2c",
+        "payload": {
+          "credential_id": "w07mSYU0oyDHd2sMMKRbfg"
+        },
+        "previous_hash": "a7d22f68884ae2f8f5840f971b7c29808b9d1ac43bf59b896655385f2cedd275",
+        "hash": "a4c274ed3e50d3a260e2ecb46521083f76a90f818bede9d32b260a7d2317980a",
+        "signature": "OXC5PIxOuUVSRxtdGb21ANB4XLOPOJC0vm9tvyRRt5rdTpy27vuO6UKvnKoG+sIm7gO83numGABat7coYIUUDw==",
+        "created_at": "2026-09-16T03:13:47.032Z"
+      },
+      {
+        "id": "ev_01m2m39kvadxjnvwhjpra9yxht",
+        "organization_id": "org_demo",
+        "sequence": 414,
+        "type": "mandate.authenticated",
+        "subject_type": "mandate_version",
+        "subject_id": "mdv_01m2m39htjzj0b8y700wgbv2jj",
+        "payload": {
+          "credential_id": "w07mSYU0oyDHd2sMMKRbfg"
+        },
+        "previous_hash": "a4c274ed3e50d3a260e2ecb46521083f76a90f818bede9d32b260a7d2317980a",
+        "hash": "ad2063867b616d01446e0db3314bed600cdd19db941d02640934114ccf102f62",
+        "signature": "kKpvhVO6Zf2RTffsoQeAjMdbZknad0jfluRzpBTSET3uzyKvY6XjxP1aeWwdNyR4vPI6G0ZhGX/64I5KQILpBA==",
+        "created_at": "2026-09-16T03:13:47.032Z"
+      },
+      {
+        "id": "ev_01m2m39ndx2xb3gaqa8250pbah",
+        "organization_id": "org_demo",
+        "sequence": 415,
+        "type": "passkey.registered",
+        "subject_type": "principal",
+        "subject_id": "prin_01m2m39mf6mrp6qx1x299ha08m",
+        "payload": {
+          "credential_id": "O2i74n-_rmGHpYQwfro6LA"
+        },
+        "previous_hash": "ad2063867b616d01446e0db3314bed600cdd19db941d02640934114ccf102f62",
+        "hash": "77b9fa93bf6470b61296eaa33b012f3c105c4054c8f09dc4d8451da8caeb239a",
+        "signature": "qwG4rNdEFxW8nRi229UOg6PPeA5vHiaVqR0/0GKBYUOea0ehamgjCHT1nPtyi0PT0I1lfXwtxauZzrODvNNlDQ==",
+        "created_at": "2026-09-16T03:13:49.704Z"
+      },
+      {
+        "id": "ev_01m2m39p2fzzsygw2mpt9e74ad",
+        "organization_id": "org_demo",
+        "sequence": 416,
+        "type": "mandate.authenticated",
+        "subject_type": "mandate_version",
+        "subject_id": "mdv_01m2m39mr0wkh5navjtfzw3qqy",
+        "payload": {
+          "credential_id": "O2i74n-_rmGHpYQwfro6LA"
+        },
+        "previous_hash": "77b9fa93bf6470b61296eaa33b012f3c105c4054c8f09dc4d8451da8caeb239a",
+        "hash": "3b65e3f208668ca5fc448699af01f707df5ab6ba28b26f878dd0aec1cedd06ec",
+        "signature": "FUvDkibEJna6L1bSfmE+e8knFDxs2R42tMVP5ICmnouFW25HeOSWuT8AXfxX3vGWsuI3ti/zkFKLkbMp0pN/Cw==",
+        "created_at": "2026-09-16T03:13:49.704Z"
+      },
+      {
+        "id": "ev_01m2m3a3fjkd3zfsq4drsx3801",
+        "organization_id": "org_demo",
+        "sequence": 417,
+        "type": "enforcement.stripe_issuing.decision",
+        "subject_type": "authorization",
+        "subject_id": "auth_01m2m3a32rshz5aere0e1ebvcy",
+        "payload": {
+          "amount": 124000,
+          "card_id": "ic_demo_mdt_01m2m39mr0dehakcatmb8trt1h",
+          "currency": "USD",
+          "decision": "DENY",
+          "merchant": {
+            "mcc": "5999",
+            "network_mid": "unknown_merchant_9911"
+          },
+          "reason_codes": [
+            "DENY_MERCHANT_NOT_ALLOWLISTED",
+            "DENY_TRANSACTION_LIMIT_EXCEEDED",
+            "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+          ],
+          "instrument_id": "inst_01m2m3a2h8dyxzf8yff1m3vrcp",
+          "stripe_authorization_id": "iauth_demo_unknown_merchant_9911"
+        },
+        "previous_hash": "3b65e3f208668ca5fc448699af01f707df5ab6ba28b26f878dd0aec1cedd06ec",
+        "hash": "eb7c9745ca0cf74352a4c4663a4ce5718720674de210b73468d465ef57b438d7",
+        "signature": "GyfjCKvT4CtAWIYKGeAFhoyPi1BYGYVofXe8h30jUGFX49ZiSV5NHSVDaYT19MNoLUN4ErVbdn4FfwtcV3KvAQ==",
+        "created_at": "2026-09-16T03:14:03.431Z"
+      },
+      {
+        "id": "ev_01m2m3a43jpf1fw4epnc8rsc23",
+        "organization_id": "org_demo",
+        "sequence": 418,
+        "type": "enforcement.stripe_issuing.decision",
+        "subject_type": "authorization",
+        "subject_id": "auth_01m2m3a3td2f28rv9ge60ebmhs",
+        "payload": {
+          "amount": 8999,
+          "card_id": "ic_demo_mdt_01m2m39mr0dehakcatmb8trt1h",
+          "currency": "USD",
+          "decision": "DENY",
+          "merchant": {
+            "mcc": "5999",
+            "network_mid": "unknown_recurring_2207"
+          },
+          "reason_codes": [
+            "DENY_MERCHANT_NOT_ALLOWLISTED",
+            "DENY_TRANSACTION_LIMIT_EXCEEDED",
+            "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+          ],
+          "instrument_id": "inst_01m2m3a2h8dyxzf8yff1m3vrcp",
+          "stripe_authorization_id": "iauth_demo_unknown_recurring_2207"
+        },
+        "previous_hash": "eb7c9745ca0cf74352a4c4663a4ce5718720674de210b73468d465ef57b438d7",
+        "hash": "1a70173411be2aee9fa3de24cab9b77fe654fa056431ccfe40ec3a56c8ed09c2",
+        "signature": "/Yc5op0v5MnmWHlhfQ+gBif0DgrAHeteCK98LmvgTl0R8cJkrKAZSuokix5gAZ94nQI74rEHTVk/kU5AcvgJAg==",
+        "created_at": "2026-09-16T03:14:03.431Z"
+      },
+      {
+        "id": "ev_01m2m3a6j1ez48b7zkz2wzrrrh",
+        "organization_id": "org_demo",
+        "sequence": 419,
+        "type": "enforcement.x402.decision",
+        "subject_type": "authorization",
+        "subject_id": "auth_01m2m3a67byn90k1qs25yakhv5",
+        "payload": {
+          "asset": "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
+          "amount": 50,
+          "pay_to": "0x600dc0ff600Dc0FF600dC0fF600dc0ff600dC0fF",
+          "network": "polygon-amoy",
+          "currency": "USD",
+          "decision": "ALLOW",
+          "merchant": {
+            "name": "GoodBeans API -- 1 inference credit",
+            "domain": "127.0.0.1",
+            "onchain_address": "0x600dc0ff600dc0ff600dc0ff600dc0ff600dc0ff"
+          },
+          "reason_codes": [
+            "ALLOW_WITHIN_MANDATE"
+          ],
+          "resource_url": "http://127.0.0.1:4402/pay/goodbeans",
+          "instrument_id": "inst_01m2m39m3wew5md4nn8fnmaatb"
+        },
+        "previous_hash": "1a70173411be2aee9fa3de24cab9b77fe654fa056431ccfe40ec3a56c8ed09c2",
+        "hash": "591804236a55fb4c9501cba544803ff87c227f460035a2446321b03d49e97056",
+        "signature": "WD5jgkWbF6F7ykne2OBH85RwLVtDXXmR7IQq4eAWS3ockYWDcRd5ekWFaK1ETHNxj2kUpdCwFPZzoHW6Lc0lCw==",
+        "created_at": "2026-09-16T03:14:06.917Z"
+      }
+    ]
+  },
+  "verification": {
+    "ok": true,
+    "signed": true
+  }
+}

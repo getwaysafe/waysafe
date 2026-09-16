@@ -23,6 +23,8 @@
     "demo:merchant": "tsx --env-file-if-exists=.env examples/demo-merchant.ts",
     "demo:seed": "npm run demo:seed -w @waysafe/api",
     "dev:dashboard": "npm run dev -w @waysafe/dashboard",
+    "dev:site": "npm run dev -w @waysafe/site",
+    "build:site": "npm run build -w @waysafe/site",
     "db:generate": "npm run generate -w @waysafe/db",
     "db:push": "npm run push -w @waysafe/db",
     "db:constraints": "npm run constraints -w @waysafe/db"

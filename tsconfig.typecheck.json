@@ -9,6 +9,7 @@
   },
   "include": ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "examples/**/*.ts"],
   "exclude": [
-    "apps/dashboard/**"
+    "apps/dashboard/**",
+    "apps/site/**"
   ]
 }

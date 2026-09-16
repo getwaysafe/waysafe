@@ -343,6 +343,28 @@ holds 20 test USDC, not the dramatized 2,500 figure sitting next to
 it -- a real, checkable address next to a fabricated number is a
 credibility risk on its own. "Balance unchanged" alone is still true
 and still real; it just no longer cites a number nothing here verified.
+`D-50` added `apps/site`, the public marketing site (`waysafe.ai`) --
+a fourth, static-exported (`output: "export"`) Next.js app with no
+server and no dependency on the live API: `/` (hero, the real film,
+an honesty section matching D-42/D-49's own status language), `/docs`
+(the SDK method reference and full reason-code table, transcribed
+from `packages/sdk/src/index.ts` and `packages/core/src/reason-codes.ts`
+rather than imported, so `apps/site` has no `@waysafe/sdk`/
+`@waysafe/core` dependency at all), and `/proof` (one real run's signed
+evidence chain, captured once and committed as static JSON, not a live
+endpoint). That capture surfaced a real architectural fact: plain
+`authorize()` never writes decision-level evidence -- only the D-32/
+D-40 rail-initiated enforcement adapters do -- so the capture went
+through the same `/api/demo/*` routes `FilmClient.tsx` already uses,
+and the resulting seven-event chain verified independently
+(`verifyEvidenceIndependently`, not just the server's own say-so) with
+its on-chain settlement honestly reported as not-completed under the
+same standing testnet-gas condition D-42/D-49 documented, never a
+fabricated hash. 390px responsiveness was verified with a same-origin
+iframe (a real browser window can't shrink that far), not assumed.
+`npm run typecheck` and `npm run build:site` both green; `apps/site/**`
+is excluded from `tsconfig.typecheck.json`'s sweep the same way
+`apps/dashboard/**` already is.
 
 Optimize for the smallest credible implementation with a legible authorization
 lifecycle — not production-scale payment infrastructure. Keep payment providers
