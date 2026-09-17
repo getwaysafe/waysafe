@@ -89,7 +89,7 @@ describe("key export/import round-trips", () => {
   });
 });
 
-describe("computeKeyId (D-52)", () => {
+describe("computeKeyId (D-53)", () => {
   it("is deterministic: the same key produces the same key_id every time", () => {
     const { publicKey } = generateEvidenceSigningKeyPair();
     expect(computeKeyId(publicKey)).toBe(computeKeyId(publicKey));
@@ -113,7 +113,7 @@ describe("computeKeyId (D-52)", () => {
   });
 });
 
-describe("loadEvidenceKeyDirectory (D-52)", () => {
+describe("loadEvidenceKeyDirectory (D-53)", () => {
   it("builds a key_id -> KeyObject map that verifies a signature made under the matching entry", () => {
     const { privateKey, publicKey } = generateEvidenceSigningKeyPair();
     const keyId = computeKeyId(publicKey);

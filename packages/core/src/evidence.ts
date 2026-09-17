@@ -28,10 +28,10 @@
  * internal consistency checks that don't need the stronger claim), this
  * function still only proves what hash-chaining alone can.
  *
- * `keyDirectory` (D-52) is the additive rotation path: a map of
+ * `keyDirectory` (D-53) is the additive rotation path: a map of
  * `key_id -> KeyObject` (build one from the wire format with
  * `loadEvidenceKeyDirectory`). Omitting it entirely reproduces the exact
- * pre-D-52 behavior -- every event checked against `publicKey` alone,
+ * pre-D-53 behavior -- every event checked against `publicKey` alone,
  * `key_id` never even read, so an existing caller that only ever passed
  * `publicKey` needs no change even now that events carry a `key_id`.
  * Passing `keyDirectory` turns that reading on: an event carrying a
@@ -41,7 +41,7 @@
  * directory -- and a `key_id` that isn't in `keyDirectory` fails closed
  * (`signature_invalid`) rather than silently falling back to `publicKey`: a
  * key_id pointing nowhere is exactly as suspicious as a bad signature. An
- * event with no `key_id` at all (every event written before D-52) still
+ * event with no `key_id` at all (every event written before D-53) still
  * falls back to `publicKey` even with a directory supplied -- this is what
  * "existing entries without key_id must still verify" means in practice.
  */
@@ -134,7 +134,7 @@ export function verifyEvidenceChain(
 
     if (checkingSignatures) {
       // No keyDirectory at all: ignore key_id entirely and check every
-      // event against publicKey -- the exact pre-D-52 behavior, still
+      // event against publicKey -- the exact pre-D-53 behavior, still
       // correct even for an event that now carries a key_id, since
       // publicKey is genuinely the key it was signed with. A keyDirectory
       // IS supplied: an event with a key_id must resolve through it (fail

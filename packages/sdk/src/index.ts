@@ -527,8 +527,8 @@ export interface EvidenceRecord {
    * `getEvidencePublicKey()` -- don't just trust this server's own
    * `verifyEvidenceChain()` judgment; that's the whole point of signing. */
   signature: string;
-  /** Which key directory entry `signature` was made under (D-52). Absent
-   * on every event recorded before D-52 -- `verifyEvidenceIndependently`
+  /** Which key directory entry `signature` was made under (D-53). Absent
+   * on every event recorded before D-53 -- `verifyEvidenceIndependently`
    * falls back to `EvidencePublicKey.public_key` for those, so omitting
    * this field is still enough to verify them. */
   key_id?: string | null;
@@ -538,16 +538,16 @@ export interface EvidenceRecord {
 export interface EvidencePublicKey {
   algorithm: "Ed25519";
   /** Base64 SPKI. Feed straight into `verifyEvidenceIndependently`. Still
-   * the currently active key, unchanged by D-52 -- a caller reading only
+   * the currently active key, unchanged by D-53 -- a caller reading only
    * this field, ignoring `key_directory`, sees the exact same shape and
    * value it always has. */
   public_key: string;
   /** Every key a signature in this deployment's evidence chains might have
-   * been made under, oldest first (D-52) -- added alongside `public_key`,
+   * been made under, oldest first (D-53) -- added alongside `public_key`,
    * not in place of it. Pass straight to `verifyEvidenceIndependently` so
    * an event carrying a `key_id` is checked against the entry it actually
    * names, not assumed to match `public_key`. Absent from a server that
-   * predates D-52. */
+   * predates D-53. */
   key_directory?: EvidenceKeyDirectoryEntry[];
 }
 
@@ -563,13 +563,13 @@ export interface EvidencePublicKey {
  * yourself -- pure, no network call, works from a completely different
  * process than the one that fetched the data.
  *
- * `keyDirectory` (D-52) is additive: pass `EvidencePublicKey.key_directory`
+ * `keyDirectory` (D-53) is additive: pass `EvidencePublicKey.key_directory`
  * straight through when you have it, and an event carrying a `key_id` is
  * checked against that specific entry instead of `publicKeyBase64` -- the
  * path a rotated-out key still needs to verify what it actually signed.
- * Every event with no `key_id` (everything from before D-52) still falls
+ * Every event with no `key_id` (everything from before D-53) still falls
  * back to `publicKeyBase64` exactly as this function always worked, so
- * omitting `keyDirectory` entirely reproduces the pre-D-52 behavior.
+ * omitting `keyDirectory` entirely reproduces the pre-D-53 behavior.
  */
 export function verifyEvidenceIndependently(
   events: EvidenceRecord[],

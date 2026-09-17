@@ -5344,7 +5344,7 @@ stays exactly the two fields it always had, and a real Vercel build
 gains the two that identify *which* deployment and project served it,
 closing the "wrong project" failure mode this same entry names.
 
-## D-52 — Evidence events carry `key_id`; the published key is now a directory, not a single key
+## D-53 — Evidence events carry `key_id`; the published key is now a directory, not a single key
 
 D-26/OQ-8 made the evidence chain verifiable by a third party by publishing
 one Ed25519 public key at `GET /v1/evidence/public-key` and signing every
@@ -5382,7 +5382,7 @@ the public-key endpoint, both public surface):**
   `prisma-repository.test.ts`'s own pre-existing tests, which pass only
   `publicKey` and failed once real appended events started carrying a real
   `key_id`): **`keyDirectory` omitted means `key_id` is never even read --
-  every event checks against `publicKey` alone, exactly the pre-D-52
+  every event checks against `publicKey` alone, exactly the pre-D-53
   behavior, whether or not the event happens to carry a `key_id`.**
   `keyDirectory` supplied changes the rule: an event with a `key_id` must
   resolve through the directory (fails closed, `signature_invalid`, if
@@ -5403,7 +5403,7 @@ the public-key endpoint, both public surface):**
   unchanged.
 - `GET /v1/evidence/public-key` gained `key_directory` alongside its
   existing `algorithm`/`public_key` fields -- not in place of them. A
-  client written against this endpoint before D-52 parses the exact same
+  client written against this endpoint before D-53 parses the exact same
   response it always did. `GET /v1/evidence/verify` now passes both
   `publicKey` and `keyDirectory` to `verifyEvidenceChain`, so it verifies
   today's chain (no rotation has happened) exactly as before, and is
@@ -5413,7 +5413,7 @@ the public-key endpoint, both public surface):**
   `EvidencePublicKey` gained `key_directory?: EvidenceKeyDirectoryEntry[]`,
   and `verifyEvidenceIndependently` gained an optional third `keyDirectory`
   parameter with the identical resolution rule -- omitted, it reproduces
-  exactly the pre-D-52 call. The SDK isn't published yet (D-51's `/proof`
+  exactly the pre-D-53 call. The SDK isn't published yet (D-51's `/proof`
   follow-up notes this), so this additivity is about not breaking the
   contract once it is, not about a live integrator today.
 

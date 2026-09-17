@@ -202,7 +202,7 @@ describe("verifyEvidenceChain: signature verification (D-26/OQ-8)", () => {
   );
 });
 
-describe("verifyEvidenceChain: key directory (D-52)", () => {
+describe("verifyEvidenceChain: key directory (D-53)", () => {
   it("an event carrying a key_id is checked against the matching key directory entry, not publicKey", () => {
     const events = makeChain(2);
     const rotated = generateEvidenceSigningKeyPair();
@@ -221,7 +221,7 @@ describe("verifyEvidenceChain: key directory (D-52)", () => {
   });
 
   it("an event with no key_id still falls back to publicKey even when a keyDirectory is supplied", () => {
-    const events = makeChain(2); // signed under KEY_PAIR, no key_id -- pre-D-52 shape
+    const events = makeChain(2); // signed under KEY_PAIR, no key_id -- pre-D-53 shape
     const directory = new Map([["unrelated", generateEvidenceSigningKeyPair().publicKey]]);
     const result = verifyEvidenceChain(events, KEY_PAIR.publicKey, directory);
     expect(result).toEqual({ ok: true, signed: true });
@@ -239,7 +239,7 @@ describe("verifyEvidenceChain: key directory (D-52)", () => {
     expect(result.reason).toBe("signature_invalid");
   });
 
-  it("a chain mixing legacy (no key_id) and post-rotation (key_id) events verifies end to end -- the actual rotation scenario D-52 exists for", () => {
+  it("a chain mixing legacy (no key_id) and post-rotation (key_id) events verifies end to end -- the actual rotation scenario D-53 exists for", () => {
     const events = makeChain(4); // all signed under KEY_PAIR, no key_id yet
     const rotated = generateEvidenceSigningKeyPair();
     const rotatedId = computeKeyId(rotated.publicKey);

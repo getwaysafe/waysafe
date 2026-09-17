@@ -88,7 +88,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
   }, 30_000);
 
   it(
-    "D-52: key_id round-trips through Postgres -- appended events carry it, and GET /v1/evidence/verify's directory-aware check still passes",
+    "D-53: key_id round-trips through Postgres -- appended events carry it, and GET /v1/evidence/verify's directory-aware check still passes",
     async () => {
       const repo = new PrismaEvidenceRepository(prisma, SIGNING_KEY);
       const organizationId = await seedOrg();

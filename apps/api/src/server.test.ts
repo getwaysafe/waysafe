@@ -1319,12 +1319,12 @@ describe("evidence chain signing (Week 6, D-26/OQ-8)", () => {
     expect(response.json().public_key).toBe(repos.evidence.getPublicKey());
   });
 
-  it("D-52: GET /v1/evidence/public-key adds key_directory alongside the unchanged algorithm/public_key fields", async () => {
+  it("D-53: GET /v1/evidence/public-key adds key_directory alongside the unchanged algorithm/public_key fields", async () => {
     const response = await app.inject({ method: "GET", url: "/v1/evidence/public-key" });
     expect(response.statusCode).toBe(200);
     const body = response.json();
 
-    // The pre-D-52 shape a client written against this endpoint before the
+    // The pre-D-53 shape a client written against this endpoint before the
     // key directory existed already parses -- unchanged, not replaced.
     expect(body.algorithm).toBe("Ed25519");
     expect(body.public_key).toBe(repos.evidence.getPublicKey());
@@ -1339,7 +1339,7 @@ describe("evidence chain signing (Week 6, D-26/OQ-8)", () => {
     });
   });
 
-  it("D-52: every evidence event carries the signing repository's key_id", async () => {
+  it("D-53: every evidence event carries the signing repository's key_id", async () => {
     const agentResponse = await app.inject({
       method: "POST",
       url: "/v1/agents",

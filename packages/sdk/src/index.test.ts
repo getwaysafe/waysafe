@@ -482,7 +482,7 @@ describe("dashboard reads: query strings and wire mapping", () => {
     expect(result).toEqual({ algorithm: "Ed25519", public_key: "deadbeef" });
   });
 
-  it("D-52: getEvidencePublicKey passes key_directory through unmodified, alongside the unchanged algorithm/public_key fields", async () => {
+  it("D-53: getEvidencePublicKey passes key_directory through unmodified, alongside the unchanged algorithm/public_key fields", async () => {
     const body = {
       algorithm: "Ed25519",
       public_key: "deadbeef",
@@ -558,7 +558,7 @@ describe("verifyEvidenceIndependently (D-26/OQ-8): local verification, no server
     expect(result.reason).toBe("hash_mismatch");
   });
 
-  it("D-52: an event carrying a key_id is checked against the matching keyDirectory entry, not publicKeyBase64", () => {
+  it("D-53: an event carrying a key_id is checked against the matching keyDirectory entry, not publicKeyBase64", () => {
     const events = signedChain(2);
     const rotated = generateEvidenceSigningKeyPair();
     const rotatedId = computeKeyId(rotated.publicKey);
@@ -575,7 +575,7 @@ describe("verifyEvidenceIndependently (D-26/OQ-8): local verification, no server
     expect(result).toEqual({ ok: true, signed: true });
   });
 
-  it("D-52: an event with no key_id still verifies via publicKeyBase64 when keyDirectory is also supplied -- omitting keyDirectory entirely reproduces pre-D-52 behavior", () => {
+  it("D-53: an event with no key_id still verifies via publicKeyBase64 when keyDirectory is also supplied -- omitting keyDirectory entirely reproduces pre-D-53 behavior", () => {
     const events = signedChain(2);
     const unrelated = [
       { key_id: "unrelated", public_key: exportPublicKeyBase64(generateEvidenceSigningKeyPair().publicKey), valid_from: null },

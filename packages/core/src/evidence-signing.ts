@@ -80,7 +80,7 @@ export function loadEvidencePublicKey(base64Spki: string): KeyObject {
  * `generateEvidenceSigningKeyPair` in a test, or the real deployment key
  * loaded from `WAYSAFE_EVIDENCE_SIGNING_KEY`). First 16 hex characters of
  * SHA-256 over the key's SPKI DER encoding -- enough collision resistance
- * for the handful of keys a deployment's key directory (D-52) will ever
+ * for the handful of keys a deployment's key directory (D-53) will ever
  * hold, short enough to read in a table next to a hash and a signature.
  */
 export function computeKeyId(key: KeyObject): string {
@@ -91,7 +91,7 @@ export function computeKeyId(key: KeyObject): string {
 
 /**
  * The wire shape of one entry in the published evidence-signing key
- * directory (D-52, resolves the rotation gap D-26/OQ-8 left open: a single
+ * directory (D-53, resolves the rotation gap D-26/OQ-8 left open: a single
  * published key meant rotating it silently invalidated every historical
  * signature, because nothing recorded which key an old event was signed
  * under). `public_key` is base64 SPKI, loadable with `loadEvidencePublicKey`.

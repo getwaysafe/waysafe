@@ -62,7 +62,7 @@ describe("InMemoryEvidenceRepository", () => {
     expect(verifyEvidenceChain(events)).toEqual({ ok: true });
   });
 
-  it("D-52: stamps every appended event with the repository's own key_id, published via getKeyDirectory", async () => {
+  it("D-53: stamps every appended event with the repository's own key_id, published via getKeyDirectory", async () => {
     const signingKey = generateEvidenceSigningKeyPair().privateKey;
     const repo = new InMemoryEvidenceRepository(signingKey);
     const event = await repo.withOrganizationLock(ORG, () =>
@@ -90,7 +90,7 @@ describe("InMemoryEvidenceRepository", () => {
     expect(verifyEvidenceChain(events, publicKey, keyDirectory)).toEqual({ ok: true, signed: true });
   });
 
-  it("D-52: an event with no key_id (the pre-D-52 shape) still verifies via the legacy publicKey fallback, even when a keyDirectory is also supplied", async () => {
+  it("D-53: an event with no key_id (the pre-D-53 shape) still verifies via the legacy publicKey fallback, even when a keyDirectory is also supplied", async () => {
     const signingKey = generateEvidenceSigningKeyPair().privateKey;
     const repo = new InMemoryEvidenceRepository(signingKey);
     await repo.withOrganizationLock(ORG, () =>
@@ -105,7 +105,7 @@ describe("InMemoryEvidenceRepository", () => {
     );
 
     const events = await repo.listForOrganization(ORG);
-    // Simulate a row written before D-52 (the migration adds the column as
+    // Simulate a row written before D-53 (the migration adds the column as
     // NULL for every existing row -- never backfilled).
     events[0] = { ...events[0]!, key_id: null };
 
