@@ -4809,6 +4809,27 @@ and it turns out to help.
 Implemented: nothing (investigation only). `git commit` records the
 finding in this file; no source changed.
 
+### Follow-up -- D-48's Fact 5 resolved: `card_issuing` being unrequested is not a test-mode blocker
+
+D-48's Fact 5 left one thing genuinely open: whether the account's
+`card_issuing` capability sitting at `"unrequested"` was *also* blocking
+the bypass test, on top of the confirmed `insufficient_funds` gate --
+explicitly flagged there as "not confirmed as *the* fix for this
+specific symptom," since the funds-availability block sat in front of
+it and prevented testing what happens once funds are actually
+available. Confirmed directly, 2026-09-17: `card_issuing` is still
+absent from this account's capabilities, but test-mode Issuing works
+regardless -- cards and authorizations already exist and function under
+this same unrequested-capability state, matching D-48's own Fact 3/3b
+observation that test mode is more permissive about capability status
+than production. The capability request is a go-live step tied to
+account verification, not a test-mode gate at all. This narrows D-48's
+two open facts to one: funds settlement on 2026-09-22 is now the only
+remaining blocker on the bypass test's live pass.
+
+Implemented: nothing (investigation only, resolving an open question --
+no source changed).
+
 ## D-49 — `/film`, a third recording pass: a real ALLOW that never rendered, two more overlaps, and a mono block that read as half-transparent
 
 A third recording surfaced four more issues -- one a genuine data-not-
