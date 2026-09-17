@@ -5,6 +5,7 @@ import Link from "next/link";
 import "./globals.css";
 import { WaysafeMark } from "@/components/WaysafeMark";
 import { CONTACT_EMAIL } from "@/lib/constants";
+import { BUILD_SHA, BUILT_AT } from "@/lib/build-info";
 
 export const metadata: Metadata = {
   title: "Waysafe — the rail-side authorization and evidence layer",
@@ -31,6 +32,11 @@ const jetbrainsMono = JetBrains_Mono({
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${bricolage.variable} ${dmSans.variable} ${jetbrainsMono.variable}`}>
+      <head
+        dangerouslySetInnerHTML={{
+          __html: `<!-- build: ${BUILD_SHA} @ ${BUILT_AT} -->`,
+        }}
+      />
       <body>
         <header
           style={{

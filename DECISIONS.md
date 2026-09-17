@@ -5254,6 +5254,27 @@ true`) to `https://waysafe.ai/:path*`. Apex chosen as canonical to match
 every existing reference to the site (this file, the film, the SDK
 docs) -- none ever say `www.`.
 
+**D-51 follow-up: a build marker, and the one non-obvious way to get a
+literal HTML comment into a Next App Router `<head>`.** Added so
+"which build is live" is a single `curl -s https://waysafe.ai/
+version.json` rather than a guess: a new `prebuild` npm script
+(`apps/site/scripts/generate-version.mjs`, invoked automatically before
+`build` by npm's own lifecycle hook) reads `git rev-parse --short HEAD`
+once and writes it two places -- `public/version.json` (copied verbatim
+into the static export) and a generated `src/lib/build-info.ts` (both
+gitignored, like `out/`; regenerated every build, never committed).
+Getting an actual `<!-- comment -->` as a direct child of `<head>` in
+app router isn't obvious: JSX text is HTML-escaped, so a literal
+`"<!-- ... -->"` string as a child renders as escaped text, not a
+comment, and `next/head` from the pages router doesn't exist here.
+`layout.tsx`'s root `<head>` now carries `dangerouslySetInnerHTML` with
+the comment string -- verified against the actual built output (not
+assumed) that this coexists with the `metadata` export's own injected
+`<title>`/`<meta>`/font tags rather than clobbering them: the comment
+renders as `<head>`'s first child, and Next's own metadata still
+follows immediately after, unaffected, confirmed by reading
+`out/index.html`, `out/docs.html`, and `out/proof.html` directly.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

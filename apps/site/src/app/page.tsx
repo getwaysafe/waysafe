@@ -70,13 +70,13 @@ export default function HomePage() {
             ever had to call Waysafe, agree with it, or even know it exists.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
-            The on-chain half of this is recorded from a live run on Polygon Amoy, captured{" "}
-            {proofCapturedDate}, on{" "}
+            This is proven on-chain, recorded on{" "}
             <Link className="link" href="/proof">
               /proof
-            </Link>
-            : three separate attempts to move funds with fewer than both signatures, each rejected
-            on-chain, each with the real revert reason recorded alongside it.
+            </Link>{" "}
+            (captured {proofCapturedDate}): three separate attempts to move funds with fewer than
+            both signatures, each rejected on-chain, each with the real revert reason recorded
+            alongside it.
           </p>
           <p className="muted" style={{ fontSize: "1.02rem", lineHeight: 1.7, marginTop: 20 }}>
             What this is not: Waysafe is non-custodial — it never holds funds, never handles a full

@@ -1,1 +1,3 @@
 .vercel
+/public/version.json
+/src/lib/build-info.ts

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/generate-version.mjs",
     "build": "next build",
     "postbuild": "cp vercel.json out/vercel.json",
     "clean": "rm -rf .next out"

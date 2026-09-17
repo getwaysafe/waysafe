@@ -315,8 +315,8 @@ export default function ProofPage() {
         </div>
 
         <p style={{ maxWidth: 720, marginTop: 24 }}>
-          If you&rsquo;re already integrating against <code>@waysafe/sdk</code>, it ships the same
-          check as a function:
+          Once <code>@waysafe/sdk</code> is published, it will ship the same check as a function
+          — for reference, not something you can run today:
         </p>
         <div style={{ position: "relative" }}>
           <CopyButton text={VERIFY_SNIPPET_SDK} />
