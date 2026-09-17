@@ -5344,6 +5344,19 @@ stays exactly the two fields it always had, and a real Vercel build
 gains the two that identify *which* deployment and project served it,
 closing the "wrong project" failure mode this same entry names.
 
+**D-52 is not missing.** It's reserved, not removed: `apps/api/src/demo/routes.ts`
+and two dashboard files (`apps/dashboard/src/lib/demo/policy.ts`,
+`apps/dashboard/src/app/api/demo/card/route.ts`) already say "D-52" in
+comments for the `/proof` card-scenario capture work
+(`PROOF_CARD_REPLAY_SCENARIOS`, the "proof" replay variant) -- committed
+in `378ad37`, on `origin/main` before this session started, before this
+entry's own commit ever picked a number. The evidence key-directory work
+below collided with that (this file's own last entry was still D-51 when
+it was written, so D-52 looked free) and was renumbered to D-53 rather
+than contradict already-shared history -- see that commit's own message.
+D-52 itself lands as its own entry once the `/proof` re-capture this
+session is mid-way through finishes.
+
 ## D-53 — Evidence events carry `key_id`; the published key is now a directory, not a single key
 
 D-26/OQ-8 made the evidence chain verifiable by a third party by publishing
