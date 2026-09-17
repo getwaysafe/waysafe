@@ -23,13 +23,30 @@ function truncate(hex: string, lead = 10, tail = 8): string {
   return `${hex.slice(0, lead)}…${hex.slice(-tail)}`;
 }
 
+// A transaction that reverts before submission never had a chance to cost
+// gas or get mined -- that's a stronger result than a broadcast revert, not
+// a gap in the evidence. This label makes the two states visually parallel
+// (badge + badge) rather than one being a hash/link and the other a blank.
+function OnChainLabel({ submitted }: { submitted: boolean }) {
+  return submitted ? (
+    <span className="badge badge-allow">SUBMITTED · MINED</span>
+  ) : (
+    <span className="badge" style={{ color: "var(--slate)", border: "1px solid var(--slate)" }}>
+      REJECTED · PRE-BROADCAST
+    </span>
+  );
+}
+
 // Zero-install: node:crypto only, no @waysafe/sdk, no network call. Save as
-// verify.mjs, run `node verify.mjs`, paste the "events" array and
-// "public_key" from below (or from a live GET /v1/evidence + GET
+// verify.mjs, run `node verify.mjs`, paste "events", "public_key", and
+// "key_directory" from below (or from a live GET /v1/evidence + GET
 // /v1/evidence/public-key). Same algorithm as
 // packages/core/src/evidence.ts's computeEventHash/verifyEvidenceChain and
 // evidence-signing.ts's verifyEventSignature -- reimplemented here, not
-// imported, so this file is genuinely self-contained.
+// imported, so this file is genuinely self-contained. key_directory routing
+// mirrors D-53: an event carrying a key_id is checked against the matching
+// directory entry; an event with none (written before the key directory
+// existed) falls back to publicKey, the one key this chain has ever used.
 const VERIFY_SNIPPET = `import { createHash, createPublicKey, verify } from "node:crypto";
 
 function sortKeysDeep(v) {
@@ -40,9 +57,11 @@ function sortKeysDeep(v) {
   return v;
 }
 const hashEvent = (c) => createHash("sha256").update(JSON.stringify(sortKeysDeep(c))).digest("hex");
+const loadKey = (base64) => createPublicKey({ key: Buffer.from(base64, "base64"), format: "der", type: "spki" });
 
-function verifyEvidenceChain(events, publicKeyBase64) {
-  const publicKey = createPublicKey({ key: Buffer.from(publicKeyBase64, "base64"), format: "der", type: "spki" });
+function verifyEvidenceChain(events, publicKeyBase64, keyDirectory = []) {
+  const publicKey = loadKey(publicKeyBase64);
+  const directory = new Map(keyDirectory.map((k) => [k.key_id, loadKey(k.public_key)]));
   let expectedSequence = events[0].sequence;
   let previousHash = events[0].previous_hash;
   for (const e of events) {
@@ -53,8 +72,11 @@ function verifyEvidenceChain(events, publicKeyBase64) {
       subject_id: e.subject_id, payload: e.payload, previous_hash: e.previous_hash, created_at: e.created_at,
     });
     if (expected !== e.hash) return { ok: false, brokenAtSequence: e.sequence, reason: "hash_mismatch" };
+    // No key_id at all -> this chain's one key, publicKey. A key_id present
+    // but not in the directory fails closed -- never silently falls back.
+    const signingKey = e.key_id ? directory.get(e.key_id) : publicKey;
     try {
-      if (!verify(null, Buffer.from(e.hash, "hex"), publicKey, Buffer.from(e.signature, "base64")))
+      if (!signingKey || !verify(null, Buffer.from(e.hash, "hex"), signingKey, Buffer.from(e.signature, "base64")))
         return { ok: false, brokenAtSequence: e.sequence, reason: "signature_invalid" };
     } catch {
       return { ok: false, brokenAtSequence: e.sequence, reason: "signature_invalid" };
@@ -65,17 +87,24 @@ function verifyEvidenceChain(events, publicKeyBase64) {
   return { ok: true, signed: true };
 }
 
-// Paste the "events" array and "public_key" string from this page (or from
+// Paste "events", "public_key", and "key_directory" from this page (or from
 // GET /v1/evidence + GET /v1/evidence/public-key) below, then run this file.
+// A passing result proves Waysafe signed this exact record and nothing in
+// it was altered afterward -- it does NOT prove completeness (that nothing
+// happened outside this chain); see the note below the snippets.
 const events = [ /* evidence.events from this page */ ];
 const publicKey = "..."; // evidence.public_key from this page
-console.log(verifyEvidenceChain(events, publicKey));`;
+const keyDirectory = [ /* evidence.key_directory from this page */ ];
+console.log(verifyEvidenceChain(events, publicKey, keyDirectory));`;
 
 const VERIFY_SNIPPET_SDK = `import { verifyEvidenceIndependently } from "@waysafe/sdk";
 
-// events: from GET /v1/evidence (or the "evidence.events" array in proof.json)
-// publicKey: from GET /v1/evidence/public-key (or "evidence.public_key" below)
-const result = verifyEvidenceIndependently(events, publicKey);
+// events: from GET /v1/evidence (or "evidence.events" in proof.json)
+// publicKey: from GET /v1/evidence/public-key's "public_key" (or "evidence.public_key" below)
+// keyDirectory: that same response's "key_directory" (or "evidence.key_directory" below) --
+// an event carrying a key_id is checked against the matching entry; an
+// event with none falls back to publicKey.
+const result = verifyEvidenceIndependently(events, publicKey, keyDirectory);
 // { ok: true, signed: true } -- checked locally, no network call,
 // no trust in the server that produced the data. Same algorithm as the
 // self-contained node:crypto version above; this is the SDK's own copy of it.`;
@@ -158,10 +187,14 @@ export default function ProofPage() {
 
         <h2 style={{ marginTop: 48 }}>On-chain bypass rejections (Polygon Amoy, live)</h2>
         <p style={{ maxWidth: 720 }}>
-          All three cases below are <code>eth_call</code> simulations (viem&rsquo;s{" "}
-          <code>simulateContract</code>) — a real call against the deployed Safe&rsquo;s actual
-          on-chain state, but never broadcast, so none of them has a transaction hash. That is the
-          honest state of these three: rejected before submission, not reverted after it.
+          All three cases below are real <code>eth_call</code> simulations (viem&rsquo;s{" "}
+          <code>simulateContract</code>) against the deployed Safe&rsquo;s actual on-chain state.
+          None was ever broadcast, so none has a transaction hash — deliberately: a transaction
+          that fails <em>before</em> submission never had the chance to cost gas or get mined,
+          which is a <strong>stronger</strong> result than a broadcast revert would be, not a gap
+          in what&rsquo;s shown here. The &ldquo;On-chain&rdquo; column below says exactly that for
+          each row, the same way it would say <strong>SUBMITTED · MINED</strong> with a transaction
+          link if one of these had gone through instead.
         </p>
         <div className="table-scroll">
           <table>
@@ -195,8 +228,11 @@ export default function ProofPage() {
                       </pre>
                     </details>
                   </td>
-                  <td className="muted" style={{ fontSize: "0.8rem" }}>
-                    Never submitted (gas estimation only)
+                  <td style={{ fontSize: "0.8rem" }}>
+                    <OnChainLabel submitted={c.on_chain.submitted} />
+                    <div className="muted" style={{ marginTop: 4, fontSize: "0.75rem" }}>
+                      {c.on_chain.method}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -240,7 +276,7 @@ export default function ProofPage() {
             )}
           </p>
           <p style={{ margin: "12px 0 0", fontSize: "0.95rem", fontWeight: 600 }}>
-            On-chain reference:{" "}
+            On-chain reference: <OnChainLabel submitted={proof.allow_attempt.on_chain.submitted} />{" "}
             {proof.allow_attempt.on_chain.tx_hash ? (
               <a
                 className="link mono"
@@ -252,7 +288,7 @@ export default function ProofPage() {
                 {proof.allow_attempt.on_chain.tx_hash} ↗
               </a>
             ) : (
-              <span className="muted" style={{ fontWeight: 400 }}>none — {proof.allow_attempt.on_chain.method}</span>
+              <span className="muted" style={{ fontWeight: 400 }}>{proof.allow_attempt.on_chain.method}</span>
             )}
           </p>
         </div>
@@ -261,8 +297,9 @@ export default function ProofPage() {
         <p style={{ maxWidth: 720 }}>
           Sequence {proof.evidence.events[0].sequence}–{proof.evidence.events[proof.evidence.events.length - 1].sequence}
           , {proof.evidence.events.length} contiguous events from this run's real chain. Each entry's{" "}
-          <code>hash</code> is computed over its own fields plus the previous entry's hash, and each
-          entry is independently Ed25519-signed.
+          <code>hash</code> is computed over its own fields plus the previous entry's hash, each
+          entry is independently Ed25519-signed, and each carries a <code>key_id</code> naming which
+          key in the directory below signed it.
         </p>
         <div className="table-scroll">
           <table>
@@ -274,6 +311,7 @@ export default function ProofPage() {
                 <th>Previous hash</th>
                 <th>Hash</th>
                 <th>Signature</th>
+                <th>Key</th>
               </tr>
             </thead>
             <tbody>
@@ -295,6 +333,9 @@ export default function ProofPage() {
                   <td className="mono muted" style={{ fontSize: "0.78rem" }} title={e.signature}>
                     {truncate(e.signature, 8, 6)}
                   </td>
+                  <td className="mono muted" style={{ fontSize: "0.78rem" }} title={e.key_id ?? undefined}>
+                    {e.key_id ? truncate(e.key_id, 6, 4) : "— (pre-key-directory)"}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -304,10 +345,20 @@ export default function ProofPage() {
         <h2 style={{ marginTop: 48 }}>Verify it yourself</h2>
         <p style={{ maxWidth: 720 }}>
           Below is the full evidence slice (the table above) and Waysafe&rsquo;s published Ed25519
-          public key. This page doesn&rsquo;t ask you to take its word for what they prove — paste
-          both into the script below and run it yourself. It needs nothing but Node&rsquo;s built-in{" "}
-          <code>node:crypto</code>: no install, no <code>@waysafe/sdk</code>, no network call, no
-          trust in this page or the server that produced the data.
+          key directory. This page doesn&rsquo;t ask you to take its word for what they prove —
+          paste the data into the script below and run it yourself. It needs nothing but
+          Node&rsquo;s built-in <code>node:crypto</code>: no install, no{" "}
+          <code>@waysafe/sdk</code>, no network call, no trust in this page or the server that
+          produced the data.
+        </p>
+        <p style={{ maxWidth: 720 }}>
+          <strong>What a passing result actually proves:</strong> that Waysafe signed this exact
+          record, and that no entry has been altered since — a forged or edited event fails at{" "}
+          <code>hash_mismatch</code> or <code>signature_invalid</code> above, not silently pass. What
+          it does <strong>not</strong> prove is completeness — that nothing happened outside this
+          chain. This capture has no external anchor (a timestamping service, a public ledger
+          commitment) tying &ldquo;the chain ends here&rdquo; to anything outside Waysafe&rsquo;s own
+          database. That would be a separate, stronger claim this page doesn&rsquo;t make.
         </p>
         <div style={{ position: "relative" }}>
           <CopyButton text={VERIFY_SNIPPET} />
@@ -334,6 +385,19 @@ export default function ProofPage() {
         <div style={{ position: "relative" }}>
           <CopyButton text={proof.evidence.public_key} />
           <pre style={{ wordBreak: "break-all", whiteSpace: "pre-wrap" }}>{proof.evidence.public_key}</pre>
+        </div>
+
+        <h3 style={{ marginTop: 32 }}>Key directory</h3>
+        <p style={{ maxWidth: 720 }}>
+          Every key a signature above might have been made under, oldest first — what a real key
+          rotation would add a second entry to, without invalidating anything signed under the
+          first. This run has exactly one, matching the public key above.
+        </p>
+        <div style={{ position: "relative" }}>
+          <CopyButton text={JSON.stringify(proof.evidence.key_directory, null, 2)} />
+          <pre style={{ maxHeight: 240, overflow: "auto" }}>
+            {JSON.stringify(proof.evidence.key_directory, null, 2)}
+          </pre>
         </div>
       </div>
     </div>

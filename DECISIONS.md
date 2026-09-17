@@ -5424,6 +5424,40 @@ capture introduced or was asked to fix.
 with no runtime dependents besides the `/proof` page itself (Step 3 of
 this session updates that page against this exact capture).
 
+**D-52 follow-up: `/proof`'s page updated against this exact capture,
+extended rather than rewritten.** The tx-hash-to-explorer link and the
+node:crypto verify snippet already existed from the prior round;
+confirmed both still work against the new data, unchanged. Three real
+additions: (1) the on-chain rejection table's own "On-chain" column
+was actually hardcoded text before this ("Never submitted (gas
+estimation only)" for every row, regardless of what the row's own data
+said) -- now reads `on_chain.submitted`/`method` per row, genuinely
+data-driven; a shared `OnChainLabel` component renders a
+`SUBMITTED · MINED` badge or a `REJECTED · PRE-BROADCAST` badge so the
+settled ALLOW and the three rejections read as visually parallel
+outcomes, not one having a value and the others a blank -- the
+explanatory paragraph above the table now says explicitly that a
+revert that never reached the chain is a *stronger* result than a
+broadcast one, not a gap in the evidence, since it never had the
+chance to cost gas or get mined at all. (2) The verify snippet
+(both the self-contained `node:crypto` version and the SDK-reference
+version) now takes a `keyDirectory` alongside `publicKey`, mirroring
+D-53's own resolution rule exactly (a `key_id`-carrying event checked
+against the matching directory entry; a `key_id`-less event falls back
+to `publicKey`) -- the evidence table gained a `Key` column, and a new
+"Key directory" block sits alongside the existing "Public key" block
+at the bottom (additive, matching D-53's own "don't replace" rule
+applied to the API). (3) The verification claim is now bounded rather
+than open-ended: a new paragraph states plainly that a passing result
+proves Waysafe signed the record and nothing was altered after the
+fact, and does **not** prove completeness -- that nothing happened
+outside this chain -- absent an external anchor this capture doesn't
+have. `npm run build:site` succeeds; the rendered `out/proof.html` was
+read directly (not assumed) to confirm the badges, the key directory
+JSON, and the tightened claim's exact wording all actually render, not
+just compile. Only `apps/site/src/app/proof/page.tsx` changed -- the
+landing page and `/docs` untouched, per this session's own scope.
+
 ## D-53 — Evidence events carry `key_id`; the published key is now a directory, not a single key
 
 D-26/OQ-8 made the evidence chain verifiable by a third party by publishing
