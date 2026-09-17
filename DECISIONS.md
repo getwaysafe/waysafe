@@ -5829,6 +5829,95 @@ draw no longer exists to draw.
 **Change cost if wrong:** low for the files; the real cost already
 happened and was small -- ~0.0089 POL, testnet funds, no counterparty.
 
+## D-58 — THREAT-MODEL.md audit, passkey compromise, and revocation/incident response
+
+Four pieces, independent of the D-55/D-57 broadcast work (this entry
+would stand regardless of whether that broadcast had succeeded).
+
+**The audit.** §6.2's own contradiction with `/proof` (claiming
+`x402.bypass.test.ts` "submits" and "the network reverts it" when the
+test itself only ever simulates) is fixed as part of D-57's own §6.2
+rewrite. Checked the rest of the document for the same class of
+mistake -- a simulated result described as if it were a network
+result -- and found one more, smaller instance: §1.2's description of
+`WAYSAFE_SAFE_COSIGNER_KEY` cited "the bypass suite" for its `GS020`
+claim without saying whether that meant the test (simulated) or
+something broadcast, which reads as ambiguous now that both exist.
+Tightened to cite `session_key_alone`'s actual broadcast tx hash
+directly, matching §6.2's own precision. `packages/core/src/evidence.test.ts`'s
+own use of "simulates" (§4, describing a *test* scenario for key
+rotation, nothing to do with a blockchain) was already accurately
+labeled and needed no change -- not every use of the word is the
+mistake being audited for.
+
+**Landing page step 03.** "can verify the whole record without asking
+Waysafe" overclaimed completeness that `/proof` and §3 both explicitly
+disclaim (the chain proves authorship and internal consistency, not
+that nothing happened outside it). Changed to "can verify the record's
+integrity without asking Waysafe" -- true of hash-chaining and
+signing, and not a claim about completeness.
+
+**New §2.5, principal passkey compromise.** Every other compromise
+scenario in the document bounds an attacker to what a mandate already
+permits; this one doesn't, because the passkey is what makes that
+bound exist at all -- `completeMandateAuthentication` is the only
+thing that turns a compiled policy into an active mandate, and (a
+fact worth being honest about, not just the theoretical severity) there
+is currently no route that edits an existing mandate at all: version 1
+plus one authentication ceremony is the entire lifecycle this codebase
+has built, so non-negotiable #5's "edits need their own
+re-authentication" is a rule for a capability that doesn't exist yet.
+States plainly what WebAuthn's own design still resists (raw
+credential theft, origin/RP-ID binding per D-29's subdomain choice)
+against what it doesn't (a compromise already running at the
+legitimate origin, or device-level compromise that never goes through
+a ceremony the RP ID check would see) -- neither defended against by
+anything in this codebase, stated as such rather than implied
+otherwise.
+
+**New §7, revocation and incident response.** States a kill switch per
+credential type, including the two genuinely honest "there isn't
+one yet" answers this session's own work surfaced:
+
+- Agent keys/org credentials: real, already-built, immediate
+  (`revokeKey`).
+- The evidence signing key: **the kill switch is currently the
+  opposite of what D-53 was built to enable.** Checked
+  `getKeyDirectory()` in both `InMemoryEvidenceRepository` and
+  `PrismaEvidenceRepository` directly -- both hardcode a single-entry
+  array from the instance's own constructor key, with no path to also
+  publish a retired one. Rotating `WAYSAFE_EVIDENCE_SIGNING_KEY` today,
+  with no further code changes, makes every historical signature --
+  `key_id`-tagged or not -- fail verification, since neither the new
+  `key_directory` nor the `publicKey` fallback contains the old key
+  anymore. D-53's rotation-safety property requires the repository
+  classes to hold and publish a list of retired keys; that code does
+  not exist.
+- The x402 attestation key: lowest-stakes to rotate, because nothing
+  downstream currently verifies against a pinned copy of it at all.
+- The Safe cosigner key: **no kill switch exists.** §1.2 already named
+  the underlying fact (permanent, unrevocable Safe ownership, no
+  `swapOwner` code path); this section names it explicitly as an
+  *accepted* open risk rather than leaving it stated-and-abandoned,
+  and gives the conditions under which it stops being acceptable --
+  meaningfully more live Safes, meaningfully more value in any one of
+  them, or an actual incident that needs rotation and finds the tooling
+  still doesn't exist.
+- Stripe secrets: rotation handled entirely by Stripe's own dashboard,
+  no code-level consequence here.
+
+Full suite green (573 passed, 1 pre-existing expected skip).
+`npm run build:site` succeeds; the rendered landing page's new step-03
+wording confirmed directly in `out/index.html`, not assumed from the
+source change alone.
+
+**Change cost if wrong:** low -- documentation only. The evidence-key
+and Safe-cosigner-key kill-switch gaps this entry names are real
+regardless of whether they're written down; the actual cost of getting
+either wrong is paid the first time a real rotation is attempted under
+pressure, which is exactly the scenario this section exists to make
+someone check for in advance instead.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

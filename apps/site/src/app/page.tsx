@@ -161,8 +161,8 @@ export default function HomePage() {
               <h3 style={{ marginTop: 0, marginBottom: 10 }}>Every decision is signed and chained</h3>
               <p className="muted" style={{ lineHeight: 1.65, margin: 0 }}>
                 Every decision is written to a signed log, each entry carrying the hash of the one
-                before it; anyone with Waysafe&rsquo;s public key can verify the whole record without
-                asking Waysafe.
+                before it; anyone with Waysafe&rsquo;s public key can verify the record&rsquo;s
+                integrity without asking Waysafe.
               </p>
             </div>
           </div>
