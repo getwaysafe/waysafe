@@ -5357,6 +5357,73 @@ than contradict already-shared history -- see that commit's own message.
 D-52 itself lands as its own entry once the `/proof` re-capture this
 session is mid-way through finishes.
 
+## D-52 — `/proof` re-captured once, against D-53's key-directory shape, with the on-chain submitted/estimation distinction made explicit
+
+A single fresh live run against the local stack (real WebAuthn ceremonies,
+real Stripe Issuing replay, real Amoy on-chain simulation and one real
+broadcast), replacing both copies of `proof.json`
+(`apps/site/src/data/proof.json`, `apps/site/public/proof/proof.json`,
+kept byte-identical as always). Amoy gas was checked first
+(`amoy-fees.ts`: baseFee ~0 gwei, `getGasPrice` ~36 gwei, comfortably
+under the 400 gwei spike this file has already seen once) and the
+cosigner EOA's balance (0.086 POL) confirmed sufficient for exactly one
+broadcast before attempting it -- the real settlement leg is the one
+part of this capture that spends real (test) funds, so it ran once, not
+speculatively.
+
+Every event in the captured slice (sequence 436-443, `org_demo`'s chain)
+now carries a real `key_id` from D-53's own key-directory plumbing, and
+`evidence.key_directory` is a new field in the captured JSON, additive
+alongside the existing `public_key`/`algorithm` -- verified independently
+two ways, not just eyeballed: `verifyEvidenceIndependently` from
+`@waysafe/sdk` returns `{ ok: true, signed: true }` both against the
+legacy `public_key` alone and against the new `key_directory`, proving
+D-53's dual verification path actually works end to end against real
+captured data, not just the synthetic chains its own test suite builds.
+
+The on-chain rejection set (`session_key_alone`, `forged_envelope`,
+`session_key_no_waysafe`) already carried an explicit
+`on_chain.submitted`/`tx_hash`/`explorer_url` shape from the prior
+capture; this run reconfirmed all three are still gas-estimation-only
+(`submitted: false`, no tx hash -- `eth_call`/`simulateContract`,
+never broadcast) and that `forged_envelope`'s real revert reason is
+still `GS026` as expected. The real ALLOW settled on-chain for real:
+tx `0x5f27c003389faf778055aadeb69ba7fcc1700001bb190844b0f3942affcffa09`,
+independently confirmed via a direct `getTransactionReceipt` call (not
+just trusted from the server's own settlement response) -- `status:
+success`, gas used 126,750 (~0.0046 POL, well inside the checked
+balance).
+
+**A real extraction bug was caught during this capture, not shipped.**
+The route only returns one raw multi-line `revert_reason` string (viem's
+full error message); building the display-friendly
+`revert_reason_summary`/`revert_reason_gloss`/`revert_reason_full` split
+is done by whoever captures the run, not by the API. The first pass at
+`revert_reason_summary` accidentally included the trailing `Version:
+viem@2.56.3` line along with the intended `Details: ...` line -- caught
+and fixed before writing the files, by re-deriving just the first line
+after `Details:` from the already-captured raw text (no repeated on-chain
+calls). A second instance of the same slip survived that first fix and
+reached the two committed files anyway: `revert_reason_gloss` for all
+three rejection cases held the identical `"execution reverted:
+GSxxx\nVersion: viem@2.56.3"` fragment instead of a human-readable
+explanation. Caught in review before this commit, not by the capture
+itself -- fixed by restoring the same gloss wording the previous capture
+used (GS020 and GS026 are stable, well-known Safe protocol error codes,
+so the old wording is still accurate for this run), applied identically
+to both files and reverified byte-identical afterward.
+
+Also reconfirmed, not fixed: `session_key_no_waysafe`'s case in
+`apps/api/src/demo/routes.ts` runs the exact same simulation as
+`session_key_alone` rather than a distinct scenario, so both real
+revert reasons are identical (`GS020`) -- this is existing, already-
+committed route behavior from before this session, not something this
+capture introduced or was asked to fix.
+
+**Change cost if wrong:** low -- `proof.json` is static, published data
+with no runtime dependents besides the `/proof` page itself (Step 3 of
+this session updates that page against this exact capture).
+
 ## D-53 — Evidence events carry `key_id`; the published key is now a directory, not a single key
 
 D-26/OQ-8 made the evidence chain verifiable by a third party by publishing
