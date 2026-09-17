@@ -5554,6 +5554,66 @@ with no way to tell tampering from rotation. Nothing here performs a
 rotation or adds a second key to any deployment's directory; that's a
 separate, future decision.
 
+## D-54 — `docs/THREAT-MODEL.md`, written for a card-network security reviewer
+
+A single document describing the system as it actually runs, not as it
+is intended to eventually: the four credential types (the evidence
+signing key, the two x402-related keys -- Ed25519 `WAYSAFE_X402_COSIGNER_KEY`
+for an off-chain attestation and secp256k1 `WAYSAFE_SAFE_COSIGNER_KEY`
+for the genuine on-chain Safe co-signature, deliberately distinguished
+since conflating them overstates the Ed25519 key's actual power --
+agent API keys/org credentials, and the two separately-scoped Stripe
+secrets) and each one's real blast radius; what four compromise
+scenarios (API RCE, direct DB write access, a compromised dependency,
+a leaked agent key) actually yield, including two findings worth
+naming explicitly: DB write access alone can mint valid credentials
+from nothing (`AgentKeyRepository.verifyKey` is a prefix-lookup-then-
+hash-compare, so an attacker who can insert a row needs no leaked
+secret at all) and can silently bias future decisions by inserting
+forged `LedgerEntry` rows into the SUM cumulative-spend computation
+(non-negotiable #6), without needing to forge anything cryptographically;
+and that a compromised Stripe Issuing secret key alone cannot actually
+authorize a purchase, because a card it creates outside
+`provisionCardForMandate` carries no Waysafe `Instrument` reference and
+the real-time authorization webhook denies exactly that case
+(`DENY_NO_ACTIVE_MANDATE`) as long as the webhook endpoint itself
+stays under Waysafe's control.
+
+States plainly, in the same breath as each claim: the evidence chain
+proves authorship and internal consistency, never completeness --
+nothing stops a party controlling both the database and the signing
+key from presenting a real, correctly-signed chain that silently omits
+events at the tail, and only external anchoring (a public blockchain,
+a certificate-transparency-style log, an RFC 3161 timestamp) would
+close that gap, and none exists here. D-53's key-directory plumbing
+lets a historical signature stay verifiable after a rotation, and no
+rotation has ever actually been performed against a real deployment.
+Every private key in this codebase today is what the document calls
+"EnvSigner" -- a plaintext key from an environment variable, decoded
+into ordinary Node.js process memory, no hardware or service boundary
+between "the process is compromised" and "the key is compromised" --
+and neither a `Signer` interface nor a KMS/HSM-backed implementation
+of one exists; the document says what each would and would not change
+(a KMS boundary stops key *exfiltration*, not signature forgery for as
+long as the compromised process still holds live credentials to call
+it) rather than treating either as already mitigating anything.
+
+Closes with both rails' fail-closed behavior, cited against the actual
+code and comments rather than described from memory: cards fail closed
+because this Stripe account's Issuing configuration has "decline on
+timeout" on, and because `stripe-issuing.ts`'s own module comment
+states the design intent ("Miss the window, or answer with anything
+else, and Stripe fails closed... on its own"); on-chain fails closed
+because the Safe's own threshold-2 signature check rejects anything
+short of both owners' signatures, proven live against the real
+deployed Safe by `x402.bypass.test.ts`, not simulated.
+
+Scope discipline: touches nothing in `packages/core`, no signing code,
+and no page under `apps/site` -- a new file only. Written alongside
+(a different session's) Part 1, unrelated site-copy verification work
+against a reviewer's fix list this session could not locate in the
+repository; see that work's own record for what was and wasn't found.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

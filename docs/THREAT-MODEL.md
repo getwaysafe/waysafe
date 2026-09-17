@@ -1,0 +1,115 @@
+# Waysafe — Threat Model
+
+**Audience:** a security reviewer at a card network or payment processor evaluating whether to integrate with, or rely on, Waysafe as a required signer. This document describes the system as it actually runs today, in this repository, not as it is intended to run eventually. Where something described here is not built, that is stated in the same sentence as the description, not deferred to a separate section.
+
+Scope: the four credential types that can sign or authorize something, what four realistic compromise scenarios actually yield, what the evidence chain does and does not prove, the current state of key rotation, how private keys are actually held in memory today, and what happens on both rails Waysafe enforces when Waysafe fails to answer in time.
+
+---
+
+## 1. Key inventory and blast radius
+
+Four distinct credential types exist. They are deliberately never interchangeable — compromising one does not grant the powers of another. Each is described below as: what it can sign or authorize, what an attacker who has it can do, and what it cannot do even in the worst case.
+
+### 1.1 The evidence signing key
+
+**Env var:** `WAYSAFE_EVIDENCE_SIGNING_KEY`. **Type:** Ed25519. **Loaded by:** `apps/api/src/evidence/signing-key.ts`. **Used by:** `packages/core/src/evidence-signing.ts`'s `signEventHash`, called from `InMemoryEvidenceRepository`/`PrismaEvidenceRepository`'s `appendEvent`.
+
+**What it signs.** The SHA-256 hash of one evidence event's content (organization id, sequence, type, subject, payload, previous hash, timestamp) — never the event's full body, and never anything about money movement directly. Every write to the evidence chain (a mandate authenticated, a decision made, an instrument provisioned) gets one signature under this key.
+
+**What an attacker with this key gets.** The ability to forge evidence events that pass third-party verification (`verifyEvidenceChain`, `verifyEvidenceIndependently`) — that is, to fabricate a plausible, internally consistent, correctly-signed decision history that never actually happened, or to alter a historical event and re-sign the resulting chain so the tamper is undetectable to anyone checking only the signature. This is the single most damaging compromise to Waysafe's own auditability claim: it lets an attacker rewrite the record the whole product exists to make trustworthy.
+
+**What it cannot do.** It has no role in the authorization decision path itself — `evaluate()` runs and money moves (or doesn't) independent of whether the resulting event gets signed correctly. It cannot authorize a Stripe Issuing charge (that decision is the literal HTTP response `handleIssuingAuthorizationRequest` returns to Stripe's webhook, produced before any evidence write happens). It cannot produce a valid x402 co-signature (a different Ed25519 keypair entirely — see 1.2). It has no on-chain counterpart and cannot sign or authorize any Safe transaction. Rotating it (see §4) does not undo forgeries already made under it, but does stop new ones from verifying under the new key.
+
+### 1.2 The x402 co-signer key(s) — two keys, not one
+
+x402 enforcement actually involves two structurally different keys, and conflating them misstates the real custody position (D-40, D-41).
+
+**`WAYSAFE_X402_COSIGNER_KEY`.** Ed25519 (`apps/api/src/enforcement/x402-signing-key.ts`), used by `X402Adapter.toResponse` to sign an off-chain attestation (`X402CoSignature`: pay-to address, asset, network, amount, resource, expiry, plus the deciding `Authorization`'s id). Produced **only** for a genuine ALLOW — `toResponse` returns `co_signature: null` for both DENY and STEP_UP, since there is no channel to put a human in front of a decision within this window (D-33 point 4; the same constraint the card rail has). An attacker with this key can forge a plausible-looking off-chain "Waysafe approved this" attestation. It has no EVM address at all — Ed25519 keys cannot own a Safe or produce a valid Safe owner signature — so this key **cannot move any on-chain funds under any circumstance**, forged or genuine. Anyone relying on this attestation as proof that funds actually moved is trusting an off-chain claim, not on-chain enforcement.
+
+**`WAYSAFE_SAFE_COSIGNER_KEY`.** secp256k1 (`apps/api/src/enforcement/x402-safe.ts`), a genuine, permanent owner of every mandate's deployed 2-of-2 Safe (D-41), used by `settleTwoOfTwoTransfer` to co-sign a real `execTransaction` call. This is the key with actual on-chain blast radius: an attacker who has it, and who also has the agent's own session-key signature over the same transaction (the other required owner signature — see 1.3 and §6.2), can move whatever the Safe holds. An attacker who has this key **alone**, without the session key, gets nothing — the Safe's threshold is 2, and a single valid owner signature reverts the same way `session_key_alone` does in the bypass suite (`GS020`, "signatures data too short"). This key is load-bearing and irreplaceable per-Safe: rotating it strands every Safe that already named the old address as an owner, since Safe ownership is an on-chain fact this codebase does not currently have machinery to change after deployment.
+
+### 1.3 Agent API keys and org credentials
+
+**Format:** `wsf_live_` + an 8-hex-char lookup prefix + a 28-byte (224-bit) random secret tail (`apps/api/src/agent-keys/keys.ts`). **Storage:** only the prefix and a plain SHA-256 hash of the full key are ever persisted (`ApiKey.prefix`, `ApiKey.secretHash`); the full key is shown to the caller exactly once and never stored or logged again. Two tiers share one table: an **agent key** (`agentId` set) authenticates as a specific agent on `POST /v1/authorizations`; an **org credential** (`agentId: null`) authenticates account-management calls — creating mandates, principals, agents, and other agent keys, and reading the org's own evidence chain.
+
+**What a leaked agent key gets an attacker.** Exactly the authority the real agent had — the ability to request evaluations and executions bound to that agent's mandates, up to whatever the mandate's policy already permits (merchant allowlist, per-transaction and cumulative caps, time windows). It cannot escalate a limit, fabricate a merchant identity (D-3/D-34: an agent's own assertion of a PSP account, network MID, or domain caps at `STEP_UP`, never `ALLOW`, regardless of what key made the request), or forge an evidence entry. On a rail where Waysafe itself holds the execution credential (Stripe), a leaked agent key can spend real money, but never more than the mandate already allowed the legitimate agent to spend. On x402, `POST /v1/enforcement/x402` still requires Waysafe's own independent fetch of the resource's real payment requirements (D-40) — the attacker cannot lie about what they're paying for, only ask Waysafe to genuinely evaluate a real merchant of their choosing against the real mandate. Revoking the key (`DELETE /v1/agents/:id/keys/:id`) closes the window for future calls immediately; it does not undo an `execute()` that already completed before revocation.
+
+**What a leaked org credential gets an attacker** is broader than a single agent key: the ability to mint new agent keys and register new agents under that organization, i.e., to create new authority, not just use existing authority. It still cannot bypass a mandate's own policy or forge evidence.
+
+### 1.4 The Stripe secret(s)
+
+**`STRIPE_SECRET_KEY`** (test-mode `sk_test_`/`rk_test_`, gated by `probeStripeKey()`) authenticates `StripeAdapter.execute()` — Payment Intents on Waysafe's own Stripe account. **`STRIPE_ISSUING_SECRET_KEY`** is a deliberately separate key (`probeStripeIssuingKey()`'s own comment: "the two keys are deliberately scoped to different Stripe capabilities... and should never be able to silently stand in for one another") used only for Issuing operations — creating cardholders and cards during `provisionCardForMandate`. Two more secrets, `STRIPE_WEBHOOK_SECRET` and `STRIPE_ISSUING_WEBHOOK_SECRET`, verify that an inbound webhook actually came from Stripe; they authorize nothing outbound.
+
+**What an attacker with `STRIPE_SECRET_KEY` gets** is the ability to act as Waysafe's Stripe account directly against Stripe's real API — create, capture, and refund Payment Intents — entirely outside `evaluate()`. This is the one credential in this inventory whose compromise is not mediated by Waysafe's own policy engine at all: Stripe does not know or care what Waysafe's mandate said, only that the API call carried a valid secret key. This is the highest direct-fund-movement blast radius of the four key types, bounded only by whatever balance and account limits exist on the Stripe side.
+
+**What an attacker with `STRIPE_ISSUING_SECRET_KEY` gets** is narrower than it looks. They can create cardholders and cards directly against Stripe, bypassing `provisionCardForMandate`'s own gates (D-38's terms-acceptance check, the mandate-authentication requirement). But a card created this way carries no Waysafe `Instrument` metadata, and Stripe's real-time authorization webhook still asks Waysafe before any purchase on that card is approved (§6.1) — `handleIssuingAuthorizationRequest`'s `parseRequest`/instrument lookup finds nothing for a card it never provisioned and returns `DENY_NO_ACTIVE_MANDATE`. As long as the webhook endpoint and its signing secret remain under Waysafe's control, a rogue card created with only this key cannot actually be used to buy anything — the Issuing secret key alone is not sufficient to move card funds; it needs the webhook secret and the running server to also be compromised (see §2.1).
+
+---
+
+## 2. What four compromise scenarios actually yield
+
+### 2.1 Remote code execution on the API process
+
+This is the worst case for anything living in that one process's memory: `WAYSAFE_EVIDENCE_SIGNING_KEY`, `WAYSAFE_X402_COSIGNER_KEY`, `WAYSAFE_SAFE_COSIGNER_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_ISSUING_SECRET_KEY`, both webhook secrets, and `DATABASE_URL` all load into `process.env` and, for the four signing/co-signing keys, get decoded into live `KeyObject`s held in the process heap for its lifetime (§5). An attacker with code execution here can forge evidence, sign fraudulent off-chain x402 attestations, and call Stripe directly with full account authority — everything in §1.4's worst case. The one thing API-process RCE alone does **not** give them is on-chain fund movement on x402: the Safe is a genuine 2-of-2, and the second signature — the agent's own session key — lives in the agent's runtime, not Waysafe's process (§1.2, §6.2). A compromised API process can co-sign anything, but co-signing alone moves nothing.
+
+Logging is a secondary exposure inside this scenario: Fastify's logger redacts a fixed, hand-maintained list of paths (`req.headers.authorization`, `req.headers.cookie`, `req.headers["x-api-key"]`, `req.body.card`, `req.body.payment_method`, `res.headers['set-cookie']` — `apps/api/src/server.ts`). This is a blocklist, not a default-deny logger: a new field carrying a credential is exposed in logs until someone adds it to this list by hand. The comment next to it says the list "grows as adapters land; it is never allowed to shrink" — a process discipline, not a structural guarantee.
+
+### 2.2 Direct database write access, without the process's env vars
+
+This attacker can read and write every row — mandates, authorizations, ledger entries, evidence events, agent-key hashes — but has none of §2.1's in-memory keys. Two things follow, in opposite directions:
+
+**What they cannot do:** forge a valid evidence signature. A mutated evidence row, or a fully rewritten chain with self-consistent hashes, fails `signature_invalid` the moment anyone checks it against the published key (`evidence.test.ts`'s "full chain rewrite" case exists specifically to prove this) — the private key that would let them re-sign a forgery lives only in process memory, never in Postgres.
+
+**What they can do, and it is real:** mint valid credentials from nothing. `AgentKeyRepository.verifyKey` authenticates a presented key by looking up its prefix and comparing a SHA-256 hash — an attacker with database write access can simply insert a row with a hash of a secret *they chose*, then authenticate as that organization or agent with no leaked secret required at all. They can also insert fabricated `LedgerEntry` rows: because cumulative spend is computed as a live `SUM` over the ledger (non-negotiable #6, `packages/core`), a forged ledger row changes what every future `evaluate()` call believes has already been spent, silently shifting future ALLOW/DENY/STEP_UP outcomes without needing to forge anything cryptographically. Neither of these requires the evidence signing key; both are consequences of database write access being, in effect, "authorization to affect future decisions," even though it is not "authorization to rewrite past ones."
+
+### 2.3 A compromised dependency
+
+Blast radius here is a function of which process the dependency's code runs in, not of the dependency itself — a compromised package with code executing inside `apps/api`'s process is §2.1's RCE case in full. A package reachable only from `packages/core` is a distinct and arguably worse category: `evaluate()` is imported everywhere (the API, the dashboard, the browser bundle via D-43's `@waysafe/core/browser`), so a compromised transitive dependency of `packages/core` could alter decision logic itself — an incorrect ALLOW that never touches a key at all, and would not be caught by anything in this document, since it is not a credential-theft scenario. A package confined to `apps/site` (the static-exported marketing site, no server, D-50) or `apps/dashboard`'s own build has a much narrower ceiling: the dashboard holds a session cookie wrapping one org credential (D-23), not the evidence signing key or either Stripe secret, so a dashboard-only compromise is bounded by §1.3's org-credential blast radius, not §2.1's.
+
+### 2.4 A leaked agent key
+
+Covered in full in §1.3. Summarizing the bound: an attacker gets exactly what the mandate already permitted the real agent to do, for as long as the key remains unrevoked. It is not a privilege-escalation vector against the policy itself.
+
+---
+
+## 3. What the evidence chain proves, and what it does not
+
+Verifying a chain — either the server's own `GET /v1/evidence/verify`, or independently via `verifyEvidenceIndependently` against a self-pinned public key — proves two things: **authorship** (this exact record was signed by whoever holds the private key behind the published public key, i.e., Waysafe) and **internal consistency since** (no entry has been altered after the fact; a forged or edited event fails at `hash_mismatch` or `signature_invalid`, not silently).
+
+It does **not** prove **completeness** — that nothing happened outside what you were shown. Nothing described anywhere in this document stops the party that controls both the database and the signing key (an operator, or an attacker who has fully compromised the API process per §2.1) from presenting a verifier with a real, correctly-signed, internally consistent chain that simply omits some events — sequence numbers and hash-chaining make an omission *in the middle* of a shown range detectable (a gap), but an omission at the *end* (events that happened and were never shown to this particular verifier at all) is invisible to hash-chaining and signing alike, because both only ever operate on the events actually presented.
+
+Closing that gap requires **external anchoring**: periodically publishing the chain's current tip hash (or the sequence-and-hash pair) to something Waysafe does not control and cannot rewrite after the fact — a public blockchain, a certificate-transparency-style append-only log, an RFC 3161 timestamping authority. That would let a third party check "the chain had exactly N events, ending in this hash, as of this time" independently of anything Waysafe's own server says about itself. **No such mechanism exists in this codebase today.** The chain is signed and hash-linked; it is not anchored to anything outside Waysafe's own database.
+
+---
+
+## 4. Key rotation, as it exists after D-53
+
+Every evidence event now carries an optional `key_id` (`packages/core/src/domain.ts`), and `GET /v1/evidence/public-key` publishes a **key directory** — `key_directory: [{ key_id, public_key, valid_from }]` — alongside the single `public_key`/`algorithm` fields that existed before. `verifyEvidenceChain`/`verifyEvidenceIndependently` resolve an event's signing key by its `key_id` when a directory is supplied, falling back to the single legacy key for an event that predates `key_id` entirely.
+
+The property this buys: **a historical entry stays verifiable after a key rotation**, because it is checked against the specific key it names in the directory, not against whichever key happens to be currently active. Rotating the signing key going forward does not retroactively invalidate anything signed under the key being retired, as long as that key's entry stays in the published directory.
+
+**No rotation has actually happened.** Every deployment today has exactly one key in its directory, with `valid_from: null` (meaning "valid since before this deployment's chain began," not a real date — there has never been a predecessor key to give it one). The plumbing to keep old signatures verifiable after a rotation exists and is tested (`packages/core/src/evidence.test.ts` simulates a chain half-signed under an old key and half under a new one and confirms the whole thing still verifies); the operational act of actually generating a second key, deploying it as the new active signer, and adding its directory entry has never been performed against any real deployment.
+
+---
+
+## 5. Where the private keys actually live: EnvSigner
+
+There is no `Signer` abstraction in this codebase. Every signing key described in §1 — the evidence key, both x402-related keys — is loaded the same way: a base64-encoded private key is read once from an environment variable (`WAYSAFE_EVIDENCE_SIGNING_KEY`, `WAYSAFE_X402_COSIGNER_KEY`, `WAYSAFE_SAFE_COSIGNER_KEY`) into `process.env`, decoded with `node:crypto`'s `createPrivateKey`/`privateKeyToAccount` into a live key object, and held in that Node.js process's memory for as long as the process runs. Every `sign()` call happens in-process, directly against that key object. This is what "EnvSigner" means here: a plaintext private key in an environment variable, decoded into ordinary process memory, with no hardware or service boundary between "the process is compromised" and "the private key is compromised." There is no separate audit log of signing operations beyond the evidence events those operations produce.
+
+Two changes are planned and neither is built:
+
+**A `Signer` interface** would decouple "produce a signature over this hash" from "the private key lives in this process." Nothing in this codebase currently defines or calls through such an interface — `signEventHash` and its x402 equivalent both take a `KeyObject` directly, not an abstraction over one.
+
+**A KMS-backed (or HSM-backed) implementation of that interface** would move the private key material into a service or hardware boundary the application process only ever calls, never reads from. This would make key *exfiltration* (stealing the key material for use after an intrusion is cleaned up) structurally impossible — a KMS key cannot be copied out. It would **not** eliminate the RCE risk in §2.1 entirely: a process with live code execution and the KMS's own service credentials could still request forged signatures for as long as that code execution persists, the same way stolen AWS credentials can still call KMS's `Sign` API. What it would add is a KMS's own audit trail of every signing call, independent of the evidence chain itself, and would remove "the key is now on an attacker's disk somewhere" as a permanent consequence of a temporary compromise. Neither the interface nor a KMS-backed implementation exists in this codebase today.
+
+---
+
+## 6. Fail-closed behavior: what happens when Waysafe does not answer in time
+
+### 6.1 Card rail (Stripe Issuing)
+
+Stripe's real-time authorization webhook (`issuing_authorization.request`) waits on Waysafe's HTTP response for approximately two seconds. This account's Issuing configuration has **"decline on timeout" turned on** — if Waysafe's response does not arrive within that window, or arrives malformed, Stripe declines the authorization on its own, independent of anything Waysafe's code does. `apps/api/src/enforcement/stripe-issuing.ts`'s own module comment states the design intent plainly: "Miss the window, or answer with anything else, and Stripe fails closed (declines) on its own — which is the correct behavior for a system that must never silently fail open." The route itself (`POST /v1/enforcement/stripe-issuing`, `apps/api/src/server.ts`) reinforces this on the application side: an unrecognized event type gets an explicit `{ approved: false, reason_codes: [] }` rather than a fabricated reason; a card presented with no resolvable Waysafe instrument gets an explicit `DENY_NO_ACTIVE_MANDATE`; and a decision that would require a human in the loop (`STEP_UP`) has no channel to reach one inside a two-second synchronous window, so it also resolves to a decline (D-33 point 4). There is no path in this design where Waysafe's silence, error, or slowness results in an approved card transaction.
+
+### 6.2 On-chain rail (x402 / Safe)
+
+The Safe deployed for each mandate is a genuine threshold-2 multisig, with the agent's own session key as one owner and `WAYSAFE_SAFE_COSIGNER_KEY`'s address as the other (D-41). Waysafe's decision is not consulted by the chain at execution time the way Stripe consults Waysafe — instead, Waysafe's co-signature is one of the two signatures the Safe's own `execTransaction` requires to accept the call at all. `X402Adapter.toResponse` returns `co_signature: null` for anything other than a genuine ALLOW; without it, `settleTwoOfTwoTransfer` (`apps/api/src/enforcement/x402-safe.ts`) has nothing to submit. And even if an attacker had a real session-key signature and attempted to submit a transaction with only that one signature, the Safe contract itself rejects it on-chain — this is not simulated: `apps/api/src/enforcement/x402.bypass.test.ts` submits exactly this case against the real deployed Safe on Polygon Amoy and the network reverts it (`GS020`, "signatures data too short"). No co-signature means no valid transaction, enforced by the smart contract's own signature-count check, not by any cooperation from the agent's runtime.
