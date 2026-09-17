@@ -6,10 +6,14 @@
  * marker. Writes two things from the same `git rev-parse --short HEAD`:
  *   - public/version.json, copied verbatim into the static export, so
  *     `curl -s https://waysafe.ai/version.json` answers "which build is
- *     live" in one command with no page load.
+ *     live" in one command with no page load. Also carries
+ *     `deploymentId`/`project` from Vercel's own VERCEL_DEPLOYMENT_ID/
+ *     VERCEL_PROJECT_ID build-time env vars when present -- omitted
+ *     entirely for a local build, where they're unset.
  *   - src/lib/build-info.ts, a TS module layout.tsx imports to render the
- *     same values as an HTML comment in <head>. Both gitignored (like
- *     out/, next-env.d.ts) -- generated fresh, never a committed artifact.
+ *     same sha as a <meta name="build-sha"> tag (and an HTML comment) in
+ *     <head>. Both gitignored (like out/, next-env.d.ts) -- generated
+ *     fresh, never a committed artifact.
  */
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -20,10 +24,16 @@ const siteDir = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const sha = execSync("git rev-parse --short HEAD", { cwd: siteDir }).toString().trim();
 const builtAt = new Date().toISOString();
+const deploymentId = process.env.VERCEL_DEPLOYMENT_ID;
+const project = process.env.VERCEL_PROJECT_ID;
+
+const versionInfo = { sha, builtAt };
+if (deploymentId) versionInfo.deploymentId = deploymentId;
+if (project) versionInfo.project = project;
 
 writeFileSync(
   join(siteDir, "public", "version.json"),
-  JSON.stringify({ sha, builtAt }, null, 2) + "\n",
+  JSON.stringify(versionInfo, null, 2) + "\n",
 );
 
 writeFileSync(

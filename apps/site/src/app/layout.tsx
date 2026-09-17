@@ -11,6 +11,9 @@ export const metadata: Metadata = {
   title: "Waysafe — the rail-side authorization and evidence layer",
   description:
     "Waysafe decides whether an AI agent may take an economic action. The payment rail asks before money moves, and every decision is signed, chained, and independently verifiable.",
+  other: {
+    "build-sha": BUILD_SHA,
+  },
 };
 
 const bricolage = Bricolage_Grotesque({

@@ -5296,6 +5296,42 @@ renders as `<head>`'s first child, and Next's own metadata still
 follows immediately after, unaffected, confirmed by reading
 `out/index.html`, `out/docs.html`, and `out/proof.html` directly.
 
+**D-51 follow-up: the deploy path has now failed four ways in two
+days, all silently -- clean-URL mapping, wrong project, inside-only
+verification, and stale edge cache.** The fourth: Vercel's edge was
+observed serving stale HTML at some POPs after a redeploy, with
+nothing in the response distinguishing "this is the new build" from
+"this is cached" -- the build marker above answers *which* build is
+live once you've loaded the page, but does nothing to stop a stale
+POP from serving an old page in the first place. Fixed two ways,
+both from the same root cause (no cache-control policy was ever set,
+so Vercel's platform default applied silently): `apps/site/vercel.json`
+gained a `headers` block forcing `Cache-Control: public, max-age=0,
+s-maxage=0, must-revalidate` on every path (`/(.*)`) -- `s-maxage=0`
+is the operative part, forcing the edge to revalidate against origin
+on every request rather than serving a cached copy from before the
+last deploy. And the build marker itself moved from "read only if you
+already knew to look" (an HTML comment, `curl -s .../version.json`)
+to load-bearing on the rendered page: a `<meta name="build-sha">` tag
+in `<head>` on `/`, `/docs`, and `/proof`, added once on the root
+`RootLayout`'s `metadata` export (`other: { "build-sha": BUILD_SHA }`)
+and confirmed, by reading the built `out/index.html`, `out/docs.html`,
+and `out/proof.html`, to survive on all three despite each child page
+also exporting its own `metadata` -- Next's per-field metadata merge
+keeps a parent's `other` entry when the child doesn't redeclare it.
+Same `BUILD_SHA` source as `version.json` (both written by
+`generate-version.mjs` from one `git rev-parse` call), so the two
+never disagree. `version.json` also gained optional `deploymentId`/
+`project` fields, read from Vercel's own `VERCEL_DEPLOYMENT_ID`/
+`VERCEL_PROJECT_ID` build-time env vars and included only when
+present -- verified both branches directly (set and unset) rather
+than assumed, so a local build's `version.json` stays exactly the two
+fields it always had, and a real Vercel build gains the two that
+identify *which* deployment and project served it, closing the "wrong
+project" failure mode this same entry names. Not deployed as part of
+this change -- `vercel.json`'s `headers` block takes effect only on
+the next actual deploy.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
