@@ -187,14 +187,17 @@ export default function ProofPage() {
 
         <h2 style={{ marginTop: 48 }}>On-chain bypass rejections (Polygon Amoy, live)</h2>
         <p style={{ maxWidth: 720 }}>
-          All three cases below are real <code>eth_call</code> simulations (viem&rsquo;s{" "}
-          <code>simulateContract</code>) against the deployed Safe&rsquo;s actual on-chain state.
-          None was ever broadcast, so none has a transaction hash — deliberately: a transaction
-          that fails <em>before</em> submission never had the chance to cost gas or get mined,
-          which is a <strong>stronger</strong> result than a broadcast revert would be, not a gap
-          in what&rsquo;s shown here. The &ldquo;On-chain&rdquo; column below says exactly that for
-          each row, the same way it would say <strong>SUBMITTED · MINED</strong> with a transaction
-          link if one of these had gone through instead.
+          Two of the three cases below are <code>eth_call</code> simulations (viem&rsquo;s{" "}
+          <code>simulateContract</code>) against the deployed Safe&rsquo;s actual on-chain state —
+          never broadcast, so neither has a transaction hash, deliberately: a transaction that
+          fails <em>before</em> submission never had the chance to cost gas or get mined, which is
+          a <strong>stronger</strong> result than a broadcast revert would be, not a gap in
+          what&rsquo;s shown here. The third, <code>session_key_alone</code>, was broadcast for
+          real — sent with an explicit gas limit rather than estimated (estimation itself throws
+          for a call this doomed) — and actually mined with status <code>reverted</code>, giving
+          it a real transaction hash the other two don&rsquo;t have and can&rsquo;t honestly claim.
+          These are two different evidentiary claims, not the same proof shown two ways, and the
+          &ldquo;On-chain&rdquo; column below says which is which for each row.
         </p>
         <div className="table-scroll">
           <table>
@@ -230,6 +233,19 @@ export default function ProofPage() {
                   </td>
                   <td style={{ fontSize: "0.8rem" }}>
                     <OnChainLabel submitted={c.on_chain.submitted} />
+                    {c.on_chain.tx_hash && c.on_chain.explorer_url && (
+                      <div style={{ marginTop: 4 }}>
+                        <a
+                          className="link mono"
+                          style={{ fontSize: "0.78rem" }}
+                          href={c.on_chain.explorer_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {truncate(c.on_chain.tx_hash, 10, 8)} ↗
+                        </a>
+                      </div>
+                    )}
                     <div className="muted" style={{ marginTop: 4, fontSize: "0.75rem" }}>
                       {c.on_chain.method}
                     </div>

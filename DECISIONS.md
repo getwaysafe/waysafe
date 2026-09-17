@@ -5614,6 +5614,84 @@ and no page under `apps/site` -- a new file only. Written alongside
 against a reviewer's fix list this session could not locate in the
 repository; see that work's own record for what was and wasn't found.
 
+## D-55 — `session_key_alone` broadcast for real; a simulated rejection and a broadcast rejection are different evidentiary claims
+
+All three x402 bypass rejections (`session_key_alone`, `forged_envelope`,
+`session_key_no_waysafe`) were, until now, `simulateContract` calls
+against the deployed Safe -- real state, real signature checks, but
+`eth_call`, never a broadcast, never mined, no transaction hash. Honest
+about what it proved (the same signature-count check a broadcast would
+hit), but a strictly weaker evidentiary claim than a transaction a
+third party can look up on an explorer and see reverted for real. The
+landing page's "each rejected on-chain" overstated all three as if
+they were that stronger claim; they weren't.
+
+Chose `session_key_alone` as the one to actually broadcast -- the
+cleanest story (a stolen key, one signature, threshold 2, nothing
+forged) and the case whose revert (`GS020`, signature data too short)
+doesn't depend on interpreting a fabricated signature's recovered
+address, unlike `forged_envelope`.
+
+**A real finding, not just an operational step.** The first broadcast
+attempt used `@safe-global/protocol-kit`'s own `executeTransaction()`
+-- the same call `x402-safe.ts`'s existing `executeSafeTransaction`
+uses for the genuine 2-of-2 path, just with a hardcoded `gasLimit`
+instead of an estimate (estimation itself throws for a call guaranteed
+to revert, which is exactly why nothing had ever reached the chain
+before). That broadcast did not revert. Tx
+`0x6a3510ae998379de96e2fadde2e44161c3368ca8f4265dce3217ca58ec43088d`
+mined with `status: "success"` and a real ERC-20 `Transfer` event: 0.1
+USDC-equivalent test token actually moved from the Safe to the
+cosigner's own address. `protocol-kit`'s `executeTransaction()` is not
+a "broadcast exactly these bytes" primitive the way `simulateContract`
+with an explicit signature override is -- when the connected signer is
+itself a real Safe owner, it silently completes a short signature set
+with its own signature before sending, rather than submitting the
+incomplete set as-is. That is reasonable default behavior for a
+wallet-management SDK helping an owner finish a pending multisig
+transaction; it is exactly wrong for deliberately proving a threshold
+check fails. No harm done -- the recipient was Waysafe's own cosigner
+address, not an attacker's, and the only real cost was the gas spent
+(~0.0043 POL) -- but it was not the intended transaction, was not
+written to `proof.json`, and stopped the work here for a decision
+rather than proceeding on an incorrect premise silently.
+
+Fixed by bypassing `protocol-kit`'s `executeTransaction()` entirely: a
+raw `viem` `writeContract` call against the Safe's own
+`execTransaction` ABI (`SAFE_EXEC_TRANSACTION_ABI`, already exported
+from `x402-safe.ts`), with `sessionOnly.encodedSignatures()` passed
+exactly as-is (independently confirmed at 65 bytes -- one signature,
+not two, immediately before broadcasting) and an explicit `gas` limit
+(200,000, skipping `eth_estimateGas` deliberately). That broadcast, tx
+`0x98c7931e49573e78efc69b6bbfd600bbcdda525f9b562eb95460575d3329c84e`,
+reverted for real: `status: "reverted"`, 57,144 gas used (~0.0029
+POL), confirmed three independent ways -- a pre-broadcast
+`simulateContract` predicting `GS020`, the mined receipt's own status,
+and a direct replay of the exact mined call at its own block, which
+also reported `GS020`. Both temporary scripts that did this work were
+one-off and were never committed; `x402-safe.ts` itself was never
+modified.
+
+`proof.json` (both copies, kept identical): only `session_key_alone`'s
+`on_chain` object changed -- `submitted: true`, the real tx hash, and
+a Polygon Amoy explorer URL. `forged_envelope` and
+`session_key_no_waysafe` are untouched, still `submitted: false`, no
+hash -- deliberately: the contrast between "rejected before broadcast"
+and "broadcast and reverted on-chain" is the actual finding here, not
+something to smooth into uniform language. `/proof`'s on-chain
+rejections table now renders a real explorer link on that one row
+(reusing the same link pattern the settled-ALLOW section already had)
+and its intro paragraph states the split explicitly instead of
+describing all three as simulations. The landing page's "each rejected
+on-chain" became one sentence naming both claims: one broadcast and
+reverted with a linkable hash, two rejected by the Safe's own
+threshold logic before ever reaching the network.
+
+**Change cost if wrong:** low for the file changes (a JSON diff and
+two lines of page copy); the real cost already happened and was small
+-- roughly 0.0072 POL total across both broadcast attempts, testnet
+funds, no user or counterparty affected.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

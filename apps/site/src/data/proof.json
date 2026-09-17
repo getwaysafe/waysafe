@@ -55,10 +55,10 @@
       "revert_reason_gloss": "GS020: signatures data too short -- a real, stable Safe protocol error code, exactly what a 1-of-2 signature submission produces against a threshold-2 Safe.",
       "revert_reason_full": "The contract function \"execTransaction\" reverted with the following reason:\nGS020\n\nContract Call:\n  address:   0xFeCB8688Da42bC47AF08348E032007978C83CFb8\n  function:  execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)\n  args:                     (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582, 0, 0xa9059cbb000000000000000000000000fed88a56a2cd996be5f76a525570efcd8a0b74b500000000000000000000000000000000000000000000000000000000000186a0, 0, 0, 0, 0, 0x0000000000000000000000000000000000000000, 0x0000000000000000000000000000000000000000, 0x1157eb9bd8ea3ad9f17c2a278efc58d0989171feca91e25dd1149899d733481412af8dd013b4c96322ab1ff2766a156206d9e111ef397d87bd069c9252367a141c)\n\nDocs: https://viem.sh/docs/contract/simulateContract\nDetails: execution reverted: GS020\nVersion: viem@2.56.3",
       "on_chain": {
-        "submitted": false,
-        "method": "Rejected at gas estimation (eth_call / simulateContract) -- never submitted to the network, never mined, no transaction hash exists for this case.",
-        "tx_hash": null,
-        "explorer_url": null
+        "submitted": true,
+        "method": "Submitted and mined on-chain (execTransaction, broadcast directly with an explicit gas limit rather than estimated -- estimation itself would throw for a call guaranteed to revert). Reverted as expected: status \"reverted\", independently confirmed by replaying the exact mined call at its own block.",
+        "tx_hash": "0x98c7931e49573e78efc69b6bbfd600bbcdda525f9b562eb95460575d3329c84e",
+        "explorer_url": "https://amoy.polygonscan.com/tx/0x98c7931e49573e78efc69b6bbfd600bbcdda525f9b562eb95460575d3329c84e"
       }
     },
     {
