@@ -5756,6 +5756,79 @@ down; naming it does not create it, and leaving it unnamed would only
 make the threat model's own RCE section incomplete about its own worst
 case.
 
+## D-57 — all three x402 bypass cases broadcast for real; the simulation/broadcast gap D-55 named for one case is closed for all three
+
+D-55 broadcast `session_key_alone` alone and left `forged_envelope` and
+`session_key_no_waysafe` as `eth_call` simulations, with `/proof`
+arguing that gap was actually a strength (a call that never reached
+the chain never had the chance to cost gas or revert, which is true,
+but is also a claim resting entirely on this codebase's own report of
+what it ran). That argument doesn't survive contact with what a
+broadcast revert actually is: a public record on Polygon Amoy a third
+party can query and check for themselves, without trusting anything
+this repository says about what it did. A simulation is a call run
+against an RPC endpoint this codebase chose, reported by this
+codebase. Different evidentiary weight, not just different framing --
+D-55's own "stronger result" language conceded the wrong side of that
+comparison, and this entry deletes it rather than qualifies it
+further.
+
+Before broadcasting, checked gas (`amoy-fees.ts`: `getGasPrice` ~50
+gwei, comfortably under the 400 gwei spike this file has documented
+twice now) and the cosigner's balance (0.0531 POL -- down further
+since D-55, consistent with ordinary testnet gas drift, not a leak).
+Estimated cost per revert at roughly D-55's own 57k-gas precedent,
+concluded three reverts fit comfortably inside the balance, and
+proceeded.
+
+All three broadcast via the same raw-`viem`-`writeContract` path D-55
+built to bypass `protocol-kit`'s auto-completion (D-56): exact existing
+signature bytes, an explicit gas limit, no estimation. The RPC
+accepted all three into the mempool without objection -- the
+"stop and tell me, don't work around it" condition for a mempool
+refusal never triggered, so there is nothing to report there beyond
+its absence. All three mined `status: "reverted"`, each independently
+confirmed a second way by replaying the exact mined call at its own
+block:
+
+- `session_key_alone`: `0x5dcfce81647659ded7b0d4b4a55ab8faf2bf2562b2f301753cb99141dcf2531e`, `GS020`
+- `forged_envelope`: `0xa64add925e931c2e4fef37bb78acc00f8e896bd625166f5a792efaa82c0e8ae1`, `GS026`
+- `session_key_no_waysafe`: `0xb8d81aae6c2c8d66aa3044c421635eac49395239a7f5179306586e4e12a7ed58`, `GS020`
+
+Total gas across all three: ~0.0089 POL (57,156 + 62,738 + 57,156 gas
+at ~50 gwei), leaving the cosigner at ~0.0443 POL. `session_key_alone`
+and `session_key_no_waysafe` produced different transaction hashes
+despite identical Safe-transaction data (same session key, same
+transfer, same Safe-internal nonce, since a reverted call never
+advances that nonce on-chain) -- each is still a genuinely distinct,
+uniquely-hashed transaction because the *outer* EOA-level nonce (the
+cosigner's own account nonce, incremented by `viem` on every send)
+differs between them, not the inner Safe payload.
+
+`proof.json` (both copies): every `onchain_rejections` row now carries
+`on_chain.submitted: true`, a real tx hash, and an Amoy explorer URL --
+`revert_reason_full`/`_summary` updated to the text captured by
+replaying each mined transaction at its own block (the actual on-chain
+record), not the pre-broadcast simulation's prediction, though the two
+agreed in every case; `revert_reason_gloss` unchanged, since the GS
+codes themselves didn't change. `/proof`'s own paragraph arguing
+non-broadcast was the stronger result is deleted, not qualified --
+replaced with a single accurate sentence: all three were broadcast and
+reverted, each row links to its transaction.
+`docs/THREAT-MODEL.md` §6.2 rewritten to cite the three hashes
+directly as the "not simulated" evidence, and to say plainly that
+`x402.bypass.test.ts` itself still only simulates (a real, cheap
+regression check, not the source of the broadcast claim) -- closing
+the exact contradiction between that section and `/proof` this
+session's own audit (see the next entry) was asked to find. The
+landing page's D-55 hedge ("one broadcast... two rejected... before
+ever reaching the network") is reverted to its original, now-accurate
+"each rejected on-chain" -- the distinction that sentence existed to
+draw no longer exists to draw.
+
+**Change cost if wrong:** low for the files; the real cost already
+happened and was small -- ~0.0089 POL, testnet funds, no counterparty.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

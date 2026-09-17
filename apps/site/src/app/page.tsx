@@ -75,9 +75,8 @@ export default function HomePage() {
               /proof
             </Link>{" "}
             (captured {proofCapturedDate}): three separate attempts to move funds with fewer than
-            both signatures — one broadcast and reverted on-chain with a linkable transaction
-            hash, two rejected by the Safe&rsquo;s own threshold logic before ever reaching the
-            network — each with the real revert reason recorded alongside it.
+            both signatures, each rejected on-chain, each with the real revert reason recorded
+            alongside it.
           </p>
           <p className="muted" style={{ fontSize: "1.02rem", lineHeight: 1.7, marginTop: 20 }}>
             What this is not: Waysafe is non-custodial — it never holds funds, never handles a full

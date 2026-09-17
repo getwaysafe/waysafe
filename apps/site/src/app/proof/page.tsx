@@ -187,17 +187,8 @@ export default function ProofPage() {
 
         <h2 style={{ marginTop: 48 }}>On-chain bypass rejections (Polygon Amoy, live)</h2>
         <p style={{ maxWidth: 720 }}>
-          Two of the three cases below are <code>eth_call</code> simulations (viem&rsquo;s{" "}
-          <code>simulateContract</code>) against the deployed Safe&rsquo;s actual on-chain state —
-          never broadcast, so neither has a transaction hash, deliberately: a transaction that
-          fails <em>before</em> submission never had the chance to cost gas or get mined, which is
-          a <strong>stronger</strong> result than a broadcast revert would be, not a gap in
-          what&rsquo;s shown here. The third, <code>session_key_alone</code>, was broadcast for
-          real — sent with an explicit gas limit rather than estimated (estimation itself throws
-          for a call this doomed) — and actually mined with status <code>reverted</code>, giving
-          it a real transaction hash the other two don&rsquo;t have and can&rsquo;t honestly claim.
-          These are two different evidentiary claims, not the same proof shown two ways, and the
-          &ldquo;On-chain&rdquo; column below says which is which for each row.
+          All three were broadcast to Polygon Amoy and reverted on-chain. Each row links to the
+          transaction.
         </p>
         <div className="table-scroll">
           <table>
