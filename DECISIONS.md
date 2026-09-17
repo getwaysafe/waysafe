@@ -5692,6 +5692,70 @@ two lines of page copy); the real cost already happened and was small
 -- roughly 0.0072 POL total across both broadcast attempts, testnet
 funds, no user or counterparty affected.
 
+## D-56 — the cosigner key alone can complete a pending Safe transaction; the 2-of-2 is not a defense against holding it
+
+D-55's first broadcast attempt was not an operational mistake to shrug
+off -- it demonstrated a real property of this system that wasn't
+written down anywhere until now. `@safe-global/protocol-kit`'s
+`executeTransaction()`, called with the cosigner's own key as the
+connected signer, silently completed a `SafeTransaction` carrying only
+the session key's signature and broadcast it as a genuine 2-of-2 --
+tx `0x6a3510ae998379de96e2fadde2e44161c3368ca8f4265dce3217ca58ec43088d`,
+mined `status: "success"`, a real 0.1 USDC-equivalent transfer, no
+second real-world decision involved at all.
+
+**What this does and does not change about the security claim D-41 /
+D-49 already make.** The Safe's on-chain threshold-2 check genuinely
+defends against an attacker who holds *only* the session key -- that
+is exactly what `x402.bypass.test.ts` and D-55's own broadcasts prove,
+live, against the real deployed contract, and nothing here weakens
+that. What the contract's 2-of-2 check was never designed to defend
+against, and does not defend against, is an attacker who holds the
+*cosigner* key -- because Waysafe's cosigner is, by construction, one
+of the Safe's two legitimate owners. Given any transaction that
+already carries one real owner signature (which is exactly the shape
+of `session_signature` on every genuine `POST /v1/enforcement/x402`
+request -- an agent's real, valid signature over a real intended
+payment, submitted to Waysafe as part of the normal flow, before any
+decision is even made), the cosigner key is *sufficient on its own* to
+complete and broadcast it, through the same SDK path this codebase
+already uses for genuine settlement. The contract has no way to tell
+"Waysafe's server decided ALLOW and is settling accordingly" apart
+from "the cosigner key signed this" -- those are the same fact to
+`execTransaction`.
+
+**What actually stands between a held cosigner key and an unauthorized
+settlement is application logic, not the contract:** `server.ts`'s own
+`if (decision.response.decision === Decision.ALLOW && coSignature &&
+body.data.session_signature)` gate, upstream of ever calling
+`settleTwoOfTwoTransfer`. That is a real, load-bearing control under
+ordinary operation -- but it is source code running inside the same
+process the cosigner key already lives in (§2.1), not something the
+Safe contract enforces independently. An attacker with RCE on the API
+process does not need to find or trick that `if` statement; they have
+the cosigner key directly and can call the same broadcast primitives
+this codebase already exposes (`executeSafeTransaction`,
+`settleTwoOfTwoTransfer`, or `protocol-kit` directly, as D-55's first
+attempt shows by accident) against any session-signed transaction they
+can find -- including ones sitting in a real request body they're
+already intercepting, having compromised the process those requests
+arrive at.
+
+Added to `docs/THREAT-MODEL.md` §2.1 (RCE on the API process), not
+`/proof`: `/proof` demonstrates real security properties with real
+captured evidence for a reader deciding whether to trust the system;
+this is the opposite kind of finding -- what does *not* protect the
+system under a compromise the threat model already names as the worst
+case. It belongs where the worst case is already being reasoned about,
+not next to the evidence that things work correctly under normal
+operation.
+
+**Change cost if wrong:** low -- documentation only, no code changed.
+The underlying exposure is real regardless of whether it's written
+down; naming it does not create it, and leaving it unnamed would only
+make the threat model's own RCE section incomplete about its own worst
+case.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
