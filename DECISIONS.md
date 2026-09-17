@@ -5208,6 +5208,52 @@ layout bug.
 `tsconfig.typecheck.json` sweep, both unaffected by `apps/site` per its
 exclusion above) and `npm run build:site` are both green.
 
+---
+
+## D-51 — `/docs` and `/proof` 404'd live on `waysafe.ai`: the deploy's `vercel.json` was missing `cleanUrls`
+
+A reviewer hit real 404s on both routes post-launch. Root cause,
+confirmed against the deployed copy at `~/waysafe-site-dist` (a
+standalone directory this repo's build output gets copied into for the
+actual Vercel deploy, not itself part of this repo): its `vercel.json`
+was `{"framework":null,"buildCommand":null,"installCommand":null,
+"outputDirectory":"."}` -- no `cleanUrls`. `output: "export"` (D-50)
+emits `docs.html`/`proof.html` next to `docs/`/`proof/` index-style
+directories; without `cleanUrls: true`, Vercel serves the extensionless
+path only when framework detection would normally rewrite it, and
+`framework: null` (deliberate, since this is a static export with no
+build step for Vercel to run) turns that off too. Static hosts serving
+a Next static export need `cleanUrls` explicitly -- `framework: null`
+does not imply it.
+
+Fixed at the source rather than at the deploy copy: `apps/site/vercel.json`
+is now the canonical file (`cleanUrls: true` added), and `apps/site/package.json`
+gained a `postbuild` script (`cp vercel.json out/vercel.json`) that npm
+runs automatically after any `next build` -- so `out/` always carries
+the correct config and a manual copy into `~/waysafe-site-dist` can't
+silently drop it again. No change to `next.config.ts`'s `output: "export"`
+itself; this was purely a hosting-config gap, not an export-shape bug.
+
+**Change cost if wrong:** low. `vercel.json` is inert until the next
+deploy; nothing in `apps/site`'s own build or tests depends on it.
+
+**D-51 follow-up: a second, unrelated host-canonicalization gap in the
+same file.** A later review found `/proof`'s nav pointing at
+`www.waysafe.ai` while `/` and `/docs` pointed at the apex --
+confirmed this cannot be a source bug: `apps/site/src/app/layout.tsx`'s
+nav is one shared component with root-relative `href`s (`/docs`,
+`/proof`), identical on every page, so nothing in this repo could make
+one page's nav resolve to a different host than another's. The actual
+cause is Vercel's own domain configuration (`www.waysafe.ai` added as
+its own alias rather than a redirect to the apex) -- not fixable by
+editing a page. `output: "export"` also means `next.config.ts`'s own
+`redirects()` is unavailable (Next disables it under static export), so
+the fix lives in `vercel.json` itself: a `redirects` entry matching on
+`has: [{ type: "host", value: "www.waysafe.ai" }]`, 308 (`permanent:
+true`) to `https://waysafe.ai/:path*`. Apex chosen as canonical to match
+every existing reference to the site (this file, the film, the SDK
+docs) -- none ever say `www.`.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

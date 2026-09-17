@@ -86,6 +86,12 @@ const BypassProofBodySchema = z.object({
 
 const CardReplayBodySchema = z.object({
   mandate_id: z.string().min(1),
+  // D-52: "film" (default) is /film's own two scenarios, unchanged.
+  // "proof" is /proof's own set (added for D-52's ALLOW + isolated-DENY
+  // requirement) -- a separate array rather than editing CARD_REPLAY_SCENARIOS
+  // in place, so /film's captions (which quote these exact numbers) never
+  // see a value they don't expect.
+  variant: z.enum(["film", "proof"]).default("film"),
 });
 
 /** Two recorded-shaped attempts, chosen to match `/film`'s Act 1 captions
@@ -96,8 +102,25 @@ const CardReplayBodySchema = z.object({
  * `DENY_MERCHANT_NOT_ALLOWLISTED` -- a real decision, not a scripted one;
  * see `stripe-issuing.test.ts` for the same rule proven directly. */
 const CARD_REPLAY_SCENARIOS = [
-  { label: "$1,240.00 -- unknown merchant, card ending 4421", amountCents: 124_000, networkId: "unknown_merchant_9911" },
-  { label: "$89.99 -- recurring, unknown", amountCents: 8_999, networkId: "unknown_recurring_2207" },
+  { label: "$1,240.00 -- unknown merchant, card ending 4421", amountCents: 124_000, networkId: "unknown_merchant_9911", merchantName: "UNKNOWN MERCHANT" },
+  { label: "$89.99 -- recurring, unknown", amountCents: 8_999, networkId: "unknown_recurring_2207", merchantName: "UNKNOWN MERCHANT" },
+] as const;
+
+/** D-52: /proof's own three attempts, run against the same mandate in this
+ * order so the cumulative check below is real and not coincidental.
+ * "goodbeans_card_9001" is the one `network_mid` `lib/demo/policy.ts`'s
+ * `MERCHANT_POLICY` allowlists for cards -- everything else here is
+ * deliberately unlisted. Per-transaction cap is $10.00 (1000c); cumulative
+ * cap is $20.00/day (2000c).
+ *   1. $4.50, allowed merchant, under both caps       -> ALLOW
+ *   2. $8.99, unlisted merchant, under both caps       -> DENY, merchant rule only
+ *      (running total after #1: 450c; 450+899=1349c, still under 2000c)
+ *   3. $15.00, allowed merchant, over the per-tx cap   -> DENY, amount rule only
+ *      (running total after #1+#2's allowed amount only: 450+1500=1950c, still under 2000c) */
+const PROOF_CARD_REPLAY_SCENARIOS = [
+  { label: "$4.50 -- GoodBeans Card Program, within the mandate", amountCents: 450, networkId: "goodbeans_card_9001", merchantName: "GOODBEANS CARD PROGRAM" },
+  { label: "$8.99 -- unlisted merchant, otherwise within limits", amountCents: 899, networkId: "unknown_subscription_5210", merchantName: "UNKNOWN MERCHANT" },
+  { label: "$15.00 -- GoodBeans Card Program, over the per-transaction cap", amountCents: 1_500, networkId: "goodbeans_card_9001", merchantName: "GOODBEANS CARD PROGRAM" },
 ] as const;
 
 export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos): void {
@@ -277,13 +300,14 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
       instruments: repos.instruments,
     };
 
+    const scenarios = body.data.variant === "proof" ? PROOF_CARD_REPLAY_SCENARIOS : CARD_REPLAY_SCENARIOS;
     const attempts = [];
-    for (const scenario of CARD_REPLAY_SCENARIOS) {
+    for (const scenario of scenarios) {
       const authorization = {
         id: `iauth_demo_${scenario.networkId}`,
         amount: scenario.amountCents,
         currency: "usd",
-        merchant_data: { network_id: scenario.networkId, category_code: "5999", name: "UNKNOWN MERCHANT" },
+        merchant_data: { network_id: scenario.networkId, category_code: "5999", name: scenario.merchantName },
         card: { id: cardId, metadata: { waysafe_instrument_id: instrument.id } },
         pending_request: { amount: scenario.amountCents },
       } as unknown as Stripe.Issuing.Authorization;

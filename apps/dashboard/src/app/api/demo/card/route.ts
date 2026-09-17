@@ -7,6 +7,10 @@ export const runtime = "nodejs";
 
 interface CardBody {
   mandate_id: string;
+  /** D-52: "proof" selects /proof's own ALLOW + isolated-DENY scenario
+   * set (`PROOF_CARD_REPLAY_SCENARIOS`, apps/api/src/demo/routes.ts);
+   * omitted (or "film") keeps /film's own two scenarios unchanged. */
+  variant?: "film" | "proof";
 }
 
 interface CardAttempt {
@@ -51,7 +55,7 @@ export async function POST(request: Request) {
 
   const result = await callDemoRoute<CardReplayResponse | { error: string }>(
     "/v1/demo/enforcement/stripe-issuing",
-    { mandate_id: body.mandate_id },
+    { mandate_id: body.mandate_id, variant: body.variant ?? "film" },
   );
 
   if (result.status !== 200 || !("attempts" in result.body)) {

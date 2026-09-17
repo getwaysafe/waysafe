@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "cp vercel.json out/vercel.json",
     "clean": "rm -rf .next out"
   },
   "dependencies": {

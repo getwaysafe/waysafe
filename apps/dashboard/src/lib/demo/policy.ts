@@ -12,7 +12,18 @@ import { DEMO_INSTRUCTION, GOODBEANS_PAY_TO } from "./constants";
  * part of what makes the fallback a fallback.
  */
 const MERCHANT_POLICY: Policy["merchants"] = {
-  allow: [{ scheme: "onchain_address", value: GOODBEANS_PAY_TO, label: "GoodBeans API" }],
+  allow: [
+    { scheme: "onchain_address", value: GOODBEANS_PAY_TO, label: "GoodBeans API" },
+    // D-52 (/proof card section): a card-rail-appropriate allow entry.
+    // The onchain_address entry above never matches a card authorization
+    // (cards assert network_mid, never an onchain address), so without
+    // this the card mandate's allowlist is structurally empty for cards
+    // and every card attempt DENYs on the merchant rule regardless of
+    // amount. Only used by PROOF_CARD_REPLAY_SCENARIOS's allowed case
+    // (routes.ts) -- /film's own two scenarios use unrelated network_ids
+    // and are unaffected by this addition.
+    { scheme: "network_mid", value: "goodbeans_card_9001", label: "GoodBeans Card Program" },
+  ],
   deny: [],
   unlisted: "DENY",
   step_up_on_first_use: false,

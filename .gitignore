@@ -8,3 +8,4 @@ coverage/
 .next/
 next-env.d.ts
 out/
+copy-review.md

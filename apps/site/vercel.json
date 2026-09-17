@@ -1,0 +1,15 @@
+{
+  "framework": null,
+  "buildCommand": null,
+  "installCommand": null,
+  "outputDirectory": ".",
+  "cleanUrls": true,
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.waysafe.ai" }],
+      "destination": "https://waysafe.ai/:path*",
+      "permanent": true
+    }
+  ]
+}

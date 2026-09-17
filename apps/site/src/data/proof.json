@@ -1,44 +1,49 @@
 {
-  "captured_at": "2026-09-16T03:21:27.978Z",
+  "captured_at": "2026-09-17T03:46:56.514Z",
   "note": "One real run against the local Waysafe stack (apps/api + apps/dashboard's /api/demo routes), captured once and committed as static JSON. Not a live endpoint.",
   "mandates": [
     {
       "label": "x402 (stablecoin) mandate",
-      "mandate_id": "mdt_01m2m39htjpkzxzb9v5bxy8fk3",
-      "policy_hash": "682927ac078bd3f75a77a8995a65bf2dfc22a599ee9683136a58eade64150cba",
-      "instrument_id": "inst_01m2m39m3wew5md4nn8fnmaatb",
+      "mandate_id": "mdt_01m2pqj4j7s54tmr4newww8mnj",
+      "policy_hash": "150fd7b9f2fd8463822a489d8a5f72a419556dfa1926b41fa9a3e8f5cd1df894",
+      "instrument_id": "inst_01m2pqj7k8deyx47hq7ehvesgc",
       "safe_address": "0xFeCB8688Da42bC47AF08348E032007978C83CFb8",
       "summary": "Up to $20/day, $10 per transaction, only the allowed merchant."
     },
     {
       "label": "Card mandate",
-      "mandate_id": "mdt_01m2m39mr0dehakcatmb8trt1h",
-      "policy_hash": "9bfb6bad76453190bddf1f82b61149320eb4abd76fb10cff25c2777d292497cb",
+      "mandate_id": "mdt_01m2pqje1bacph1kdxkbf14m8d",
+      "policy_hash": "4492b40a03913262ebe7bffa3627f388a4e117e4821220d001d66e5fedd29e2d",
       "summary": "Up to $20/day, $10 per transaction, only the allowed merchant."
     }
   ],
   "card_attempts": [
     {
-      "label": "$1,240.00 -- unknown merchant, card ending 4421",
-      "amount_cents": 124000,
-      "decision": "DENY",
+      "label": "$4.50 -- GoodBeans Card Program, within the mandate",
+      "amount_cents": 450,
+      "decision": "ALLOW",
       "reason_codes": [
-        "DENY_MERCHANT_NOT_ALLOWLISTED",
-        "DENY_TRANSACTION_LIMIT_EXCEEDED",
-        "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+        "ALLOW_WITHIN_MANDATE"
       ],
-      "authorization_id": "auth_01m2m3a32rshz5aere0e1ebvcy"
+      "authorization_id": "auth_01m2pqjnj4ca78qdz5e4kxzwy0"
     },
     {
-      "label": "$89.99 -- recurring, unknown",
-      "amount_cents": 8999,
+      "label": "$8.99 -- unlisted merchant, otherwise within limits",
+      "amount_cents": 899,
       "decision": "DENY",
       "reason_codes": [
-        "DENY_MERCHANT_NOT_ALLOWLISTED",
-        "DENY_TRANSACTION_LIMIT_EXCEEDED",
-        "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+        "DENY_MERCHANT_NOT_ALLOWLISTED"
       ],
-      "authorization_id": "auth_01m2m3a3td2f28rv9ge60ebmhs"
+      "authorization_id": "auth_01m2pqjpt5j6gczxg2jrbv5v60"
+    },
+    {
+      "label": "$15.00 -- GoodBeans Card Program, over the per-transaction cap",
+      "amount_cents": 1500,
+      "decision": "DENY",
+      "reason_codes": [
+        "DENY_TRANSACTION_LIMIT_EXCEEDED"
+      ],
+      "authorization_id": "auth_01m2pqjqtm8j7w1vvc4k6stkah"
     }
   ],
   "onchain_rejections": [
@@ -46,19 +51,43 @@
       "name": "session_key_alone",
       "description": "The stolen session key alone, threshold 2, only 1 signature present.",
       "rejected": true,
-      "revert_reason_summary": "GS020: signatures data too short"
+      "revert_reason_summary": "execution reverted: GS020",
+      "revert_reason_gloss": "GS020: signatures data too short -- a real, stable Safe protocol error code, exactly what a 1-of-2 signature submission produces against a threshold-2 Safe.",
+      "revert_reason_full": "The contract function \"execTransaction\" reverted with the following reason:\nGS020\n\nContract Call:\n  address:   0xFeCB8688Da42bC47AF08348E032007978C83CFb8\n  function:  execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)\n  args:                     (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582, 0, 0xa9059cbb000000000000000000000000fed88a56a2cd996be5f76a525570efcd8a0b74b500000000000000000000000000000000000000000000000000000000000186a0, 0, 0, 0, 0, 0x0000000000000000000000000000000000000000, 0x0000000000000000000000000000000000000000, 0xcaf5ec03c009336b8094729407ae35a9164ab4c6e3ab1d447ffe29e757fcf4d861b601c1242dd2e27a7b4bc4a8c21c6e2c38971b78053e1fb565c1b4b4618e1e1c)\n\nDocs: https://viem.sh/docs/contract/simulateContract\nDetails: execution reverted: GS020\nVersion: viem@2.56.3",
+      "on_chain": {
+        "submitted": false,
+        "method": "Rejected at gas estimation (eth_call / simulateContract) -- never submitted to the network, never mined, no transaction hash exists for this case.",
+        "tx_hash": null,
+        "explorer_url": null
+      }
     },
     {
       "name": "forged_envelope",
       "description": "A genuine Waysafe co-signature plus a fabricated session-key signature.",
       "rejected": true,
-      "revert_reason_summary": "The contract function \"execTransaction\" reverted with the following reason:"
+      "revert_reason_summary": "execution reverted: GS026",
+      "revert_reason_gloss": "GS026: invalid owner provided -- the fabricated signature's recovered signer is not one of the Safe's two real owners.",
+      "revert_reason_full": "The contract function \"execTransaction\" reverted with the following reason:\nGS026\n\nContract Call:\n  address:   0xFeCB8688Da42bC47AF08348E032007978C83CFb8\n  function:  execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)\n  args:                     (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582, 0, 0xa9059cbb000000000000000000000000fed88a56a2cd996be5f76a525570efcd8a0b74b500000000000000000000000000000000000000000000000000000000000186a0, 0, 0, 0, 0, 0x0000000000000000000000000000000000000000, 0x0000000000000000000000000000000000000000, 0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababe044ed97c728ea721acbbef86dd4994b9b5c6f869795986dac44373107133491369e0523fe98e41eaa65c283f40f30e7e99d83e9b68f0674e7a127752eb72f7f1b)\n\nDocs: https://viem.sh/docs/contract/simulateContract\nDetails: execution reverted: GS026\nVersion: viem@2.56.3",
+      "on_chain": {
+        "submitted": false,
+        "method": "Rejected at gas estimation (eth_call / simulateContract) -- never submitted to the network, never mined, no transaction hash exists for this case.",
+        "tx_hash": null,
+        "explorer_url": null
+      }
     },
     {
       "name": "session_key_no_waysafe",
       "description": "A real session-key signature with no Waysafe signature at all.",
       "rejected": true,
-      "revert_reason_summary": "GS020: signatures data too short"
+      "revert_reason_summary": "execution reverted: GS020",
+      "revert_reason_gloss": "GS020: signatures data too short -- a real, stable Safe protocol error code, exactly what a 1-of-2 signature submission produces against a threshold-2 Safe.",
+      "revert_reason_full": "The contract function \"execTransaction\" reverted with the following reason:\nGS020\n\nContract Call:\n  address:   0xFeCB8688Da42bC47AF08348E032007978C83CFb8\n  function:  execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures)\n  args:                     (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582, 0, 0xa9059cbb000000000000000000000000fed88a56a2cd996be5f76a525570efcd8a0b74b500000000000000000000000000000000000000000000000000000000000186a0, 0, 0, 0, 0, 0x0000000000000000000000000000000000000000, 0x0000000000000000000000000000000000000000, 0xcaf5ec03c009336b8094729407ae35a9164ab4c6e3ab1d447ffe29e757fcf4d861b601c1242dd2e27a7b4bc4a8c21c6e2c38971b78053e1fb565c1b4b4618e1e1c)\n\nDocs: https://viem.sh/docs/contract/simulateContract\nDetails: execution reverted: GS020\nVersion: viem@2.56.3",
+      "on_chain": {
+        "submitted": false,
+        "method": "Rejected at gas estimation (eth_call / simulateContract) -- never submitted to the network, never mined, no transaction hash exists for this case.",
+        "tx_hash": null,
+        "explorer_url": null
+      }
     }
   ],
   "allow_attempt": {
@@ -66,11 +95,17 @@
     "reason_codes": [
       "ALLOW_WITHIN_MANDATE"
     ],
-    "mandate_id": "mdt_01m2m39htjpkzxzb9v5bxy8fk3",
+    "mandate_id": "mdt_01m2pqj4j7s54tmr4newww8mnj",
     "safe_address": "0xFeCB8688Da42bC47AF08348E032007978C83CFb8",
     "settlement": {
       "ok": false,
       "note": "Decision was real (ALLOW); on-chain settlement did not complete in this run (testnet gas)."
+    },
+    "on_chain": {
+      "submitted": false,
+      "method": "Not submitted -- the cosigner's own gas balance was insufficient for this broadcast (testnet POL, not a code failure). See DECISIONS.md D-42/D-49/D-50's own standing note on this.",
+      "tx_hash": null,
+      "explorer_url": null
     }
   },
   "evidence": {
@@ -78,130 +113,153 @@
     "algorithm": "Ed25519",
     "events": [
       {
-        "id": "ev_01m2m39k2qcqzabjtvpr09z8e9",
+        "id": "ev_01m2pqj654n4v7rwvvb1tba7kf",
         "organization_id": "org_demo",
-        "sequence": 413,
+        "sequence": 420,
         "type": "passkey.registered",
         "subject_type": "principal",
-        "subject_id": "prin_01m2m39he5y2vx6gpjnmxpjn2c",
+        "subject_id": "prin_01m2pqj3dw52vxh0c1zvjjzfat",
         "payload": {
-          "credential_id": "w07mSYU0oyDHd2sMMKRbfg"
+          "credential_id": "QdCA9RqtzFXKBo7sR7R_SQ"
         },
-        "previous_hash": "a7d22f68884ae2f8f5840f971b7c29808b9d1ac43bf59b896655385f2cedd275",
-        "hash": "a4c274ed3e50d3a260e2ecb46521083f76a90f818bede9d32b260a7d2317980a",
-        "signature": "OXC5PIxOuUVSRxtdGb21ANB4XLOPOJC0vm9tvyRRt5rdTpy27vuO6UKvnKoG+sIm7gO83numGABat7coYIUUDw==",
-        "created_at": "2026-09-16T03:13:47.032Z"
+        "previous_hash": "591804236a55fb4c9501cba544803ff87c227f460035a2446321b03d49e97056",
+        "hash": "553f7deb2c2a8e4052355bde497c5910a12f8e14b27728cdf31c0cba719ea363",
+        "signature": "RTzH+1BqWTwW4p4ZaFGUpcERl1AWitqfvjT+taMohbJqJBYd8iGbM13l5NFpvqTZjjlOF8pRFeUx7fT1pnmgCg==",
+        "created_at": "2026-09-17T03:46:28.907Z"
       },
       {
-        "id": "ev_01m2m39kvadxjnvwhjpra9yxht",
+        "id": "ev_01m2pqj7aa4t4fesn55eb8vya3",
         "organization_id": "org_demo",
-        "sequence": 414,
+        "sequence": 421,
         "type": "mandate.authenticated",
         "subject_type": "mandate_version",
-        "subject_id": "mdv_01m2m39htjzj0b8y700wgbv2jj",
+        "subject_id": "mdv_01m2pqj4j7tgsr7pc2emqzyj31",
         "payload": {
-          "credential_id": "w07mSYU0oyDHd2sMMKRbfg"
+          "credential_id": "QdCA9RqtzFXKBo7sR7R_SQ"
         },
-        "previous_hash": "a4c274ed3e50d3a260e2ecb46521083f76a90f818bede9d32b260a7d2317980a",
-        "hash": "ad2063867b616d01446e0db3314bed600cdd19db941d02640934114ccf102f62",
-        "signature": "kKpvhVO6Zf2RTffsoQeAjMdbZknad0jfluRzpBTSET3uzyKvY6XjxP1aeWwdNyR4vPI6G0ZhGX/64I5KQILpBA==",
-        "created_at": "2026-09-16T03:13:47.032Z"
+        "previous_hash": "553f7deb2c2a8e4052355bde497c5910a12f8e14b27728cdf31c0cba719ea363",
+        "hash": "1bb22d341b0bc4fbc5bcdb53f74a149c35c255bb38ae3ca7d194f13b7e66bc05",
+        "signature": "+KrqqtA/s9j4GcOjPtjwIaJiBvnOLkGmfn6qL2d0A0o4xrYfl8qJkMtqTxYp5tzFFW1Uqq1/la/ro7Pv8A+yCA==",
+        "created_at": "2026-09-17T03:46:28.907Z"
       },
       {
-        "id": "ev_01m2m39ndx2xb3gaqa8250pbah",
+        "id": "ev_01m2pqjeqvcdsczzqxmk34j2w8",
         "organization_id": "org_demo",
-        "sequence": 415,
+        "sequence": 422,
         "type": "passkey.registered",
         "subject_type": "principal",
-        "subject_id": "prin_01m2m39mf6mrp6qx1x299ha08m",
+        "subject_id": "prin_01m2pqjdt618k2yq106fchn19m",
         "payload": {
-          "credential_id": "O2i74n-_rmGHpYQwfro6LA"
+          "credential_id": "XEiYNp3mDK_FY7q54fygaQ"
         },
-        "previous_hash": "ad2063867b616d01446e0db3314bed600cdd19db941d02640934114ccf102f62",
-        "hash": "77b9fa93bf6470b61296eaa33b012f3c105c4054c8f09dc4d8451da8caeb239a",
-        "signature": "qwG4rNdEFxW8nRi229UOg6PPeA5vHiaVqR0/0GKBYUOea0ehamgjCHT1nPtyi0PT0I1lfXwtxauZzrODvNNlDQ==",
-        "created_at": "2026-09-16T03:13:49.704Z"
+        "previous_hash": "1bb22d341b0bc4fbc5bcdb53f74a149c35c255bb38ae3ca7d194f13b7e66bc05",
+        "hash": "dbe00896157abb17a6afca2305b8644e6a58560b29a23849f8edb2b32f798b9f",
+        "signature": "SWC5wQnyTyW3YPpfZv1Jr5AMYNyguJ28OU/n4sE+m0OWyU0smeK07MW1Os5DtwbSaDm3eiXaWw523hsGh7NYAA==",
+        "created_at": "2026-09-17T03:46:38.139Z"
       },
       {
-        "id": "ev_01m2m39p2fzzsygw2mpt9e74ad",
+        "id": "ev_01m2pqjfef80n0w0efwdasm21d",
         "organization_id": "org_demo",
-        "sequence": 416,
+        "sequence": 423,
         "type": "mandate.authenticated",
         "subject_type": "mandate_version",
-        "subject_id": "mdv_01m2m39mr0wkh5navjtfzw3qqy",
+        "subject_id": "mdv_01m2pqje1b0q54kp5ma5fp0j83",
         "payload": {
-          "credential_id": "O2i74n-_rmGHpYQwfro6LA"
+          "credential_id": "XEiYNp3mDK_FY7q54fygaQ"
         },
-        "previous_hash": "77b9fa93bf6470b61296eaa33b012f3c105c4054c8f09dc4d8451da8caeb239a",
-        "hash": "3b65e3f208668ca5fc448699af01f707df5ab6ba28b26f878dd0aec1cedd06ec",
-        "signature": "FUvDkibEJna6L1bSfmE+e8knFDxs2R42tMVP5ICmnouFW25HeOSWuT8AXfxX3vGWsuI3ti/zkFKLkbMp0pN/Cw==",
-        "created_at": "2026-09-16T03:13:49.704Z"
+        "previous_hash": "dbe00896157abb17a6afca2305b8644e6a58560b29a23849f8edb2b32f798b9f",
+        "hash": "6369afea2f1fe16e47d490e5b9c5871c11e0a14f21dd764f316c77d23cfa254a",
+        "signature": "rYrqyAvY/hfn5waRJnQVDXHoN1IbUB8uslTv+0nytvbEeJmY6QI7KXdGwO4sIrEjVEbku1EyUzJgl1p3E0g1CQ==",
+        "created_at": "2026-09-17T03:46:38.139Z"
       },
       {
-        "id": "ev_01m2m3a3fjkd3zfsq4drsx3801",
+        "id": "ev_01m2pqjp8rcj4542zp712ng397",
         "organization_id": "org_demo",
-        "sequence": 417,
+        "sequence": 424,
         "type": "enforcement.stripe_issuing.decision",
         "subject_type": "authorization",
-        "subject_id": "auth_01m2m3a32rshz5aere0e1ebvcy",
+        "subject_id": "auth_01m2pqjnj4ca78qdz5e4kxzwy0",
         "payload": {
-          "amount": 124000,
-          "card_id": "ic_demo_mdt_01m2m39mr0dehakcatmb8trt1h",
+          "amount": 450,
+          "card_id": "ic_demo_mdt_01m2pqje1bacph1kdxkbf14m8d",
+          "currency": "USD",
+          "decision": "ALLOW",
+          "merchant": {
+            "mcc": "5999",
+            "network_mid": "goodbeans_card_9001"
+          },
+          "reason_codes": [
+            "ALLOW_WITHIN_MANDATE"
+          ],
+          "instrument_id": "inst_01m2pqjmrwcepvkqgrq500szhq",
+          "stripe_authorization_id": "iauth_demo_goodbeans_card_9001"
+        },
+        "previous_hash": "6369afea2f1fe16e47d490e5b9c5871c11e0a14f21dd764f316c77d23cfa254a",
+        "hash": "550453740f7d7d261fac9d139f6c748ac8bfe15fbf628267bc1b9333dc16a37a",
+        "signature": "1GWmtrYgkyAHyPNNMbqg+N1jxgK8UMpPPod7galjWZiyItG2YCxGAWL24FKzQiv0PeGRZlUfVrI/vqPJ+AkcDw==",
+        "created_at": "2026-09-17T03:46:44.636Z"
+      },
+      {
+        "id": "ev_01m2pqjq8kwannwyq9xdce47np",
+        "organization_id": "org_demo",
+        "sequence": 425,
+        "type": "enforcement.stripe_issuing.decision",
+        "subject_type": "authorization",
+        "subject_id": "auth_01m2pqjpt5j6gczxg2jrbv5v60",
+        "payload": {
+          "amount": 899,
+          "card_id": "ic_demo_mdt_01m2pqje1bacph1kdxkbf14m8d",
           "currency": "USD",
           "decision": "DENY",
           "merchant": {
             "mcc": "5999",
-            "network_mid": "unknown_merchant_9911"
+            "network_mid": "unknown_subscription_5210"
           },
           "reason_codes": [
-            "DENY_MERCHANT_NOT_ALLOWLISTED",
-            "DENY_TRANSACTION_LIMIT_EXCEEDED",
-            "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+            "DENY_MERCHANT_NOT_ALLOWLISTED"
           ],
-          "instrument_id": "inst_01m2m3a2h8dyxzf8yff1m3vrcp",
-          "stripe_authorization_id": "iauth_demo_unknown_merchant_9911"
+          "instrument_id": "inst_01m2pqjmrwcepvkqgrq500szhq",
+          "stripe_authorization_id": "iauth_demo_unknown_subscription_5210"
         },
-        "previous_hash": "3b65e3f208668ca5fc448699af01f707df5ab6ba28b26f878dd0aec1cedd06ec",
-        "hash": "eb7c9745ca0cf74352a4c4663a4ce5718720674de210b73468d465ef57b438d7",
-        "signature": "GyfjCKvT4CtAWIYKGeAFhoyPi1BYGYVofXe8h30jUGFX49ZiSV5NHSVDaYT19MNoLUN4ErVbdn4FfwtcV3KvAQ==",
-        "created_at": "2026-09-16T03:14:03.431Z"
+        "previous_hash": "550453740f7d7d261fac9d139f6c748ac8bfe15fbf628267bc1b9333dc16a37a",
+        "hash": "73a5e5aa71ede40f7f44f7a78c824c999a51ed5ed5d23d3e84255777d67b5807",
+        "signature": "WYcceZJuGRf84PaVKuxLyNF9UYUXIvfUP6DnGBxEQzUNIDrR/KBuZdsEHRIDxh6vAz6NB4Y7que5hLuf9zBgBQ==",
+        "created_at": "2026-09-17T03:46:44.636Z"
       },
       {
-        "id": "ev_01m2m3a43jpf1fw4epnc8rsc23",
+        "id": "ev_01m2pqjr5b8tjx001cpbha01p9",
         "organization_id": "org_demo",
-        "sequence": 418,
+        "sequence": 426,
         "type": "enforcement.stripe_issuing.decision",
         "subject_type": "authorization",
-        "subject_id": "auth_01m2m3a3td2f28rv9ge60ebmhs",
+        "subject_id": "auth_01m2pqjqtm8j7w1vvc4k6stkah",
         "payload": {
-          "amount": 8999,
-          "card_id": "ic_demo_mdt_01m2m39mr0dehakcatmb8trt1h",
+          "amount": 1500,
+          "card_id": "ic_demo_mdt_01m2pqje1bacph1kdxkbf14m8d",
           "currency": "USD",
           "decision": "DENY",
           "merchant": {
             "mcc": "5999",
-            "network_mid": "unknown_recurring_2207"
+            "network_mid": "goodbeans_card_9001"
           },
           "reason_codes": [
-            "DENY_MERCHANT_NOT_ALLOWLISTED",
-            "DENY_TRANSACTION_LIMIT_EXCEEDED",
-            "DENY_CUMULATIVE_LIMIT_EXCEEDED"
+            "DENY_TRANSACTION_LIMIT_EXCEEDED"
           ],
-          "instrument_id": "inst_01m2m3a2h8dyxzf8yff1m3vrcp",
-          "stripe_authorization_id": "iauth_demo_unknown_recurring_2207"
+          "instrument_id": "inst_01m2pqjmrwcepvkqgrq500szhq",
+          "stripe_authorization_id": "iauth_demo_goodbeans_card_9001"
         },
-        "previous_hash": "eb7c9745ca0cf74352a4c4663a4ce5718720674de210b73468d465ef57b438d7",
-        "hash": "1a70173411be2aee9fa3de24cab9b77fe654fa056431ccfe40ec3a56c8ed09c2",
-        "signature": "/Yc5op0v5MnmWHlhfQ+gBif0DgrAHeteCK98LmvgTl0R8cJkrKAZSuokix5gAZ94nQI74rEHTVk/kU5AcvgJAg==",
-        "created_at": "2026-09-16T03:14:03.431Z"
+        "previous_hash": "73a5e5aa71ede40f7f44f7a78c824c999a51ed5ed5d23d3e84255777d67b5807",
+        "hash": "6bd5ff76da47cf21f42619404a03a5a8607dbe728a4ac407af975ebc6dc6be79",
+        "signature": "sUl01vquVu7kmF/4W80eZFRpiQQMfSXg8XbfW4zgnjeJ0zylZePZN0KwWdhsNxqwM051ZSf6VUcoo7AePuCGBQ==",
+        "created_at": "2026-09-17T03:46:44.636Z"
       },
       {
-        "id": "ev_01m2m3a6j1ez48b7zkz2wzrrrh",
+        "id": "ev_01m2pqk15kvgzs4zhzm2377fp8",
         "organization_id": "org_demo",
-        "sequence": 419,
+        "sequence": 427,
         "type": "enforcement.x402.decision",
         "subject_type": "authorization",
-        "subject_id": "auth_01m2m3a67byn90k1qs25yakhv5",
+        "subject_id": "auth_01m2pqk0rh92f409zqnbza8kzw",
         "payload": {
           "asset": "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
           "amount": 50,
@@ -218,17 +276,13 @@
             "ALLOW_WITHIN_MANDATE"
           ],
           "resource_url": "http://127.0.0.1:4402/pay/goodbeans",
-          "instrument_id": "inst_01m2m39m3wew5md4nn8fnmaatb"
+          "instrument_id": "inst_01m2pqj7k8deyx47hq7ehvesgc"
         },
-        "previous_hash": "1a70173411be2aee9fa3de24cab9b77fe654fa056431ccfe40ec3a56c8ed09c2",
-        "hash": "591804236a55fb4c9501cba544803ff87c227f460035a2446321b03d49e97056",
-        "signature": "WD5jgkWbF6F7ykne2OBH85RwLVtDXXmR7IQq4eAWS3ockYWDcRd5ekWFaK1ETHNxj2kUpdCwFPZzoHW6Lc0lCw==",
-        "created_at": "2026-09-16T03:14:06.917Z"
+        "previous_hash": "6bd5ff76da47cf21f42619404a03a5a8607dbe728a4ac407af975ebc6dc6be79",
+        "hash": "4642a452374885b64ef400b8fbcd9436e5ff3983941beebc27c5c896f6e5458b",
+        "signature": "kL7CBHPm5ziu3egrDXDY165XF8QKuhEvj55kiyI9RyRdOUDwLRin1/qBBelgovgd8wJECdycR7Cu5W99SV01CA==",
+        "created_at": "2026-09-17T03:46:56.514Z"
       }
     ]
-  },
-  "verification": {
-    "ok": true,
-    "signed": true
   }
 }

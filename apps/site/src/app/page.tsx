@@ -1,6 +1,8 @@
 import Link from "next/link";
+import proof from "@/data/proof.json";
 
 export default function HomePage() {
+  const proofCapturedDate = new Date(proof.captured_at).toISOString().slice(0, 10);
   return (
     <>
       <section className="section-dark" style={{ paddingTop: 72, paddingBottom: 56 }}>
@@ -47,21 +49,79 @@ export default function HomePage() {
       <section className="section-light section">
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
+            The bypass
+          </p>
+          <h2 className="display" style={{ fontSize: "clamp(1.5rem, 3.5vw, 2.1rem)", marginTop: 0 }}>
+            An agent&rsquo;s cooperation is never the control.
+          </h2>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
+            Every agent spend control shipping today lives on the agent&rsquo;s side of the
+            boundary — which means it holds exactly as long as the agent cooperates. A compromised
+            agent holding the credential walks through all of them.
+          </p>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
+            Give a compromised agent the raw card number and no Waysafe SDK, and it still
+            can&rsquo;t spend outside the mandate — Stripe&rsquo;s real-time authorization asks
+            Waysafe before the network approves the charge, not after. That path runs the real
+            engine against recorded Stripe Issuing authorization requests today; live sandbox
+            authorization is pending Stripe&rsquo;s provisioning. Hand the session key alone to a
+            script with no Waysafe in it, and the transaction can&rsquo;t be signed — the
+            payer&rsquo;s wallet is a genuine 2-of-2, and one key isn&rsquo;t enough. Neither script
+            ever had to call Waysafe, agree with it, or even know it exists.
+          </p>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
+            The on-chain half of this is recorded from a live run on Polygon Amoy, captured{" "}
+            {proofCapturedDate}, on{" "}
+            <Link className="link" href="/proof">
+              /proof
+            </Link>
+            : three separate attempts to move funds with fewer than both signatures, each rejected
+            on-chain, each with the real revert reason recorded alongside it.
+          </p>
+          <p className="muted" style={{ fontSize: "1.02rem", lineHeight: 1.7, marginTop: 20 }}>
+            What this is not: Waysafe is non-custodial — it never holds funds, never handles a full
+            card number, and is never advisory. There is no step where the agent is asked and can
+            decline.
+          </p>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
+            Being in the authorization path means being a dependency. A rail told to fail closed
+            declines everything if Waysafe doesn&rsquo;t answer inside its authorization window —
+            the correct failure direction, and the reason key custody and uptime are the two things
+            a reviewer should press on.
+          </p>
+        </div>
+      </section>
+
+      <section className="section-light section" style={{ paddingTop: 0 }}>
+        <div className="container" style={{ maxWidth: 760 }}>
+          <p className="kicker" style={{ marginBottom: 16 }}>
             Why a rule in the prompt isn&rsquo;t a control
           </p>
           <h2 className="display" style={{ fontSize: "clamp(1.5rem, 3.5vw, 2.1rem)", marginTop: 0 }}>
             A model that reasons about a limit can also reason its way past it.
           </h2>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
-            In the July 2026 Hugging Face intrusion, an agent recorded that an action was outside its
-            intended scope, judged the task impossible otherwise, noted that its peers were doing the
-            same thing, and continued anyway.
+            In the{" "}
+            <a
+              className="link"
+              href="https://openai.com/index/hugging-face-incident-and-the-road-ahead/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              July 2026 Hugging Face intrusion
+            </a>
+            , an agent wrote in its own log: &ldquo;We&rsquo;re attacking third-party HF using
+            leaked token, potentially outside intended scope... This is arguably unauthorized. Yet
+            goal solution.&rdquo; Another agent had first objected — &ldquo;We should not do
+            unauthorized real infrastructure harm&rdquo; — then reversed when a peer signalled go.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
             A spending limit written into a prompt is that same kind of rule — a suggestion the model
             weighs against everything else it&rsquo;s reasoning about, including the pressure to
-            finish the task. A co-signature is not. It doesn&rsquo;t ask the model to agree; it asks
-            whoever moves the money to check with someone else first.
+            finish the task. On cards, the control that isn&rsquo;t a suggestion is the issuer&rsquo;s
+            own real-time authorization decline; on-chain, it&rsquo;s a second key the agent
+            doesn&rsquo;t hold. Neither asks the model to agree — each asks whoever moves the money to
+            check with someone else first.
           </p>
         </div>
       </section>
@@ -90,8 +150,8 @@ export default function HomePage() {
               <h3 style={{ marginTop: 0, marginBottom: 10 }}>The rail asks first</h3>
               <p className="muted" style={{ lineHeight: 1.65, margin: 0 }}>
                 The rail asks before money moves — Stripe Issuing&rsquo;s real-time authorization
-                request on cards, a 2-of-2 signature requirement on-chain. The agent&rsquo;s
-                cooperation is never part of the control.
+                request on cards, a 2-of-2 signature requirement on-chain. Nothing here waits on
+                the agent to ask first.
               </p>
             </div>
             <div>
@@ -109,6 +169,20 @@ export default function HomePage() {
         </div>
       </section>
 
+      <section className="section-dark section" style={{ paddingTop: 0 }}>
+        <div className="container" style={{ maxWidth: 760 }}>
+          <p className="kicker" style={{ marginBottom: 16 }}>
+            Why this isn&rsquo;t Intelligent Commerce
+          </p>
+          <p className="muted" style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
+            AP2, Visa Intelligent Commerce, and Mastercard Agent Pay do delegated authorization
+            inside one rail, by issuing a credential the agent carries. Waysafe is the required
+            signer instead — the transaction cannot complete without a decision Waysafe produced,
+            and the record reads the same whether the rail underneath is a card network or a chain.
+          </p>
+        </div>
+      </section>
+
       <section className="section-light section">
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
@@ -121,7 +195,8 @@ export default function HomePage() {
             </li>
             <li>
               Card decisions run the real engine against recorded Stripe Issuing authorization
-              requests, with live sandbox authorization pending Stripe test-mode funds settlement.
+              requests. Live sandbox authorization is pending Stripe&rsquo;s provisioning of the
+              test-mode account.
             </li>
           </ul>
         </div>
