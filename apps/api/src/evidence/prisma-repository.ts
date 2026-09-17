@@ -24,12 +24,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
+  computeKeyId,
   exportPublicKeyBase64,
   ID_PREFIX,
   computeEventHash,
   generateId,
   signEventHash,
   type EvidenceEvent,
+  type EvidenceKeyDirectoryEntry,
 } from "@waysafe/core";
 import type { KeyObject } from "node:crypto";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
@@ -55,6 +57,7 @@ export interface PrismaEvidenceRepositoryOptions {
 export class PrismaEvidenceRepository implements EvidenceRepository {
   private readonly disableLockForTesting: boolean;
   private readonly publicKeyBase64: string;
+  private readonly keyId: string;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -63,6 +66,7 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
   ) {
     this.disableLockForTesting = options.disableLockForTesting ?? false;
     this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
+    this.keyId = computeKeyId(signingKey);
   }
 
   private get client(): Db {
@@ -111,6 +115,7 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
         previousHash,
         hash,
         signature: signEventHash(this.signingKey, hash),
+        keyId: this.keyId,
         createdAt: input.now,
       },
     });
@@ -129,6 +134,14 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
   getPublicKey(): string {
     return this.publicKeyBase64;
   }
+
+  getActiveKeyId(): string {
+    return this.keyId;
+  }
+
+  getKeyDirectory(): EvidenceKeyDirectoryEntry[] {
+    return [{ key_id: this.keyId, public_key: this.publicKeyBase64, valid_from: null }];
+  }
 }
 
 interface EvidenceEventRow {
@@ -142,6 +155,7 @@ interface EvidenceEventRow {
   previousHash: string | null;
   hash: string;
   signature: string;
+  keyId: string | null;
   createdAt: Date;
 }
 
@@ -157,6 +171,7 @@ function toEvidenceEvent(row: EvidenceEventRow): EvidenceEvent {
     previous_hash: row.previousHash,
     hash: row.hash,
     signature: row.signature,
+    key_id: row.keyId,
     created_at: row.createdAt,
   };
 }

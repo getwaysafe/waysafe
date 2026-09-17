@@ -5344,6 +5344,102 @@ stays exactly the two fields it always had, and a real Vercel build
 gains the two that identify *which* deployment and project served it,
 closing the "wrong project" failure mode this same entry names.
 
+## D-52 — Evidence events carry `key_id`; the published key is now a directory, not a single key
+
+D-26/OQ-8 made the evidence chain verifiable by a third party by publishing
+one Ed25519 public key at `GET /v1/evidence/public-key` and signing every
+event against it. That design had a silent expiry date built in: rotating
+the signing key -- for an ordinary reason (a scheduled rotation) or a
+forced one (a suspected compromise) -- would invalidate every historical
+signature at once, because nothing on an event recorded *which* key it was
+signed under. A verifier holding only the new key would see every old
+event fail `signature_invalid` and have no way to tell "this was tampered
+with" from "this was signed before the last rotation." That gap is what
+this entry closes, before any rotation has actually happened.
+
+**What changed, additively (non-negotiable #7's rule -- reason codes are
+never renamed, only added to -- applied here to the evidence format and
+the public-key endpoint, both public surface):**
+
+- `EvidenceEvent` gained `key_id?: string | null` (`packages/core/src/domain.ts`).
+  Deliberately excluded from what `computeEventHash` commits to -- it's
+  routing metadata about which key to check a signature against, not
+  content the chain attests to, so adding it doesn't change any
+  already-computed hash. Every event written before this change has no
+  `key_id` at all (the column is new and nullable, added via `db push`,
+  never backfilled) and still verifies: see below.
+- `computeKeyId(key)` (`packages/core/src/evidence-signing.ts`): a stable
+  id derived from the key's own SPKI DER bytes (first 16 hex chars of its
+  SHA-256), not assigned or stored anywhere -- the same key always
+  produces the same id, in any process, including a key reloaded from
+  `WAYSAFE_EVIDENCE_SIGNING_KEY` after a restart.
+- `EvidenceKeyDirectoryEntry` (`{ key_id, public_key, valid_from }`) and
+  `loadEvidenceKeyDirectory` (wire format -> `Map<key_id, KeyObject>`),
+  also in `evidence-signing.ts`.
+- `verifyEvidenceChain(events, publicKey?, keyDirectory?)` gained a third,
+  optional parameter. Its resolution rule, and the reason a first attempt
+  at this got it backwards (caught by `in-memory-repository.test.ts` and
+  `prisma-repository.test.ts`'s own pre-existing tests, which pass only
+  `publicKey` and failed once real appended events started carrying a real
+  `key_id`): **`keyDirectory` omitted means `key_id` is never even read --
+  every event checks against `publicKey` alone, exactly the pre-D-52
+  behavior, whether or not the event happens to carry a `key_id`.**
+  `keyDirectory` supplied changes the rule: an event with a `key_id` must
+  resolve through the directory (fails closed, `signature_invalid`, if
+  that id isn't in it -- never silently falls back to `publicKey`, because
+  a key_id pointing nowhere is exactly as suspicious as a bad signature);
+  an event with no `key_id` still falls back to `publicKey`. That second
+  fallback is the literal mechanism behind "existing entries without
+  key_id must still verify."
+- `EvidenceRepository` (`apps/api/src/evidence/types.ts`) gained
+  `getActiveKeyId()` and `getKeyDirectory()`, implemented identically in
+  both `InMemoryEvidenceRepository` and `PrismaEvidenceRepository`:
+  `getKeyDirectory()` currently returns exactly one entry -- this
+  deployment's own key, `valid_from: null` -- until a real rotation adds a
+  second. `valid_from: null` means "valid since the start of this
+  deployment's chain," chosen over inventing a concrete date nothing in
+  this codebase actually recorded; only a key added by a future real
+  rotation gets a genuine `valid_from` timestamp. `getPublicKey()` is
+  unchanged.
+- `GET /v1/evidence/public-key` gained `key_directory` alongside its
+  existing `algorithm`/`public_key` fields -- not in place of them. A
+  client written against this endpoint before D-52 parses the exact same
+  response it always did. `GET /v1/evidence/verify` now passes both
+  `publicKey` and `keyDirectory` to `verifyEvidenceChain`, so it verifies
+  today's chain (no rotation has happened) exactly as before, and is
+  already correct for the day a rotation does happen. `GET /v1/evidence`'s
+  events gained `key_id` in their JSON (`toEvidenceJSON`).
+- `@waysafe/sdk`: `EvidenceRecord` gained `key_id?: string | null`,
+  `EvidencePublicKey` gained `key_directory?: EvidenceKeyDirectoryEntry[]`,
+  and `verifyEvidenceIndependently` gained an optional third `keyDirectory`
+  parameter with the identical resolution rule -- omitted, it reproduces
+  exactly the pre-D-52 call. The SDK isn't published yet (D-51's `/proof`
+  follow-up notes this), so this additivity is about not breaking the
+  contract once it is, not about a live integrator today.
+
+Proven, not just designed: `packages/core/src/evidence.test.ts` and
+`evidence-signing.test.ts` cover key_id routing, the fails-closed case for
+an unknown key_id, and a chain that mixes legacy (no key_id) and
+post-rotation (key_id) events end to end -- the actual scenario this
+entry exists for, simulated by re-signing half a real chain under a second
+key and confirming the whole thing still verifies through the directory.
+`apps/api/src/evidence/{in-memory,prisma}-repository.test.ts` prove the
+repository stamps and round-trips `key_id` (the Prisma case against real
+Postgres, proving the new nullable `keyId` column actually persists and
+reads back). `apps/api/src/server.test.ts` proves the endpoint shape.
+`packages/sdk/src/integration.test.ts`'s existing D-26/OQ-8 test now also
+verifies the same real chain fetched from a real running server through
+the `key_directory` path, not only the legacy `public_key` fallback.
+
+**Change cost if wrong:** low today, load-bearing later. No rotation has
+happened yet, so `getKeyDirectory()` returning one entry is
+indistinguishable from `getPublicKey()` alone in current behavior -- this
+entry is entirely groundwork. The cost of *not* having built it is what a
+future rotation would actually break: every historical signature, silently,
+with no way to tell tampering from rotation. Nothing here performs a
+rotation or adds a second key to any deployment's directory; that's a
+separate, future decision.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AuthorizationStatus, Decision } from "@waysafe/core";
 import {
   computeEventHash,
+  computeKeyId,
   exportPublicKeyBase64,
   generateEvidenceSigningKeyPair,
   signEventHash,
@@ -480,6 +481,19 @@ describe("dashboard reads: query strings and wire mapping", () => {
     expect(calls[0]).toBe("https://api.example.test/v1/evidence/public-key");
     expect(result).toEqual({ algorithm: "Ed25519", public_key: "deadbeef" });
   });
+
+  it("D-52: getEvidencePublicKey passes key_directory through unmodified, alongside the unchanged algorithm/public_key fields", async () => {
+    const body = {
+      algorithm: "Ed25519",
+      public_key: "deadbeef",
+      key_directory: [{ key_id: "k1", public_key: "deadbeef", valid_from: null }],
+    };
+    const fetchImpl = vi.fn(async () => jsonResponse(200, body));
+    const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
+
+    const result = await client.getEvidencePublicKey();
+    expect(result).toEqual(body);
+  });
 });
 
 describe("verifyEvidenceIndependently (D-26/OQ-8): local verification, no server trust required", () => {
@@ -542,6 +556,32 @@ describe("verifyEvidenceIndependently (D-26/OQ-8): local verification, no server
     expect(result.ok).toBe(false);
     expect(result.brokenAtSequence).toBe(2);
     expect(result.reason).toBe("hash_mismatch");
+  });
+
+  it("D-52: an event carrying a key_id is checked against the matching keyDirectory entry, not publicKeyBase64", () => {
+    const events = signedChain(2);
+    const rotated = generateEvidenceSigningKeyPair();
+    const rotatedId = computeKeyId(rotated.publicKey);
+    events[1] = {
+      ...events[1]!,
+      signature: signEventHash(rotated.privateKey, events[1]!.hash),
+      key_id: rotatedId,
+    };
+    const keyDirectory = [{ key_id: rotatedId, public_key: exportPublicKeyBase64(rotated.publicKey), valid_from: null }];
+
+    // PUBLIC_KEY_BASE64 is deliberately the wrong key for event 2 -- this
+    // only passes if key_id routing, not the legacy fallback, resolved it.
+    const result = verifyEvidenceIndependently(events, PUBLIC_KEY_BASE64, keyDirectory);
+    expect(result).toEqual({ ok: true, signed: true });
+  });
+
+  it("D-52: an event with no key_id still verifies via publicKeyBase64 when keyDirectory is also supplied -- omitting keyDirectory entirely reproduces pre-D-52 behavior", () => {
+    const events = signedChain(2);
+    const unrelated = [
+      { key_id: "unrelated", public_key: exportPublicKeyBase64(generateEvidenceSigningKeyPair().publicKey), valid_from: null },
+    ];
+    expect(verifyEvidenceIndependently(events, PUBLIC_KEY_BASE64, unrelated)).toEqual({ ok: true, signed: true });
+    expect(verifyEvidenceIndependently(events, PUBLIC_KEY_BASE64)).toEqual({ ok: true, signed: true });
   });
 });
 

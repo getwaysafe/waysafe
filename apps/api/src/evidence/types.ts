@@ -13,7 +13,7 @@
  * `PrismaEvidenceRepository` (a real `SELECT ... FOR UPDATE`).
  */
 
-import type { EvidenceEvent } from "@waysafe/core";
+import type { EvidenceEvent, EvidenceKeyDirectoryEntry } from "@waysafe/core";
 
 export interface NewEvidenceEvent {
   organizationId: string;
@@ -43,6 +43,20 @@ export interface EvidenceRepository {
    * was constructed with -- the single source of truth server.ts's
    * /v1/evidence/verify and /v1/evidence/public-key routes both read from,
    * so there is no second place a key could get out of sync with the one
-   * events are actually signed under. */
+   * events are actually signed under. Unchanged by D-52 -- still the
+   * currently active key, still the field a client that predates the key
+   * directory reads. */
   getPublicKey(): string;
+
+  /** The `key_id` (D-52) stamped on every event this instance appends --
+   * `computeKeyId` of the same signing key `getPublicKey` describes. */
+  getActiveKeyId(): string;
+
+  /** Every key a signature in this deployment's evidence chains might have
+   * been made under, oldest first (D-52) -- what
+   * GET /v1/evidence/public-key's new `key_directory` field publishes,
+   * alongside its unchanged `public_key`/`algorithm` fields. Exactly one
+   * entry, this instance's own key with `valid_from: null`, until a real
+   * key rotation adds a second. */
+  getKeyDirectory(): EvidenceKeyDirectoryEntry[];
 }

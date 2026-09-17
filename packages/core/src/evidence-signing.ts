@@ -23,6 +23,7 @@
  */
 
 import {
+  createHash,
   createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
@@ -70,6 +71,44 @@ export function loadEvidencePublicKey(base64Spki: string): KeyObject {
     format: "der",
     type: "spki",
   });
+}
+
+/**
+ * A stable identifier for a public key, derived from the key's own bytes --
+ * never assigned or stored anywhere, so the same key always produces the
+ * same `key_id` even generated fresh in a different process (this file's
+ * `generateEvidenceSigningKeyPair` in a test, or the real deployment key
+ * loaded from `WAYSAFE_EVIDENCE_SIGNING_KEY`). First 16 hex characters of
+ * SHA-256 over the key's SPKI DER encoding -- enough collision resistance
+ * for the handful of keys a deployment's key directory (D-52) will ever
+ * hold, short enough to read in a table next to a hash and a signature.
+ */
+export function computeKeyId(key: KeyObject): string {
+  const publicKey = key.type === "private" ? createPublicKey(key) : key;
+  const der = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  return createHash("sha256").update(der).digest("hex").slice(0, 16);
+}
+
+/**
+ * The wire shape of one entry in the published evidence-signing key
+ * directory (D-52, resolves the rotation gap D-26/OQ-8 left open: a single
+ * published key meant rotating it silently invalidated every historical
+ * signature, because nothing recorded which key an old event was signed
+ * under). `public_key` is base64 SPKI, loadable with `loadEvidencePublicKey`.
+ * `valid_from` is the ISO-8601 timestamp this key started being used, or
+ * `null` for a key that has been valid since the start of this deployment's
+ * chain -- true of every deployment until its first real rotation.
+ */
+export interface EvidenceKeyDirectoryEntry {
+  key_id: string;
+  public_key: string;
+  valid_from: string | null;
+}
+
+/** Loads a wire-format key directory into the `Map<key_id, KeyObject>` shape
+ * `verifyEvidenceChain` resolves a signed event's key against. */
+export function loadEvidenceKeyDirectory(entries: EvidenceKeyDirectoryEntry[]): Map<string, KeyObject> {
+  return new Map(entries.map((entry) => [entry.key_id, loadEvidencePublicKey(entry.public_key)]));
 }
 
 /** `hash` is the hex digest `computeEventHash` produces. Returns base64. */

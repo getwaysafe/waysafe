@@ -333,5 +333,13 @@ export interface EvidenceEvent {
   previous_hash: string | null;
   hash: string;
   signature: string;
+  /** Which key in the published key directory `signature` was made under
+   * (D-52). Optional/nullable, and deliberately excluded from what `hash`
+   * commits to (see `computeEventHash`) -- every event written before D-52
+   * has no `key_id` at all, and must still verify: `verifyEvidenceChain`
+   * treats a missing `key_id` as "signed by whatever single key this
+   * deployment has ever used," the same key a legacy caller already passes
+   * as `publicKey`. */
+  key_id?: string | null;
   created_at: Date;
 }

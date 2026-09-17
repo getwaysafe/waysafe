@@ -16,12 +16,14 @@
  */
 
 import {
+  computeKeyId,
   exportPublicKeyBase64,
   ID_PREFIX,
   computeEventHash,
   generateId,
   signEventHash,
   type EvidenceEvent,
+  type EvidenceKeyDirectoryEntry,
 } from "@waysafe/core";
 import type { KeyObject } from "node:crypto";
 import { Mutex } from "../util/mutex.js";
@@ -31,9 +33,11 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
   private readonly eventsByOrg = new Map<string, EvidenceEvent[]>();
   private readonly locks = new Map<string, Mutex>();
   private readonly publicKeyBase64: string;
+  private readonly keyId: string;
 
   constructor(private readonly signingKey: KeyObject) {
     this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
+    this.keyId = computeKeyId(signingKey);
   }
 
   async withOrganizationLock<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
@@ -73,6 +77,7 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
       previous_hash: previousHash,
       hash,
       signature: signEventHash(this.signingKey, hash),
+      key_id: this.keyId,
       created_at: input.now,
     };
 
@@ -87,5 +92,13 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
 
   getPublicKey(): string {
     return this.publicKeyBase64;
+  }
+
+  getActiveKeyId(): string {
+    return this.keyId;
+  }
+
+  getKeyDirectory(): EvidenceKeyDirectoryEntry[] {
+    return [{ key_id: this.keyId, public_key: this.publicKeyBase64, valid_from: null }];
   }
 }

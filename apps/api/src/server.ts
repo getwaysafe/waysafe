@@ -15,6 +15,7 @@ import {
   createCompilerFromEnv,
   hashPolicy,
   loadCompilerFixtures,
+  loadEvidenceKeyDirectory,
   loadEvidencePublicKey,
   parsePolicy,
   verifyEvidenceChain,
@@ -270,6 +271,7 @@ function toEvidenceJSON(event: EvidenceEvent) {
     previous_hash: event.previous_hash,
     hash: event.hash,
     signature: event.signature,
+    key_id: event.key_id ?? null,
     created_at: event.created_at.toISOString(),
   };
 }
@@ -1228,11 +1230,19 @@ export function buildServer(options: BuildServerOptions = {}) {
    * check ran and passed; `result.ok` alone doesn't distinguish "verified
    * against a signature" from "internally consistent," so a caller checking
    * only `ok` gets the weaker, still-accurate claim either way.
+   *
+   * Passes both the single active key (`publicKey`) and the full key
+   * directory (`keyDirectory`, D-52): an event with no `key_id` -- every
+   * event written before D-52 -- still verifies via `publicKey`, the same
+   * fallback this call made before `keyDirectory` existed; an event with a
+   * `key_id` is checked against that directory entry instead, which is what
+   * lets a future key rotation keep old signatures verifiable.
    */
   app.get("/v1/evidence/verify", async (request, reply) => {
     const events = await repos.evidence.listForOrganization(request.auth!.organizationId);
     const publicKey = loadEvidencePublicKey(repos.evidence.getPublicKey());
-    const result = verifyEvidenceChain(events, publicKey);
+    const keyDirectory = loadEvidenceKeyDirectory(repos.evidence.getKeyDirectory());
+    const result = verifyEvidenceChain(events, publicKey, keyDirectory);
     return reply.send(result);
   });
 
@@ -1243,9 +1253,22 @@ export function buildServer(options: BuildServerOptions = {}) {
    * organization's chain on this deployment, so there's one key to publish,
    * not one per tenant. Base64 SPKI -- see @waysafe/core's
    * `loadEvidencePublicKey` to reconstruct a usable key from it.
+   *
+   * `algorithm`/`public_key` are unchanged by D-52 -- still the currently
+   * active key, in the same shape a client written against this endpoint
+   * before D-52 already parses. `key_directory` is added alongside, not in
+   * place of them: every key a signature in this deployment's evidence
+   * chains might have been made under, oldest first (see
+   * `EvidenceKeyDirectoryEntry`), keyed by `key_id` so a client that reads
+   * an event's `key_id` can look up the right entry instead of assuming
+   * `public_key` covers every event -- see DECISIONS.md D-52.
    */
   app.get("/v1/evidence/public-key", async (_request, reply) => {
-    return reply.send({ algorithm: "Ed25519", public_key: repos.evidence.getPublicKey() });
+    return reply.send({
+      algorithm: "Ed25519",
+      public_key: repos.evidence.getPublicKey(),
+      key_directory: repos.evidence.getKeyDirectory(),
+    });
   });
 
   /**

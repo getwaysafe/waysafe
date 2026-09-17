@@ -11,8 +11,10 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   ID_PREFIX,
+  computeKeyId,
   generateEvidenceSigningKeyPair,
   generateId,
+  loadEvidenceKeyDirectory,
   loadEvidencePublicKey,
   verifyEvidenceChain,
   type EvidenceEvent,
@@ -84,6 +86,34 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     const publicKey = loadEvidencePublicKey(repo.getPublicKey());
     expect(verifyEvidenceChain(events, publicKey)).toEqual({ ok: true, signed: true });
   }, 30_000);
+
+  it(
+    "D-52: key_id round-trips through Postgres -- appended events carry it, and GET /v1/evidence/verify's directory-aware check still passes",
+    async () => {
+      const repo = new PrismaEvidenceRepository(prisma, SIGNING_KEY);
+      const organizationId = await seedOrg();
+
+      await repo.withOrganizationLock(organizationId, () =>
+        repo.appendEvent({
+          organizationId,
+          type: "test.event",
+          subjectType: "test",
+          subjectId: "a",
+          payload: {},
+          now: NOW,
+        }),
+      );
+
+      const events = await repo.listForOrganization(organizationId);
+      expect(events[0]!.key_id).toBe(computeKeyId(SIGNING_KEY));
+      expect(events[0]!.key_id).toBe(repo.getActiveKeyId());
+
+      const publicKey = loadEvidencePublicKey(repo.getPublicKey());
+      const keyDirectory = loadEvidenceKeyDirectory(repo.getKeyDirectory());
+      expect(verifyEvidenceChain(events, publicKey, keyDirectory)).toEqual({ ok: true, signed: true });
+    },
+    30_000,
+  );
 
   it(
     "serializes ten concurrent appends into a single valid chain, no gaps or duplicate sequences",

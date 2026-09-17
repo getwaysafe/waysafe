@@ -368,6 +368,14 @@ describe("the full journey through the SDK against a real server", () => {
 
     const result = verifyEvidenceIndependently(allEvidence, publicKey.public_key);
     expect(result).toEqual({ ok: true, signed: true });
+
+    // D-52: the same real chain also verifies through the key-directory
+    // path -- every event this server just wrote carries a real key_id,
+    // and it round-trips against the directory entry of the same name.
+    expect(publicKey.key_directory).toBeDefined();
+    expect(allEvidence.every((e) => typeof e.key_id === "string")).toBe(true);
+    const directoryResult = verifyEvidenceIndependently(allEvidence, publicKey.public_key, publicKey.key_directory);
+    expect(directoryResult).toEqual({ ok: true, signed: true });
   });
 
   it("THE ATTACK: verifyEvidenceIndependently catches a tampered payload fetched from the real API, entirely locally", async () => {

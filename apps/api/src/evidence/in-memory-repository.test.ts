@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  computeKeyId,
   generateEvidenceSigningKeyPair,
+  loadEvidenceKeyDirectory,
   loadEvidencePublicKey,
   verifyEvidenceChain,
 } from "@waysafe/core";
@@ -58,6 +60,58 @@ describe("InMemoryEvidenceRepository", () => {
     const events = await repo.listForOrganization(ORG);
     expect(events).toHaveLength(5);
     expect(verifyEvidenceChain(events)).toEqual({ ok: true });
+  });
+
+  it("D-52: stamps every appended event with the repository's own key_id, published via getKeyDirectory", async () => {
+    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const repo = new InMemoryEvidenceRepository(signingKey);
+    const event = await repo.withOrganizationLock(ORG, () =>
+      repo.appendEvent({
+        organizationId: ORG,
+        type: "test.event",
+        subjectType: "test",
+        subjectId: "a",
+        payload: {},
+        now: NOW,
+      }),
+    );
+
+    expect(event.key_id).toBe(computeKeyId(signingKey));
+    expect(event.key_id).toBe(repo.getActiveKeyId());
+
+    const directory = repo.getKeyDirectory();
+    expect(directory).toEqual([
+      { key_id: repo.getActiveKeyId(), public_key: repo.getPublicKey(), valid_from: null },
+    ]);
+
+    const events = await repo.listForOrganization(ORG);
+    const publicKey = loadEvidencePublicKey(repo.getPublicKey());
+    const keyDirectory = loadEvidenceKeyDirectory(directory);
+    expect(verifyEvidenceChain(events, publicKey, keyDirectory)).toEqual({ ok: true, signed: true });
+  });
+
+  it("D-52: an event with no key_id (the pre-D-52 shape) still verifies via the legacy publicKey fallback, even when a keyDirectory is also supplied", async () => {
+    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const repo = new InMemoryEvidenceRepository(signingKey);
+    await repo.withOrganizationLock(ORG, () =>
+      repo.appendEvent({
+        organizationId: ORG,
+        type: "test.event",
+        subjectType: "test",
+        subjectId: "a",
+        payload: {},
+        now: NOW,
+      }),
+    );
+
+    const events = await repo.listForOrganization(ORG);
+    // Simulate a row written before D-52 (the migration adds the column as
+    // NULL for every existing row -- never backfilled).
+    events[0] = { ...events[0]!, key_id: null };
+
+    const publicKey = loadEvidencePublicKey(repo.getPublicKey());
+    const keyDirectory = loadEvidenceKeyDirectory(repo.getKeyDirectory());
+    expect(verifyEvidenceChain(events, publicKey, keyDirectory)).toEqual({ ok: true, signed: true });
   });
 
   it("signs every event, verifiably against the repository's own published public key (D-26/OQ-8)", async () => {

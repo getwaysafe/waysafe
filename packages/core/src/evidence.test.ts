@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeEventHash, verifyEvidenceChain } from "./evidence.js";
-import { generateEvidenceSigningKeyPair, signEventHash } from "./evidence-signing.js";
+import { computeKeyId, generateEvidenceSigningKeyPair, signEventHash } from "./evidence-signing.js";
 import type { EvidenceEvent } from "./domain.js";
 
 const ORG = "org_test";
@@ -200,4 +200,60 @@ describe("verifyEvidenceChain: signature verification (D-26/OQ-8)", () => {
       expect(signedResult.reason).toBe("signature_invalid");
     },
   );
+});
+
+describe("verifyEvidenceChain: key directory (D-52)", () => {
+  it("an event carrying a key_id is checked against the matching key directory entry, not publicKey", () => {
+    const events = makeChain(2);
+    const rotated = generateEvidenceSigningKeyPair();
+    const rotatedId = computeKeyId(rotated.publicKey);
+    events[1] = {
+      ...events[1]!,
+      signature: signEventHash(rotated.privateKey, events[1]!.hash),
+      key_id: rotatedId,
+    };
+    const directory = new Map([[rotatedId, rotated.publicKey]]);
+
+    // publicKey here is deliberately the WRONG key for event 2 -- if this
+    // passed, it would mean key_id routing was never actually consulted.
+    const result = verifyEvidenceChain(events, KEY_PAIR.publicKey, directory);
+    expect(result).toEqual({ ok: true, signed: true });
+  });
+
+  it("an event with no key_id still falls back to publicKey even when a keyDirectory is supplied", () => {
+    const events = makeChain(2); // signed under KEY_PAIR, no key_id -- pre-D-52 shape
+    const directory = new Map([["unrelated", generateEvidenceSigningKeyPair().publicKey]]);
+    const result = verifyEvidenceChain(events, KEY_PAIR.publicKey, directory);
+    expect(result).toEqual({ ok: true, signed: true });
+  });
+
+  it("THE ATTACK: a key_id that isn't in the directory fails closed, never silently falls back to publicKey", () => {
+    const events = makeChain(2);
+    // Event 2 is still genuinely signed under KEY_PAIR -- publicKey would
+    // accept it -- but it's mislabeled with a key_id the directory doesn't
+    // recognize. That must fail, not fall back.
+    events[1] = { ...events[1]!, key_id: "does_not_exist" };
+    const result = verifyEvidenceChain(events, KEY_PAIR.publicKey, new Map());
+    expect(result.ok).toBe(false);
+    expect(result.brokenAtSequence).toBe(2);
+    expect(result.reason).toBe("signature_invalid");
+  });
+
+  it("a chain mixing legacy (no key_id) and post-rotation (key_id) events verifies end to end -- the actual rotation scenario D-52 exists for", () => {
+    const events = makeChain(4); // all signed under KEY_PAIR, no key_id yet
+    const rotated = generateEvidenceSigningKeyPair();
+    const rotatedId = computeKeyId(rotated.publicKey);
+    // Re-sign only the back half under the new key and tag it -- hashes and
+    // previous_hash links are untouched, since key_id isn't part of the hash.
+    for (let i = 2; i < events.length; i++) {
+      events[i] = {
+        ...events[i]!,
+        signature: signEventHash(rotated.privateKey, events[i]!.hash),
+        key_id: rotatedId,
+      };
+    }
+    const directory = new Map([[rotatedId, rotated.publicKey]]);
+    const result = verifyEvidenceChain(events, KEY_PAIR.publicKey, directory);
+    expect(result).toEqual({ ok: true, signed: true });
+  });
 });

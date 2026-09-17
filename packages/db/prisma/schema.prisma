@@ -472,6 +472,12 @@ model EvidenceEvent {
   /// chain verifiable by a third party who doesn't have to trust this
   /// database, not just tamper-evident to whoever recomputes it here.
   signature      String
+  /// Which key in the published key directory `signature` was made under
+  /// (D-52). Nullable and additive: every row written before D-52 has
+  /// `NULL` here and still verifies -- `verifyEvidenceChain` treats a
+  /// missing key_id as signed by whatever single key this deployment has
+  /// ever used.
+  keyId          String?
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
