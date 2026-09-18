@@ -5918,6 +5918,88 @@ either wrong is paid the first time a real rotation is attempted under
 pressure, which is exactly the scenario this section exists to make
 someone check for in advance instead.
 
+## D-59 — §1.2 no longer contradicts §2.1; a second D-56-shaped gap found by auditing for the pattern; a named remediation direction
+
+D-58's own §1.2 still said an attacker with `WAYSAFE_SAFE_COSIGNER_KEY`
+alone "gets nothing" -- true in the narrow sense the on-chain proof
+actually tested (a cosigner signature with zero session signatures
+anywhere reverts, proven live), false as a description of what holding
+this key in practice means, since D-56 already showed the cosigner key
+alone completes any transaction that already carries a session
+signature, and every genuine `POST /v1/enforcement/x402` request
+supplies exactly one. §1.2 now states both halves: the narrow proven
+claim, and the qualification that "alone" is not a condition this
+architecture ever guarantees, citing D-56 and tx `0x6a3510ae...`
+directly rather than leaving the reader to reconcile it against §2.1
+themselves.
+
+**Auditing the rest of the document for the same shape of claim ("X
+alone" / "X cannot" resting on a condition nothing actually
+guarantees) found a second, independent instance -- not a wording
+issue, a real gap verified directly in the route code.** §1.3 stated
+that a leaked agent key is bounded by the mandate's own policy, "not a
+privilege-escalation vector against the policy itself." Checked
+whether `POST /v1/authorizations/:id/step-up` requires anything beyond
+"a valid credential in this organization" -- it does not.
+`server.ts`'s global `preHandler` auth hook treats an agent key and an
+org credential identically; the route itself checks only
+`organization_id`; `resolveStepUp`
+(`apps/api/src/authorization/service.ts`) takes no credential or
+`agentId` parameter at all. The existing test for this route
+(`server.test.ts`) exercises it with an org credential and never
+asserts an agent key is refused, because nothing refuses one. **The
+same leaked agent key that produces a `STEP_UP` decision can call
+`approveStepUp` on it immediately after, with no human, no second
+credential, and no code path that would object.** `STEP_UP`'s reason
+codes read as if human approval is a real second gate; I-10 and D-23
+both document the design intent that a developer's own backend drives
+that approval after showing a real human a real decision -- but
+nothing on this path verifies that happened. For an attacker holding
+only one agent key, `STEP_UP` and `ALLOW` are the same outcome. `DENY`
+is unaffected -- nothing on this path turns a `DENY` into anything
+else, and this is not an escalation past what the policy's own stated
+outcome for an action is, only past what the reason code's own wording
+promises. §1.3 and §2.4 now say this plainly.
+
+**Named the remediation direction for D-56, in §2.1, rather than
+leaving the gap open-ended.** Three options, all unbuilt: a Safe Guard
+(`setGuard`/`ITransactionGuard`) checking a per-decision on-chain
+attestation, a contract cosigner replacing the EOA, or a 2-of-3 Safe
+adding the principal as a third owner. Evaluated honestly rather than
+listed neutrally: a 2-of-3 Safe does **not** close this gap as
+literally described -- a standard Safe threshold is "any N of M," and
+cosigner + session key (the exact pair D-56 showed is already
+available together) already satisfies 2-of-3 the same way it satisfies
+today's 2-of-2. The Guard direction is named as the one being pursued,
+since it's the only one of the three that directly answers D-56 (moves
+the check from "which keys signed" to "does a real decision exist,"
+verified on-chain) without a larger custody redesign. Stated plainly:
+none of the three is built; the Safe remains a plain 2-of-2 EOA
+multisig exactly as D-41 shipped it.
+
+**Landing page's "non-custodial" claim carried the same implication
+D-56 corrected.** "It never holds funds" is true and unchanged; the
+sentence otherwise implied a restraint stronger than what's actually
+true, which is that Waysafe is one of two required signatures, not
+that it structurally cannot move funds under any key compromise. Now
+reads: "it never holds funds and cannot initiate a transfer the agent
+hasn't already signed for. It is one of two required signatures, not a
+custodian."
+
+`npm run build:site` succeeds; both the landing page and (already
+covered by D-56/D-58, unaffected here) `/proof` wording verified
+directly in the rendered output. Full suite green (573 passed, 1
+pre-existing expected skip).
+
+**Change cost if wrong:** low for the doc edits. The step-up
+self-approval gap this entry names is real regardless of whether it's
+written down -- the same "known gap, not an unbounded one" reasoning
+D-56/§2.1's remediation section applies here too: the fix is
+application-level (require a distinct, non-agent credential to resolve
+a step-up, or bind step-up resolution to a session/channel the
+requesting agent doesn't control), genuinely buildable, and not
+attempted in this entry, which is documentation only.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

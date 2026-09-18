@@ -79,9 +79,10 @@ export default function HomePage() {
             alongside it.
           </p>
           <p className="muted" style={{ fontSize: "1.02rem", lineHeight: 1.7, marginTop: 20 }}>
-            What this is not: Waysafe is non-custodial — it never holds funds, never handles a full
-            card number, and is never advisory. There is no step where the agent is asked and can
-            decline.
+            What this is not: Waysafe is non-custodial — it never holds funds and cannot initiate a
+            transfer the agent hasn&rsquo;t already signed for. It is one of two required
+            signatures, not a custodian. It never handles a full card number, and is never
+            advisory. There is no step where the agent is asked and can decline.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
             Being in the authorization path means being a dependency. A rail told to fail closed
