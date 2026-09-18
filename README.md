@@ -1,182 +1,197 @@
 # Waysafe
 
-The system of record for delegated financial authority.
-
-One API to decide whether an AI agent may take an economic action:
+Waysafe is the authorization and evidence layer for AI agent spending, across
+every payment rail. One API decides whether an agent may take an economic
+action:
 
 ```ts
-const decision = await waysafe.authorize({ agent, principal, action });
+const decision = await waysafe.authorize({ agent_id, principal_id, action });
 // => ALLOW | DENY | STEP_UP
 ```
 
-**Status: Week 6 of 6, complete.** ✅ Domain model, policy engine, WebAuthn +
-agent keys, payment execution, the TypeScript SDK, and the developer
-dashboard are all in place. Week 6 shipped the dashboard's step-up approval
-UI, the rename (`DECISIONS.md` D-19/D-25, superseded by D-28), a signed and
-independently verifiable evidence chain (D-26/OQ-8), and a scripted
-end-to-end demo (`npm run demo`, D-27).
+## Status: pre-production
 
-Since the sprint closed: the product was renamed to Waysafe (D-28,
-resolving OQ-2), the production WebAuthn RP ID was fixed at
-`dashboard.waysafe.ai` (D-29, resolving OQ-5), `POST /v1/principals` and
-`GET /v1/principals/:id` were added (D-30, resolving OQ-9), and the runtime
-target was set -- dashboard on Vercel, API and worker on Render (D-31,
-resolving OQ-6).
+This runs against Stripe **test mode** and the **Polygon Amoy testnet**.
+There is no production deployment. No real money has moved through this
+system. Everything described below — including "real" and "genuine" — means
+real against a test-mode or testnet backend, not real production traffic.
+See [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before relying on any of
+this for anything that matters.
 
-D-32 then settled the enforcement model, resolving OQ-3 and OQ-10 together:
-enforcement is *rail-initiated* -- the rail asks Waysafe before funds move,
-and the agent never has to. The SDK and any framework adapter are preflight,
-never the thing that stops money moving. Cards come first, via issuing
-real-time authorization (Stripe Issuing test mode); that spike is the next
-piece of work and is specified in `DECISIONS.md` D-32.
+## Quickstart
 
-One open question remains, needing a human answer rather than code: **OQ-7**
-(whether the policy schema needs per-unit limits, or whether the PRD's
-contradictory hotel example should just be corrected).
-
----
-
-## Quick start
+There's no hosted API yet. Clone this repo and run the real engine locally —
+not a mock:
 
 ```bash
+git clone https://github.com/getwaysafe/waysafe.git
+cd waysafe
 npm install
-npx tsx examples/quickstart.ts
+npm run build -w @waysafe/core -w @waysafe/sdk
+npm run quickstart
 ```
 
-That's it — no `.env`, no database, no API key. It boots a local Waysafe API
-in-memory and walks the full journey through `@waysafe/sdk`: compile a
-policy, create and authenticate a mandate, authorize a few purchases (an
-ALLOW, a STEP_UP you approve yourself, a DENY), execute one, and read the
-evidence chain back. `examples/quickstart.ts` is a runnable program, not
-prose — if getting to a first decision takes more than an hour, that's a bug
-in the SDK, not these docs.
+The build step is real, not optional — `dist/` is gitignored, so a clean
+clone has no `@waysafe/sdk` to import until it's built. This is in-memory,
+not a database — `packages/db`'s schema uses native Postgres enums,
+`String[]` columns, and real `SELECT ... FOR UPDATE` row locking that the
+cumulative-spend guarantee below depends on, none of which SQLite can
+express, so the in-memory adapter already used by `npm test` is the honest
+zero-setup path, not a shortcut around a real Postgres deployment.
 
-To point the same script at a real, already-running deployment instead:
-
-```bash
-WAYSAFE_BASE_URL=https://your-deployment.example \
-WAYSAFE_API_KEY=wsf_live_... \
-npx tsx examples/quickstart.ts
-```
-
-Run the dashboard (needs the API running separately, `npm run dev:api`):
-
-```bash
-cp apps/dashboard/.env.example apps/dashboard/.env.local
-# set WAYSAFE_DASHBOARD_SESSION_SECRET -- see the file for how
-npm run dev -w @waysafe/dashboard
-```
-
-Or watch the whole story end to end -- an instruction, a passkey, four
-agent attempts (including a merchant-spoofing attempt a human refuses live),
-and a signed receipt verified independently:
-
-```bash
-npm run demo
-```
-
-Also one command with nothing configured; runs against real Postgres
-instead of in-memory if `DATABASE_URL` is set, minting a fresh organization
-every time so re-running it never collides with a prior run.
-
----
-
-## The idea in sixty seconds
-
-A person tells an agent something fuzzy:
-
-> "Get me a good hotel in Miami. Nothing ridiculous."
-
-Financial infrastructure cannot enforce that. Waysafe compiles it into a
-policy that can be enforced:
+Real, unedited output from an actual run, sections 1–4 (connect, compile,
+create and authenticate a mandate, and the first decision — a real
+**ALLOW** from the real `evaluate()` engine):
 
 ```
-lodging, Miami
-at most $900 per booking, $1,800 total
-your approval required at or above $1,250
-refundable required
-expires in 24 hours
+1. Connect
+  started a local Waysafe API on 127.0.0.1:54400 (in-memory, no database)
+  connected to http://127.0.0.1:54400
+
+2. Compile a natural-language instruction into a policy
+  summary: Spend up to $500 per calendar month on office supplies at Amazon and Staples, never more than $150 at once, with your approval required at any other merchant.
+  assumption: Read 'never more than $150' as a hard limit: transactions above it are denied, not sent to you for approval. Say 'ask me before spending more than $150' if you would rather approve them.
+  assumption: Mapped 'Amazon' to amazon.com and 'Staples' to staples.com.
+  assumption: Blocked gambling, cash advance, crypto, adult, and firearms outright.
+  assumption: Set this authority to expire in 30 days.
+
+3. Register an agent, and create + authenticate a mandate for it
+  mandate: mdt_01m2rnka6g0c8acmtq2ka9e3wv (PENDING_AUTHENTICATION)
+  authenticated -- the mandate is now ACTIVE
+  agent key minted: wsf_live_a463ba08...  (shown once -- store it now)
+
+4. Ask permission for a purchase that's clearly within the mandate
+  decision: ALLOW  status: AUTHORIZED
+    - ALLOW_WITHIN_MANDATE: The action is within the delegated authority.
 ```
 
-A model does the compiling. A model never makes the authorization decision.
-The compiled policy is shown to the person, authenticated with a passkey,
-frozen, and from then on enforced by deterministic code that a model cannot
-reach.
+Same run, same mandate, a purchase over the hard cap:
 
-That boundary is the whole product.
+```
+7. A purchase over the hard cap -- DENY. This is a normal return value, not a thrown error
+  decision: DENY  status: DENIED
+    - DENY_TRANSACTION_LIMIT_EXCEEDED: The amount exceeds the per-transaction maximum of $150.00.
+  asExecutable() on a DENY: null
+```
 
----
+Sections 5–6 and 8–10 of the same run (execution, a step-up you approve
+yourself, a typed SDK error, and independently verifying the signed evidence
+chain) are elided here for length — run `npm run quickstart` yourself, or
+read `examples/quickstart.ts` directly. Same commands and output as
+[waysafe.ai/docs](https://waysafe.ai/docs).
+
+## The nine non-negotiables
+
+The clearest statement of what this actually is. Full text and the reasoning
+behind each is in [`CLAUDE.md`](CLAUDE.md); condensed:
+
+1. **A model never authorizes a transaction.** An LLM appears in exactly one
+   place — the intent compiler, turning natural language into a *proposed*
+   policy. Everything downstream of a frozen policy is deterministic code.
+2. **Money is integer minor units.** `$150` is `15000`. No floats, no
+   decimal strings, ever.
+3. **An unverified merchant can never produce ALLOW.** Trust comes from *who*
+   attested an identifier — a rail's own callback, or Waysafe's own directory
+   lookup — never merely which field it's in. An agent's own assertion caps
+   at `STEP_UP`, whatever field it's typed into.
+4. **No credential ever reaches a model prompt, a log, or a trace.**
+5. **Mandates are immutable versions.** Edits write a new version and
+   supersede the old one; every decision cites the exact `mandateVersionId`
+   and `policyHash` it was decided against.
+6. **Cumulative spend is a SUM over the ledger, never a counter column.**
+   Concurrent authorizations serialize on a real row lock.
+7. **Reason codes are a public API.** Additive only, never renamed.
+8. **The compiler asks rather than inventing a limit.** `needs_clarification`
+   is a valid outcome at HTTP 200. A spending ceiling the principal didn't
+   state is never defaulted.
+9. **An agent's cooperation is never a control.** Enforcement is
+   rail-initiated — the rail asks Waysafe before funds move, and the agent
+   never has to. Anything that depends on the agent calling `authorize()`
+   first is a *preflight*, never the thing that actually stops money moving.
+
+## What's built and what isn't
+
+**Real, and exercised against live test-mode/testnet infrastructure, not
+just unit-tested:**
+
+- The policy engine (`packages/core/src/engine/evaluate.ts`) — amount,
+  merchant identity, category, time window, velocity, and step-up rules, all
+  enforced against a proposed action. See
+  [waysafe.ai/docs](https://waysafe.ai/docs)'s Policy Schema Reference for
+  exactly which fields the engine enforces today versus which are
+  specified-but-unbuilt or absent entirely.
+- The evidence chain — append-only, hash-chained, Ed25519-signed, with a
+  published key directory so a rotation doesn't invalidate historical
+  signatures (D-53), and independently verifiable with nothing but
+  `node:crypto` and a pinned public key.
+- Stripe Issuing enforcement — a card's real-time authorization webhook asks
+  Waysafe before the network approves a charge, in test mode.
+- The x402 / Safe co-signer — a genuine on-chain 2-of-2 multisig on Polygon
+  Amoy. The three bypass cases (a stolen session key alone, a forged
+  co-signature, a genuine signature redirected to a different payment) are
+  broadcast to the real network and reverted on-chain, not simulated — see
+  [waysafe.ai/proof](https://waysafe.ai/proof) for the actual transaction
+  hashes.
+
+**Not built — specified or discussed, never shipped:**
+
+- **Approver mandates.** The step-up model described in `/docs`'s Policy
+  Schema Reference — a second authorization evaluated against a distinct
+  approver mandate — is a design, not code. Today, any valid credential in
+  an organization can resolve a step-up, including the same agent credential
+  that triggered it (D-59) — a real, open gap, not a documented limitation.
+- **A KMS- or HSM-backed signer.** Every private key in this codebase today
+  is loaded from an environment variable into plain process memory
+  ("EnvSigner") — no hardware or service boundary between a process
+  compromise and a key compromise. See `docs/THREAT-MODEL.md` §5.
+- **External anchoring on the evidence chain.** Verifying a chain proves
+  Waysafe signed the record and nothing was altered after the fact. It does
+  not prove completeness — that nothing happened outside what you were
+  shown. Closing that gap needs an anchor outside Waysafe's own database (a
+  public ledger, a certificate-transparency-style log); none exists. See
+  `docs/THREAT-MODEL.md` §3.
+- **A `Signer` interface.** Nothing in this codebase defines or calls
+  through an abstraction over "produce a signature" — every signing call
+  takes a raw key object directly. A prerequisite for the KMS item above,
+  also unbuilt.
+
+## Links
+
+- [waysafe.ai](https://waysafe.ai) — the public site
+- [waysafe.ai/docs](https://waysafe.ai/docs) — SDK reference, a real
+  60-second quickstart, and the full Policy Schema Reference
+- [waysafe.ai/proof](https://waysafe.ai/proof) — one real captured run:
+  signed evidence chain, Stripe Issuing decisions, and three real on-chain
+  bypass rejections, with transaction hashes a third party can check
+  independently
+- [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) — key inventory and blast
+  radius, what five compromise scenarios actually yield, what the evidence
+  chain does and doesn't prove, and known open gaps, written for a security
+  reviewer
+- [`DECISIONS.md`](DECISIONS.md) — every decision made building this and
+  every open question still outstanding, with the reasoning behind each —
+  including the ones that turned out wrong and were corrected in a later
+  entry rather than silently edited away. This is the first thing to read
+  before changing anything.
 
 ## Layout
 
 ```
-packages/core     domain model, policy schema, reason codes, intent compiler
+packages/core     domain model, policy schema, reason codes, merchant identity, intent compiler
 packages/db       Prisma schema (Postgres)
 packages/sdk      TypeScript SDK — the developer contract
-apps/api          REST API
-apps/dashboard    developer dashboard (Next.js, read-mostly)
-examples/         runnable quickstart and demo -- clone and run, not prose
-fixtures/compiler recorded compiler output, replayed in tests
-DECISIONS.md      every default taken, and the open questions
+apps/api          Fastify REST API, payment adapters, evidence chain
+apps/dashboard    developer dashboard (Next.js)
+apps/site         the public marketing site (waysafe.ai)
+examples/         runnable quickstart and demo scripts — clone and run, not prose
+docs/             THREAT-MODEL.md and other reference docs checked into the repo
 ```
 
-`DECISIONS.md` is the first thing to read. It records every decision made
-across the sprint and the open questions still outstanding.
+## Security
 
----
+See [`SECURITY.md`](SECURITY.md) for the disclosure policy and known open
+issues.
 
-## What Week 1 delivers
+## License
 
-**Exit criteria: a developer can submit a natural-language mandate and receive
-a validated structured policy object.** ✅
-
-- `POST /v1/mandates/compile` — instruction in, validated policy out
-- `POST /v1/policies/validate` — validate a hand-authored policy
-- `GET  /v1/reason-codes` — the dictionary Week 2 emits
-- 57 tests covering the schema, merchant identity, and the compiler
-
-Three things worth knowing before reading the code:
-
-**Money is integer minor units.** `$150` is `15000`. The schema rejects
-decimals with an explanatory error. (`D-2`)
-
-**A merchant that cannot be verified can never produce ALLOW.** If the agent
-just types `"Staples"`, the allowlist does not match — the best available
-outcome becomes `STEP_UP`. Allowlists are keyed on domains and PSP account ids,
-never names. This is the difference between a policy engine and a policy
-theater. (`D-3`)
-
-**The compiler asks rather than inventing a limit.** An instruction with no
-ceiling in it returns `needs_clarification` with questions, at HTTP 200.
-Everything the compiler *did* decide on its own is returned in `assumptions`,
-in plain language, for the principal to check before they authenticate. (`D-6`)
-
----
-
-## The six-week build
-
-| Week | Delivers | Exit criteria |
-|---|---|---|
-| 1 ✅ | Domain model, policy schema, intent compiler | NL mandate → validated policy object |
-| 2 ✅ | Deterministic policy engine + spend ledger | Arbitrary actions evaluated against an active mandate |
-| 3 ✅ | WebAuthn, agent API keys, hash-chained audit log | Every decision tied to an authenticated mandate version |
-| 4 ✅ | Payment adapter + Stripe test mode + x402 stub | ALLOW executes, DENY cannot, STEP_UP waits |
-| 5 ✅ | TypeScript SDK + developer dashboard | A new developer integrates without raw REST |
-| 6 ✅ | Demo, hardening, docs | Full lifecycle, instruction to verifiable receipt |
-
----
-
-## Security posture
-
-- No card credential ever enters a model prompt, trace, or log.
-- A model interprets intent. A model never authorizes a transaction.
-- An agent's cooperation is never a control. Enforcement is rail-initiated:
-  the rail asks Waysafe before funds move. Anything that relies on the agent
-  calling `authorize()` first is a preflight, and is documented as one. (`D-32`)
-- Every mandate and policy change is versioned; nothing is edited in place.
-- Every execution cites the exact policy hash that authorized it.
-- Passkeys prove authorization without Waysafe storing biometric data.
-- The system is designed to stay out of PCI scope, not to manage it.
-- Every evidence event is Ed25519-signed and independently verifiable --
-  `verifyEvidenceIndependently` in `@waysafe/sdk` checks a receipt without
-  trusting this server's own database or its judgment about it. (`D-26`)
+Apache License 2.0 — see [`LICENSE`](LICENSE).
