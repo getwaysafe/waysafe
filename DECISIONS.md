@@ -6068,6 +6068,113 @@ itself from a plain insufficient-signature-count case, and that's
 worth having written down for whoever builds the next on-chain bypass
 case here.
 
+## D-61 — `/docs`'s Policy Schema Reference: a field space audited against the code, most of it not built
+
+Documentation only -- no change to `packages/core`, `evaluate()`, or
+any enforcement path. Every status below was checked directly against
+`packages/core/src/policy.ts`, `engine/evaluate.ts`, `engine/types.ts`,
+`merchant.ts`, `money.ts`, and `reason-codes.ts`, not inferred from the
+PRD or from a field merely existing in a type.
+
+**What's genuinely IMPLEMENTED turned out to be substantial and
+precise:** `per_transaction_max`, `cumulative_limits` (amount and
+count, across day/week/month/mandate), every merchant identity scheme
+in an allow/deny list (domain, `psp_account`, `network_mid`,
+`onchain_address`, with D-34's rail-vs-agent trust rule applying
+identically to each), `categories.deny_mcc`, the full `time_window`
+(days-of-week, start/end time, overnight wrap), both `step_up`
+thresholds, and `currency` (a single required value, not a permitted
+set -- and `SUPPORTED_CURRENCIES` in `money.ts` is USD-only today, so
+this check currently has nothing else to ever reject). All cited
+against the exact `evaluate()` sub-function and reason code that
+enforces them.
+
+**What the requested field space asks for but the schema has no name
+for at all -- not SPECIFIED, not RESERVED, simply absent, checked by
+grep and by reading, not assumed:** a rolling N-day window (only fixed
+day/week/month/mandate calendar windows exist, computed by
+`SpendSnapshot`); a per-merchant or per-category amount cap
+(`cumulative_limits` is mandate-wide only); a minimum interval between
+transactions or a burst ceiling (blocked by the same rolling-window
+gap); country (no scheme, no field); permitted rails or specific
+cards/wallets (rail selection happens outside the policy entirely, and
+`Instrument` is a separate domain entity `Policy` never references).
+The reference documents each of these as its own row, status literally
+rendered "not in schema" rather than forced into one of the three real
+statuses, so a reader sees the gap without hunting through prose.
+
+**Two places the session's own instructions assumed something the
+code doesn't have, corrected rather than transcribed:**
+
+1. **"D-34 as a settable field" (Evidence dimension).** The instruction
+   asked this documented as a settable minimum-merchant-trust-tier
+   field. Checked `merchant.ts`/`evaluate.ts` directly: the VERIFIED-
+   for-ALLOW rule is real and unconditionally enforced (IMPLEMENTED),
+   but there is no policy field anywhere that makes it configurable --
+   every mandate gets the identical fixed threshold. Documented as
+   IMPLEMENTED-and-not-configurable, with an explicit row rather than
+   describing a setting that would mislead a reader into thinking one
+   mandate could set a looser or stricter bar than another.
+2. **"A delegation-depth field is RESERVED" (Approver Mandates).**
+   Grepped `packages/core` for `approver`/`delegat` before writing
+   this section: zero hits beyond "delegated authority" as plain
+   English for what a mandate grants an *agent*, nothing about
+   approvers or delegation depth at all. RESERVED requires an actual
+   name in code (an enum member, a reason code) per this reference's
+   own definition -- since none exists, calling it RESERVED would be
+   inventing the field's existence to satisfy the instruction rather
+   than reporting what the code says. The page states the intent
+   (single-level authority; a delegation-depth field belongs in a
+   future approver schema from the start) without claiming a
+   reservation that isn't there.
+
+**One genuine RESERVED field, not manufactured:**
+`STEP_UP_MANDATE_REQUIRES_REAUTH` is a real, permanent name in
+`reason-codes.ts`'s public API, confirmed by grep to be emitted
+nowhere in `evaluate()` or the authorization service. This is what the
+reference's RESERVED status actually looks like in this codebase --
+useful as the contrast case for why the delegation-depth field above
+isn't the same thing.
+
+**One claim caught and fixed during writing, not after:** a first
+draft of the Approver Mandates section said needs-evidence step-ups
+(`STEP_UP_MERCHANT_UNVERIFIED`) already resolve automatically today
+when better-attested evidence arrives, "the same way
+`DENY_MERCHANT_UNRESOLVED` resolving into a verified match already
+works." Checked for a re-evaluation path before shipping that sentence
+-- none exists; the only way a pending step-up resolves today is an
+explicit `approveStepUp`/`declineStepUp` call. Rewritten to say this
+automatic-resolution class is SPECIFIED, not built, same as the rest
+of the Approver Mandates model.
+
+**The D-59 gap is stated as a defect, not a documented limitation:**
+the Escalation table's "who may approve" row and the Approver Mandates
+section's own closing paragraph both say plainly that
+`POST /v1/authorizations/:id/step-up` today accepts any credential in
+the organization, including the same agent key that produced the
+`STEP_UP` -- collapsing `STEP_UP` to `ALLOW` for an attacker holding
+just that key -- and that the approver-mandate model this section
+describes is what closes it, not a description of how the gap is
+already handled.
+
+Placed at the end of `/docs`, after Reason codes -- a deep reference
+appendix, not something a first-time reader needs before the
+quickstart. Building this page also required finishing the quickstart
+and concepts sections left mid-edit from an earlier, unrelated task in
+this same file (the file did not compile without it); that work is
+included in this same commit rather than left broken.
+
+`npm run build:site` succeeds; every status badge, every "not in
+schema" row, and the full Approver Mandates and Invariants prose
+confirmed directly in the rendered `out/docs.html`, not assumed from
+the source. Full suite green (573 passed, 1 pre-existing expected
+skip) -- unaffected, since nothing outside `apps/site` changed.
+
+**Change cost if wrong:** low -- documentation only. A wrong status on
+this page would mislead an integrator about what the engine actually
+enforces, which is exactly the failure mode checking against the code
+first (rather than the PRD) was meant to prevent.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
