@@ -6000,6 +6000,74 @@ a step-up, or bind step-up resolution to a session/channel the
 requesting agent doesn't control), genuinely buildable, and not
 attempted in this entry, which is documentation only.
 
+## D-60 — `/proof`'s third on-chain case replaced: byte-identical to the first, now a genuinely different claim
+
+`session_key_alone` and `session_key_no_waysafe` were the same call
+twice: same calldata, same session signature, same `GS020`, just two
+different names on one fact -- an honest artifact of
+`apps/api/src/demo/routes.ts`'s own bypass-proof route, which already
+reused `sessionAloneResult` verbatim for both cases rather than
+running a distinct scenario (noted, not fixed, in D-52's own capture
+entry). Two rows that prove the identical thing add a row, not
+evidence.
+
+Replaced `session_key_no_waysafe` with `session_signature_mismatch`: a
+genuine Waysafe co-signature for the real, actually-submitted transfer,
+paired with a genuine session-key signature -- produced for a
+*different* transfer, not this one. This tests something
+`forged_envelope` doesn't: not "can fabricated bytes pass as a
+signature" but "can a real signature, once observed, be redirected to
+authorize something else." The realistic version of that question,
+since an attacker is far more likely to have actually seen one genuine
+signed request than to be attempting outright forgery.
+
+**First attempt (tx `0x072fce9c43806ef5e9607c430cf38c4faa75df63342eb5192b7a456b30831488`) didn't test what it was built to test, and got caught before being used, not after.**
+Only one signature (65 bytes) was ever attached -- the threshold-length
+gate (`GS020`, requires `2 * 65` bytes present before any per-signature
+check even runs) rejected it before the message/signature mismatch was
+ever evaluated, reproducing `session_key_alone`'s exact result under a
+different name -- the identical problem this entry exists to fix.
+Real, honest, broadcast, mined, reverted -- and still not usable, so
+not used: not written to `proof.json`, superseded by a corrected
+construction, cited here rather than quietly discarded.
+
+**Corrected construction:** two real signatures present, clearing the
+length gate the way `forged_envelope` does -- a genuine cosigner
+signature over the transfer actually being submitted (redirecting
+funds to the session key's own address), plus a genuine session-key
+signature captured from signing a *different* transfer (paying the
+cosigner, `session_key_alone`'s own shape). `checkNSignatures`
+validates each signature independently against the hash of what's
+actually submitted: the cosigner's recovers correctly; the session
+key's, signed over a different message, recovers to an address that
+isn't a real owner. Pre-broadcast simulation predicted `GS026`
+("invalid owner provided") before any gas was spent, and the script
+aborted rather than broadcast if it had predicted anything else. Real
+broadcast, tx
+`0xee2945a57559bab96b8676a41dd4c95f20aed28d9da56225f03c948776869a5d`,
+mined `status: "reverted"`, confirmed a second way by replaying the
+exact mined call at its own block: `GS026`.
+
+Checked gas (~30 gwei, fine) and the cosigner's balance (0.0278 POL)
+before starting; both broadcasts together cost ~0.0038 POL, leaving
+~0.024 POL. Neither script touched `x402-safe.ts` or
+`apps/api/src/demo/routes.ts` -- both one-off, neither committed,
+matching D-55/D-57's own discipline. `/proof`'s rendering needed no
+code change: the on-chain table already reads `name`/`description`/
+`revert_reason_*`/`on_chain` generically from `proof.json`, so a new
+case is a data change, not a page change. `npm run build:site`
+succeeds; the new case's tx hash and description confirmed directly in
+the rendered `out/proof.html`. Full suite green (573 passed, 1
+pre-existing expected skip).
+
+**Change cost if wrong:** low for the files; the real cost already
+happened and was small -- ~0.0038 POL across both attempts, testnet
+funds, no counterparty. The first, unusable attempt is the more
+instructive cost: a one-signature "mismatch" test can't distinguish
+itself from a plain insufficient-signature-count case, and that's
+worth having written down for whoever builds the next on-chain bypass
+case here.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
