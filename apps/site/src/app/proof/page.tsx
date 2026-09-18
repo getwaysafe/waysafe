@@ -23,10 +23,12 @@ function truncate(hex: string, lead = 10, tail = 8): string {
   return `${hex.slice(0, lead)}…${hex.slice(-tail)}`;
 }
 
-// A transaction that reverts before submission never had a chance to cost
-// gas or get mined -- that's a stronger result than a broadcast revert, not
-// a gap in the evidence. This label makes the two states visually parallel
-// (badge + badge) rather than one being a hash/link and the other a blank.
+// Whether this row's transaction was actually broadcast and mined, versus
+// never reaching the network at all. Every row today is SUBMITTED · MINED
+// (D-57 broadcast all three bypass cases for real, closing the gap D-55
+// left for two of them) -- kept generic, not hardcoded to that, since a
+// row without a real tx hash is still a meaningfully different claim and
+// this component is what would have to show it again if one ever existed.
 function OnChainLabel({ submitted }: { submitted: boolean }) {
   return submitted ? (
     <span className="badge badge-allow">SUBMITTED · MINED</span>
