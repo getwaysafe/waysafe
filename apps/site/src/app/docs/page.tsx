@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { CONTACT_EMAIL } from "@/lib/constants";
 import proof from "@/data/proof.json";
 import { CopyButton } from "@/components/CopyButton";
 
@@ -675,12 +674,8 @@ export default function DocsPage() {
 
         <h2 style={{ marginTop: 48 }}>Quickstart</h2>
         <p style={{ maxWidth: 700 }}>
-          There&rsquo;s no hosted API yet — email{" "}
-          <a className="link" href={`mailto:${CONTACT_EMAIL}`}>
-            {CONTACT_EMAIL}
-          </a>{" "}
-          for repo access. Once you have it, this is the fastest path to a real decision: not a
-          mock, the actual <code>evaluate()</code> engine, running locally. In-memory, not a
+          There&rsquo;s no hosted API yet — clone the public repo and this is the fastest path to
+          a real decision: not a mock, the actual <code>evaluate()</code> engine, running locally. In-memory, not a
           database — <code>packages/db</code>&rsquo;s schema uses native Postgres enums,{" "}
           <code>String[]</code> columns, and (the disqualifying one) real{" "}
           <code>SELECT ... FOR UPDATE</code> row locking that D-4&rsquo;s cumulative-spend
@@ -745,13 +740,15 @@ export default function DocsPage() {
 
         <h2 style={{ marginTop: 56 }}>Install and instantiate</h2>
         <p style={{ maxWidth: 700 }}>
-          Once you have a real deployment (email{" "}
-          <a className="link" href={`mailto:${CONTACT_EMAIL}`}>
-            {CONTACT_EMAIL}
-          </a>{" "}
-          for access — not yet on npm):
+          <code>@waysafe/sdk</code> is real, public source — <code>packages/sdk</code> in this
+          repo, the same package the quickstart above already ran, straight from a clone. It
+          isn&rsquo;t published to npm yet because there&rsquo;s no hosted API yet for a
+          published package to point at — nothing to publish for, not something being withheld.
+          Once a hosted deployment exists, this is what installing and pointing it at one will
+          look like:
         </p>
-        <pre>{`npm install @waysafe/sdk
+        <pre>{`# not yet published -- this is what it will look like once a hosted API exists
+npm install @waysafe/sdk
 
 import { Waysafe } from "@waysafe/sdk";
 
