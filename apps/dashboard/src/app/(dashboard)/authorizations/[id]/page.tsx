@@ -4,7 +4,6 @@ import { NotFoundError } from "@waysafe/sdk";
 import { requireSessionClient } from "../../../../lib/waysafe";
 import { Badge, formatDate } from "../../../../lib/format";
 import { formatDetail } from "../../../../lib/reasons";
-import { approveStepUp, declineStepUp } from "./actions";
 import { ActorFields } from "./actor-fields";
 
 export default async function AuthorizationDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -62,22 +61,22 @@ export default async function AuthorizationDetailPage({ params }: { params: Prom
             <p style={{ color: "var(--muted)", fontSize: 13 }}>Expires {formatDate(receipt.step_up.expires_at)}</p>
           )}
 
-          <form style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button
-              formAction={approveStepUp.bind(null, receipt.authorization_id)}
-              className="approve"
-              type="submit"
-            >
-              Approve
-            </button>
-            <button
-              formAction={declineStepUp.bind(null, receipt.authorization_id)}
-              className="decline"
-              type="submit"
-            >
-              Decline
-            </button>
-          </form>
+          {/* D-62 closed D-59: resolving a step-up now requires a real,
+              different, named approver mandate's own credential -- an org
+              session (what this dashboard authenticates as) can no longer
+              resolve one, on purpose. There is deliberately no
+              approve/decline UI here ("do not build any approver UI" --
+              out of scope for D-62): call
+              waysafe.resolveStepUp(authorization_id, { agentId,
+              principalId, mandateId }) from that approver's own
+              integration, the same way any other developer's approval UI
+              would (I-10). */}
+          <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 12 }}>
+            Resolving this requires a different, named approver mandate&rsquo;s own credential (D-62) --
+            not this dashboard&rsquo;s session. Call{" "}
+            <code>waysafe.resolveStepUp(authorization_id, {`{ agentId, principalId, mandateId }`})</code> from
+            that approver&rsquo;s own integration.
+          </p>
         </div>
       )}
 

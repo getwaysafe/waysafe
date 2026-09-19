@@ -94,6 +94,14 @@ const METHODS: {
     throws: "NotFoundError, NetworkError",
   },
   {
+    name: "resolveStepUp",
+    signature:
+      "resolveStepUp(authorizationId: string, approver: { agentId: string; principalId: string; mandateId?: string; idempotencyKey?: string }): Promise<AuthorizationDecision>",
+    description:
+      "Resolves a needs-higher-authority step-up as an approver mandate (D-62). Never a bare approve/decline flag — the real evaluate() engine runs against the approver's own policy. ALLOW resolves to STEP_UP_APPROVED; DENY or STEP_UP resolves to STEP_UP_DECLINED. Already resolved or expired: replays the recorded outcome, never re-evaluates.",
+    throws: "StepUpResolutionRejectedError, AuthorizationStatusConflictError, NetworkError",
+  },
+  {
     name: "listAuthorizations",
     signature: "listAuthorizations(options?: { limit?: number }): Promise<AuthorizationDecision[]>",
     description: "Lists authorizations in your organization, most-recent-first.",
@@ -246,6 +254,28 @@ const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP"; desc
     code: "DENY_MERCHANT_UNRESOLVED",
     decision: "DENY",
     description: "The merchant could not be resolved to a verifiable identity.",
+  },
+  {
+    code: "DENY_STEP_UP_SELF_APPROVAL",
+    decision: "DENY",
+    description:
+      "A mandate cannot resolve its own step-up; the resolving credential must belong to a different, authorized approver mandate.",
+  },
+  {
+    code: "DENY_MANDATE_NOT_AN_APPROVER",
+    decision: "DENY",
+    description: "This mandate is not named in the principal mandate's list of approvers.",
+  },
+  {
+    code: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+    decision: "DENY",
+    description:
+      "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
+  },
+  {
+    code: "DENY_APPROVER_CYCLE",
+    decision: "DENY",
+    description: "This mandate's approvers would form a cycle with a mandate that already exists.",
   },
   {
     code: "STEP_UP_AMOUNT_THRESHOLD",
@@ -594,11 +624,27 @@ const ESCALATION_FIELDS: PolicyFieldRow[] = [
     semantics: "Escalates instead of denying an unlisted category.",
   },
   {
-    field: "who may approve",
+    field: "escalation.approvers",
+    type: "string[] (mandate ids), default []",
+    status: "IMPLEMENTED",
+    reasonCode: "DENY_STEP_UP_SELF_APPROVAL / DENY_MANDATE_NOT_AN_APPROVER",
+    semantics:
+      "D-62: who may resolve a needs-higher-authority step-up on this mandate. Absent or empty means unresolvable — expires to DENY (D-31). See Approver Mandates below — this closes the D-59 gap that section used to describe.",
+  },
+  {
+    field: "an approver mandate escalating further",
     type: "—",
-    status: "not in schema",
-    reasonCode: "—",
-    semantics: "No approver concept anywhere in Policy. See Approver Mandates below — and the D-59 gap it names.",
+    status: "IMPLEMENTED",
+    reasonCode: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+    semantics: "Single-level by design, enforced as a refusal: an approver's own STEP_UP declines the resolution rather than chaining to a further approver.",
+  },
+  {
+    field: "escalation.approvers forming a cycle",
+    type: "—",
+    status: "IMPLEMENTED",
+    reasonCode: "DENY_APPROVER_CYCLE",
+    semantics:
+      "Enforced at mandate-creation time, not resolve time: a mandate naming itself, or two mandates naming each other, is rejected. Cycles of three or more are not caught here; see Approver Mandates below for the bounded-risk reasoning.",
   },
   {
     field: "mandate re-authentication requirement",
@@ -646,9 +692,10 @@ const QUICKSTART_OUTPUT_ALLOW = `1. Connect
     - ALLOW_WITHIN_MANDATE: The action is within the delegated authority.`;
 
 // Same run, section 7 -- the DENY. Sections 5-6 and 8-10 (execution, a
-// step-up you approve yourself, a malformed-request error, and independent
-// evidence-chain verification) are elided here, not edited out of the
-// script; run it yourself to see them.
+// step-up resolved by a real approver mandate after a rejected self-approval
+// attempt (D-62), a malformed-request error, and independent evidence-chain
+// verification) are elided here, not edited out of the script; run it
+// yourself to see them.
 const QUICKSTART_OUTPUT_DENY = `7. A purchase over the hard cap -- DENY. This is a normal return value, not a thrown error
   decision: DENY  status: DENIED
     - DENY_TRANSACTION_LIMIT_EXCEEDED: The amount exceeds the per-transaction maximum of $150.00.
@@ -696,9 +743,10 @@ export default function DocsPage() {
         <p style={{ maxWidth: 700 }}>Same run, same mandate, a purchase over the hard cap:</p>
         <pre>{QUICKSTART_OUTPUT_DENY}</pre>
         <p style={{ maxWidth: 700 }}>
-          Sections 5–6 and 8–10 of the same run (execution, a step-up you approve yourself, a
-          typed SDK error, and independently verifying the signed evidence chain) are elided
-          here for density — run <code>npm run quickstart</code> yourself to see them, or read{" "}
+          Sections 5–6 and 8–10 of the same run (execution, a step-up resolved by a real approver
+          mandate after a rejected self-approval attempt (D-62), a typed SDK error, and
+          independently verifying the signed evidence chain) are elided here for density — run{" "}
+          <code>npm run quickstart</code> yourself to see them, or read{" "}
           <code>examples/quickstart.ts</code> directly.
         </p>
 
@@ -1050,12 +1098,13 @@ const waysafe = new Waysafe({
         </p>
 
         <h3 style={{ marginTop: 40 }}>Approver Mandates</h3>
-        <div className="card" style={{ marginTop: 8, marginBottom: 16, background: "#fff8e1", borderColor: "#f0c96b" }}>
+        <div className="card" style={{ marginTop: 8, marginBottom: 16, background: "#e8f5e9", borderColor: "#7cb87f" }}>
           <p style={{ margin: 0 }}>
-            <strong>Everything in this subsection is SPECIFIED — a design, not shipped
-            behavior — unless a sentence says otherwise.</strong> No approver concept exists
-            anywhere in <code>packages/core</code> today: no schema field names one, no reason
-            code distinguishes one kind of approval from another.
+            <strong>D-62: real, shipped, tested.</strong> Resolving a needs-higher-authority
+            step-up now requires a different, named approver mandate&rsquo;s own credential — the
+            same <code>evaluate()</code> engine, a real ledger entry, real reason codes. This
+            closes D-59 (below). Two things stay SPECIFIED, not built — delegation depth beyond
+            one level, and the needs-evidence class ((a) below) — each called out where it applies.
           </p>
         </div>
         <p style={{ maxWidth: 700 }}>
@@ -1066,9 +1115,13 @@ const waysafe = new Waysafe({
         </p>
         <p style={{ maxWidth: 700 }}>
           The principal signs the approver&rsquo;s authority <strong>once</strong>, at enrollment,
-          via WebAuthn (D-20) — the same passkey ceremony that activates any mandate. After that,
-          approvals run at machine speed with no human present. The human is in the{" "}
-          <em>authority</em> path, not the <em>transaction</em> path.
+          via WebAuthn (D-20) — the same passkey ceremony that activates any mandate.{" "}
+          <code>escalation.approvers</code> is set at mandate creation, alongside every other
+          policy field, by the same signature. (No separate &ldquo;update this mandate&rdquo;
+          ceremony exists yet — changing an existing mandate&rsquo;s approver set means creating a
+          new mandate, same as changing any other field today.) After that, approvals run at
+          machine speed with no human present. The human is in the <em>authority</em> path, not
+          the <em>transaction</em> path.
         </p>
         <p style={{ maxWidth: 700 }}>
           An approver is any actor holding an approver mandate: a treasury service, a manager, a
@@ -1081,25 +1134,58 @@ const waysafe = new Waysafe({
         <p style={{ maxWidth: 700 }}>
           An approver mandate is bounded by the same policy schema documented above — amount
           ceilings, merchant scope, time windows, velocity. An approver cannot approve outside its
-          own mandate; it is a mandate, evaluated the same way any other is.
+          own mandate; it is a mandate, evaluated the same way any other is. And it is not free to
+          approve: an approval writes a real, permanent ledger entry against the{" "}
+          <strong>approver&rsquo;s own mandate</strong> (never released), so its cumulative and
+          velocity limits actually accumulate from the approvals it grants, not only from its own{" "}
+          <code>authorize()</code> calls. A per-period cumulative cap on an approver mandate is a
+          real ceiling on how much it can approve in that period, not just on how much it can
+          spend directly.
         </p>
         <p style={{ maxWidth: 700 }}>
           Authority is <strong>single-level</strong>: an approver may authorize transactions but
-          may not mint another approver. A delegation-depth field is not currently reserved
-          anywhere in <code>packages/core</code> — checked directly, not assumed — so this session
-          notes the gap in <code>DECISIONS.md</code> rather than claiming a reservation that
-          doesn&rsquo;t exist. The intent stands regardless of the naming: when an approver-mandate
-          schema is built, a delegation-depth field belongs in it from the start, so chains can be
-          added later without a schema migration.
+          may not mint another approver, and cannot escalate a step-up further. If the approver&rsquo;s
+          own <code>evaluate()</code> also returns <code>STEP_UP</code> for the action, the
+          resolution declines with <code>DENY_APPROVER_ESCALATION_NOT_SUPPORTED</code> — it does
+          not chain to a second approver. A delegation-depth field is not currently reserved
+          anywhere in <code>packages/core</code> — checked directly, not assumed — so this stays
+          documented as a gap rather than a reservation that doesn&rsquo;t exist. The intent
+          stands regardless of the naming: a delegation-depth field belongs in a future schema
+          from the start, so chains can be added later without a migration.
         </p>
         <p style={{ maxWidth: 700 }}>
-          Changing the approver set is itself a policy change, and requires mandate-creation
-          authority (Invariant 3) signed by the principal. An approver cannot add approvers.
+          <strong>Cycles.</strong> Rules 1 and 2 alone don&rsquo;t stop mutual approval — mandate A
+          naming B as approver and B naming A back would let each resolve the other&rsquo;s
+          step-ups with neither rule firing. A mandate naming itself (the degenerate 1-cycle) or
+          two mandates naming each other (an exact mutual pair) is rejected at{" "}
+          <strong>mandate creation</strong>, not at resolve time — <code>DENY_APPROVER_CYCLE</code>{" "}
+          — checked by looking at whether the candidate approver&rsquo;s own current policy
+          already names the mandate being created back. Cycles of three or more (A names B, B
+          names C, C names A) are <strong>not</strong> caught here — that would need a full graph
+          walk across every mandate in an organization on every creation, which this build doesn&rsquo;t
+          do. That gap is accepted, not overlooked, because it&rsquo;s bounded by the ledger rule
+          just above: <code>evaluate()</code> in a longer cycle still runs against each
+          approver&rsquo;s own policy, and each approval still costs real, permanent budget on
+          that approver&rsquo;s own mandate — a cycle can&rsquo;t be used to escalate authority
+          without limit, only up to whatever the weakest link&rsquo;s own signed cumulative cap
+          allows. See <code>DECISIONS.md</code> D-62 and <code>THREAT-MODEL.md</code> for this
+          named as a bounded risk, not left undiscussed.
         </p>
         <p style={{ maxWidth: 700 }}>
-          Approval authorizes <strong>one action</strong>. It never raises a cap, extends a
-          window, or mutates the mandate in any way — approving a $9,000 purchase does not raise
-          the mandate&rsquo;s per-transaction ceiling for the next one.
+          Approval authorizes <strong>one action</strong>. It never mutates <em>policy</em> on
+          either mandate — no raised cap, no extended window, no new approver — approving a
+          $9,000 purchase does not raise the mandate&rsquo;s per-transaction ceiling for the next
+          one. (It does write the real ledger entry described above; that&rsquo;s ledger, not
+          policy.)
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          <strong>Single-use and idempotent.</strong> A step-up resolves at most once. A second
+          resolve attempt on an already-resolved (or already-expired) step-up — from the same
+          approver, a different approver, or anyone else — replays the recorded outcome and its
+          reason codes; it never re-runs <code>evaluate()</code>. Two approvers resolving the same
+          step-up simultaneously, or an approval racing the TTL sweep, settle atomically: first
+          writer wins, every other caller gets the recorded outcome back, never an error and never
+          a second decision.
         </p>
         <p style={{ maxWidth: 700 }}>
           Step-up classes resolve differently, and the distinction matters:
@@ -1109,16 +1195,15 @@ const waysafe = new Waysafe({
           would resolve the moment a better-attested source supplies the identifier — a
           rail&rsquo;s own callback corroborating a domain, for instance — with no approver, no
           human, at machine speed. This class of automatic resolution is SPECIFIED, not built: no
-          code today re-evaluates a pending step-up when new evidence arrives, only when a human or
-          system explicitly calls <code>approveStepUp</code>/<code>declineStepUp</code>. What is
-          real today (D-34) is that the <em>same underlying trust rule</em> already runs on every
-          fresh evaluation — a rail-attested merchant on a new request resolves to{" "}
-          <code>VERIFIED</code> the same way it always does; nothing here re-checks a specific
-          pending authorization automatically.
+          code today re-evaluates a pending step-up when new evidence arrives, only when a real
+          approver mandate explicitly resolves it. What is real today (D-34) is that the{" "}
+          <em>same underlying trust rule</em> already runs on every fresh evaluation — a
+          rail-attested merchant on a new request resolves to <code>VERIFIED</code> the same way
+          it always does; nothing here re-checks a specific pending authorization automatically.
         </p>
         <p style={{ maxWidth: 700 }}>
-          <strong>(b) Needs-higher-authority</strong> resolves via an approver mandate, as
-          described above.
+          <strong>(b) Needs-higher-authority</strong> resolves via an approver mandate — real,
+          shipped, described above and in the sequence below.
         </p>
         <p style={{ maxWidth: 700 }}>
           <strong>(c) Unresolvable</strong> is a <code>DENY</code> at evaluation time, not a
@@ -1128,23 +1213,43 @@ const waysafe = new Waysafe({
         </p>
         <p style={{ maxWidth: 700 }}>
           <strong>Expiry and fail direction:</strong> an unresolved step-up expires to{" "}
-          <code>DENY</code>. This part is not aspirational —{" "}
-          <code>step_up.ttl_seconds</code> and the expiry-sweep path (D-31) are real, implemented
-          today (see Escalation above).
+          <code>DENY</code>. <code>step_up.ttl_seconds</code> and the expiry-sweep path (D-31) are
+          real, implemented today (see Escalation above), and hold identically whether the step-up
+          is ever offered to an approver or not.
         </p>
         <p style={{ maxWidth: 700 }}>
-          <strong>The D-59 gap, stated plainly, not softened:</strong> today,{" "}
-          <code>POST /v1/authorizations/:id/step-up</code> checks only that the presented
-          credential belongs to the same organization — the same agent key that produced a{" "}
-          <code>STEP_UP</code> decision can call <code>approveStepUp</code> on it immediately
-          after, with no human, no second credential, and no code path that refuses it. This lets
-          an agent credential manufacture authority it was never granted, collapsing{" "}
-          <code>STEP_UP</code> to the same outcome as <code>ALLOW</code> for anyone holding just
-          that one key. This is a defect in the current implementation, not a documented
-          limitation of the design above — the approver-mandate model this section describes is
-          what closes it, by requiring a step-up&rsquo;s resolution to come from a{" "}
-          <em>different</em> mandate&rsquo;s authority, never the same credential that triggered
-          it.
+          <strong>The full sequence:</strong>
+        </p>
+        <pre>{`authorize()  ->  STEP_UP, status PENDING_STEP_UP
+resolveStepUp(authorizationId, approver)
+  -> approver's evaluate() ALLOW  ->  status STEP_UP_APPROVED
+  -> approver's evaluate() DENY/STEP_UP  ->  status STEP_UP_DECLINED
+asExecutable(decision)  ->  non-null exactly when STEP_UP_APPROVED (same as a fresh ALLOW)
+execute(executable, params)  ->  status EXECUTED`}</pre>
+        <p style={{ maxWidth: 700 }}>
+          <code>STEP_UP_APPROVED</code> is executable the identical way <code>AUTHORIZED</code>{" "}
+          is — <code>asExecutable()</code> has treated the two identically since before this
+          section existed; D-62 didn&rsquo;t need to change that, only what can produce{" "}
+          <code>STEP_UP_APPROVED</code> in the first place.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          <strong>D-59, closed:</strong> an agent credential could resolve its own step-up — the
+          same agent key that produced a <code>STEP_UP</code> decision could immediately call the
+          resolution endpoint on it, with no human, no second credential, and no code path that
+          refused it, collapsing <code>STEP_UP</code> to the same outcome as <code>ALLOW</code> for
+          anyone holding just that one key. Closed by requiring the resolving credential to belong
+          to a <em>different</em>, named approver mandate: rejected with{" "}
+          <code>DENY_STEP_UP_SELF_APPROVAL</code> if it&rsquo;s the same mandate, checked first,
+          ahead of every other rule. An org-level credential — which has no agent identity at all
+          — was never a valid resolver either, and still isn&rsquo;t: it can never match a real
+          approver mandate&rsquo;s own agent key. Proven, not just described: the adversarial
+          suite (<code>apps/api/src/authorization/service.test.ts</code>,{" "}
+          <code>server.test.ts</code>) covers self-approval, a mandate not on the approvers list,
+          an approver whose own policy caps below the amount, an approver at its own cumulative
+          ceiling, TTL expiry racing resolution, the 1- and 2-cycle rejections at creation, a real
+          runtime 3-cycle bounded by the ledger rule, and both concurrency races — plus a real,
+          non-simulated Postgres regression test for a nested-transaction hazard the first live
+          run against a real database surfaced.
         </p>
       </div>
     </div>

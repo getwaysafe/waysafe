@@ -24,6 +24,7 @@
 import {
   Waysafe,
   WaysafeError,
+  StepUpResolutionRejectedError,
   asExecutable,
   verifyEvidenceIndependently,
   type AuthorizationDecision,
@@ -149,6 +150,51 @@ async function authenticateMandateWithASimulatedPasskey(waysafe: Waysafe, mandat
   if (result.kind !== "activated") throw new Error(`expected the mandate to activate, got: ${JSON.stringify(result)}`);
 }
 
+/**
+ * Silent setup, same pattern as authenticateMandateWithASimulatedPasskey
+ * just above: registers a second, independent mandate that will act as
+ * the first mandate's approver (D-62). Nothing about creating or
+ * authenticating an approver mandate is special -- it's an ordinary
+ * mandate, the same ceremony as any other; what makes it an approver is
+ * being named in another mandate's escalation.approvers, set once at
+ * mandate creation (non-negotiable #5: that's a policy field like any
+ * other). Prints nothing of its own, so it doesn't appear between
+ * quickstart's own numbered sections.
+ */
+async function registerApproverMandate(
+  org: Waysafe,
+  baseUrl: string,
+): Promise<{ mandateId: string; agentId: string; principalId: string; client: Waysafe }> {
+  const { POLICY_SCHEMA_VERSION } = await import("@waysafe/core");
+  const agent = await org.createAgent({ name: "quickstart approver bot" });
+  const principal = await org.createPrincipal({ display_name: "Quickstart Approver Principal" });
+  const mandate = await org.createMandate({
+    principal_id: principal.principal_id,
+    agent_ids: [agent.agent_id],
+    policy: {
+      schema_version: POLICY_SCHEMA_VERSION,
+      summary: "Approver: may authorize up to $2,000/month, any merchant this mandate is asked about.",
+      currency: "USD",
+      per_transaction_max: 200000, // $2,000.00
+      cumulative_limits: [{ window: "month", max_amount: 200000 }],
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+      categories: { allow: [], deny: [], unlisted: "ALLOW" },
+      step_up: { ttl_seconds: 900 },
+      accounting: {},
+      expires_at: "2099-01-01T00:00:00.000Z",
+    },
+    intent_text: "approver mandate for the quickstart demo",
+  });
+  await authenticateMandateWithASimulatedPasskey(org, mandate.mandate_id);
+  const key = await org.createAgentKey(agent.agent_id, { name: "quickstart approver key" });
+  return {
+    mandateId: mandate.mandate_id,
+    agentId: agent.agent_id,
+    principalId: principal.principal_id,
+    client: new Waysafe({ baseUrl, apiKey: key.api_key }),
+  };
+}
+
 function printDecision(decision: AuthorizationDecision): void {
   console.log(`  ${dim("decision:")} ${decision.decision}  ${dim("status:")} ${decision.status}`);
   for (const reason of decision.reasons) {
@@ -168,6 +214,10 @@ async function main() {
   closeServer = close;
   const org = new Waysafe({ baseUrl, apiKey });
   console.log(`  ${ok("connected")} to ${baseUrl}`);
+
+  // Silent setup for section 6 below -- see registerApproverMandate's own
+  // doc comment for why this prints nothing here.
+  const approver = await registerApproverMandate(org, baseUrl);
 
   section("2. Compile a natural-language instruction into a policy");
   const instruction =
@@ -190,7 +240,11 @@ async function main() {
   const mandate = await org.createMandate({
     principal_id: principalId,
     agent_ids: [agent.agent_id],
-    policy: compiled.policy,
+    // escalation.approvers names the approver mandate registered silently
+    // above -- see section 6. Setting it is an ordinary part of this
+    // mandate's policy, signed by the same WebAuthn ceremony just below
+    // (D-62: no separate enrollment step).
+    policy: { ...compiled.policy, escalation: { approvers: [approver.mandateId] } },
     intent_text: instruction,
   });
   console.log(`  ${dim("mandate:")} ${mandate.mandate_id} (${mandate.status})`);
@@ -230,7 +284,7 @@ async function main() {
     console.log(`  ${dim("verified receipt:")} ${receipt.authorization_id} -- ${receipt.status}`);
   }
 
-  section("6. A merchant not on the mandate's allowlist -- STEP_UP, and how to drive it from your own UI");
+  section("6. A merchant not on the mandate's allowlist -- STEP_UP, resolved by a real approver mandate (D-62)");
   const unlistedMerchantPurchase = await agentClient.authorize({
     agent_id: agent.agent_id,
     principal_id: principalId,
@@ -247,11 +301,32 @@ async function main() {
 
   if (unlistedMerchantPurchase.step_up) {
     // I-10: `step_up` is just `{ authorization_id, expires_at }` -- no
-    // hosted page. Show the receipt in your own approval UI, get a yes/no
-    // from the principal, and call approveStepUp/declineStepUp yourself.
+    // hosted page. Show the receipt in your own approval UI, then call
+    // resolveStepUp naming which approver mandate is deciding.
     console.log(dim(`  step-up pending, expires ${unlistedMerchantPurchase.step_up.expires_at}`));
-    const approved = await agentClient.approveStepUp(unlistedMerchantPurchase.step_up.authorization_id);
-    console.log(`  ${ok("approved")} -- status is now ${approved.status}`);
+
+    // D-59/D-62: the same agent that triggered the step-up cannot resolve
+    // its own escalation. This is the exact hole D-59 named -- closed here,
+    // not just documented.
+    try {
+      await agentClient.resolveStepUp(unlistedMerchantPurchase.step_up.authorization_id, {
+        agentId: agent.agent_id,
+        principalId,
+      });
+      throw new Error("expected self-approval to be rejected");
+    } catch (error) {
+      if (!(error instanceof StepUpResolutionRejectedError)) throw error;
+      console.log(`  ${warn("rejected")} -- an agent cannot resolve its own step-up: ${error.reasons[0]?.code}`);
+    }
+
+    // A real approver: a different mandate, its own policy, its own
+    // passkey enrollment. evaluate() runs again, against ITS bounds.
+    const approved = await approver.client.resolveStepUp(unlistedMerchantPurchase.step_up.authorization_id, {
+      agentId: approver.agentId,
+      principalId: approver.principalId,
+      mandateId: approver.mandateId,
+    });
+    console.log(`  ${ok("approved")} by the approver mandate -- status is now ${approved.status}`);
 
     const nowExecutable = asExecutable(approved);
     if (nowExecutable) {
@@ -314,9 +389,10 @@ async function main() {
 
   section("Done");
   console.log("  You just compiled a policy, created and authenticated a mandate, asked permission");
-  console.log("  for four purchases (an ALLOW, a step-up you approved yourself, and a DENY), executed");
-  console.log("  two of them, and read back and independently verified the signed evidence chain --");
-  console.log("  entirely through @waysafe/sdk. See apps/dashboard for the same data in a UI.\n");
+  console.log("  for four purchases (an ALLOW, a step-up resolved by a real approver mandate after a");
+  console.log("  rejected self-approval attempt, and a DENY), executed two of them, and read back and");
+  console.log("  independently verified the signed evidence chain -- entirely through @waysafe/sdk.");
+  console.log("  See apps/dashboard for the same data in a UI.\n");
 }
 
 main()

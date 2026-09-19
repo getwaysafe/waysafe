@@ -41,10 +41,12 @@ import {
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
+import { PrismaEvidenceRepository } from "../evidence/prisma-repository.js";
 import { PrismaInstrumentRepository } from "../instruments/prisma-repository.js";
 import { handleIssuingAuthorizationRequest, StripeIssuingAdapter } from "../enforcement/stripe-issuing.js";
 import { PrismaAuthorizationRepository } from "./prisma-repository.js";
-import { authorize, sweepExpiredStepUps, type AuthorizeRepos } from "./service.js";
+import { MandateCreationError } from "./types.js";
+import { authorize, resolveStepUpAsApprover, sweepExpiredStepUps, type AuthorizeRepos } from "./service.js";
 
 // This file's focus is the D-4/D-15 mandate row lock against real Postgres;
 // agent-key verification (D-18) is exercised on its own in
@@ -89,20 +91,29 @@ interface SeedOptions {
   status?: MandateStatus;
   authenticatedAt?: Date | null;
   agentStatus?: AgentStatus;
+  /** D-62: pass an existing organization id (e.g. from a prior
+   * seedMandate call) to seed a second mandate -- an approver, typically
+   * -- in the SAME organization, rather than each call getting its own
+   * fresh one. resolveMandateGate requires the approver to share the
+   * original mandate's organization (D-1), so testing real approver
+   * resolution needs two mandates seeded into one org. */
+  organizationId?: string;
 }
 
 const createdOrgIds: string[] = [];
 
 async function seedMandate(policy: Policy, options: SeedOptions = {}) {
-  const organizationId = generateId(ID_PREFIX.organization);
+  const organizationId = options.organizationId ?? generateId(ID_PREFIX.organization);
   const principalId = generateId(ID_PREFIX.principal);
   const agentId = generateId(ID_PREFIX.agent);
   const mandateId = generateId(ID_PREFIX.mandate);
   const mandateVersionId = generateId(ID_PREFIX.mandate_version);
   const policyHash = "test-hash";
-  createdOrgIds.push(organizationId);
 
-  await prisma.organization.create({ data: { id: organizationId, name: "Test Org" } });
+  if (!options.organizationId) {
+    createdOrgIds.push(organizationId);
+    await prisma.organization.create({ data: { id: organizationId, name: "Test Org" } });
+  }
   await prisma.principal.create({
     data: { id: principalId, organizationId, displayName: "Test Principal" },
   });
@@ -657,4 +668,98 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       ...base,
     });
   });
+
+  it(
+    "D-62: resolving a step-up as an approver completes against real Postgres -- regression test for a real nested-transaction hazard (P2028) found live, not simulated",
+    async () => {
+      // The first live run of this against real Postgres blew the 20s
+      // TRANSACTION_OPTIONS timeout: resolveStepUpAsApprover's nested
+      // withMandateLock calls (original mandate, then approver) each
+      // unconditionally opened their own `prisma.$transaction()`, and
+      // Prisma does not nest those safely -- a second one competes for a
+      // connection instead of reusing the first. Fixed by having
+      // withMandateLock reuse an already-open transaction
+      // (mandateLockContext) when nested, and by moving the evidence
+      // write (a *different* repository's own transaction) outside the
+      // lock entirely, matching authorize()'s own existing precedent.
+      // This test is the reason that fix has a real, not just an
+      // in-memory, witness -- the in-memory suite never exercised a real
+      // Postgres connection pool and passed throughout.
+      const approver = await seedMandate(policyFrom({ per_transaction_max: toMinorUnits(2000, "USD") }));
+      const original = await seedMandate(
+        policyFrom({
+          step_up: { above_amount: toMinorUnits(50, "USD"), ttl_seconds: 900 },
+          escalation: { approvers: [approver.mandateId] },
+        }),
+        { organizationId: approver.organizationId },
+      );
+
+      const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+      const prismaEvidence = new PrismaEvidenceRepository(prisma, generateEvidenceSigningKeyPair().privateKey);
+      const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence: prismaEvidence };
+
+      const result = await authorize(repos, {
+        organizationId: original.organizationId,
+        request: request(original.organizationId, original.agentId, original.principalId, 203),
+        now: NOW,
+        apiKey: original.apiKey,
+      });
+      expect(result.kind).toBe("decided");
+      if (result.kind !== "decided") throw new Error("unreachable");
+      expect(result.authorization.status).toBe("PENDING_STEP_UP");
+
+      const outcome = await resolveStepUpAsApprover(repos, {
+        organizationId: original.organizationId,
+        stepUp: result.authorization,
+        approverAgentId: approver.agentId,
+        approverPrincipalId: approver.principalId,
+        approverMandateId: approver.mandateId,
+        apiKey: approver.apiKey,
+        now: NOW,
+      });
+      expect(outcome.kind).toBe("resolved");
+      if (outcome.kind !== "resolved") throw new Error("unreachable");
+      expect(outcome.authorization.status).toBe("STEP_UP_APPROVED");
+
+      // Addition B, against a real table: the approval's own ledger entry.
+      const ledgerEntries = await prisma.ledgerEntry.findMany({ where: { mandateId: approver.mandateId } });
+      expect(ledgerEntries).toHaveLength(1);
+      expect(ledgerEntries[0]).toMatchObject({ type: "RESERVATION", amount: toMinorUnits(203, "USD") });
+
+      // The evidence write (the thing that was nesting inside the lock)
+      // really did happen, against the real PrismaEvidenceRepository.
+      const events = await prismaEvidence.listForOrganization(original.organizationId);
+      expect(events.some((e) => e.type === "step_up.approved")).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    "D-62 Addition A: rejects a mandate naming itself as its own approver -- against real Postgres, not just the in-memory check",
+    async () => {
+      const a = await seedMandate(policyFrom());
+      const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+      const selfId = generateId(ID_PREFIX.mandate);
+
+      const error = await repo
+        .createMandate(
+          {
+            id: selfId,
+            organizationId: a.organizationId,
+            principalId: a.principalId,
+            agentIds: [a.agentId],
+            policy: policyFrom({ escalation: { approvers: [selfId] } }),
+            policyHash: "h",
+            intentText: "t",
+            compilerName: "manual",
+            assumptions: [],
+          },
+          NOW,
+        )
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(MandateCreationError);
+      expect((error as MandateCreationError).code).toBe("DENY_APPROVER_CYCLE");
+    },
+    30_000,
+  );
 });

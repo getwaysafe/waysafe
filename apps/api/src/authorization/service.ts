@@ -272,7 +272,261 @@ export async function sweepExpiredStepUps(repo: AuthorizationRepository, now: Da
   return expired.length;
 }
 
-type AgentKeyCheck = { ok: true } | { ok: false; reasons: Reason[] };
+/**
+ * D-62: resolves a `needs-higher-authority` step-up as an approver mandate.
+ * Closes D-59 -- the endpoint no longer accepts a bare `{outcome}` from
+ * any credential in the organization; it re-runs the real `evaluate()`
+ * engine against a *different*, authorized mandate.
+ *
+ * `stepUp` must already be the fresh, `PENDING_STEP_UP` authorization
+ * (the caller -- server.ts -- runs `expireIfNeeded` first, same as
+ * before). `"rejected"` means the resolve *attempt* was refused (bad
+ * credential, self-approval, not an approver) and the step-up itself is
+ * untouched -- a legitimate approver can still resolve it before TTL.
+ * `"resolved"` means a real rule-3/4 outcome (or a replay of one that a
+ * concurrent request already produced) consumed the step-up.
+ */
+export interface ResolveStepUpAsApproverParams {
+  organizationId: string;
+  stepUp: StoredAuthorization;
+  approverAgentId: string;
+  approverPrincipalId: string;
+  approverMandateId?: string;
+  apiKey: string;
+  idempotencyKey?: string;
+  now: Date;
+}
+
+export type ResolveStepUpAsApproverResult =
+  | { kind: "resolved"; authorization: StoredAuthorization }
+  | { kind: "rejected"; reasons: Reason[] };
+
+export async function resolveStepUpAsApprover(
+  repos: AuthorizeRepos,
+  params: ResolveStepUpAsApproverParams,
+): Promise<ResolveStepUpAsApproverResult> {
+  const { authorization: repo, agentKeys, evidence } = repos;
+  const { organizationId, stepUp, approverAgentId, approverPrincipalId, approverMandateId, apiKey, now } =
+    params;
+
+  const keyCheck = await verifyAgentKey(agentKeys, evidence, {
+    organizationId,
+    claimedAgentId: approverAgentId,
+    apiKey,
+    now,
+  });
+  if (!keyCheck.ok) {
+    await writeStepUpEvidence(evidence, {
+      organizationId,
+      type: "step_up.resolution_rejected",
+      authorizationId: stepUp.id,
+      originalMandateId: stepUp.mandate_id,
+      reasons: keyCheck.reasons,
+      idempotencyKey: params.idempotencyKey,
+      now,
+    });
+    return { kind: "rejected", reasons: keyCheck.reasons };
+  }
+
+  const gate = await repo.resolveMandateGate({
+    organizationId,
+    agentId: approverAgentId,
+    principalId: approverPrincipalId,
+    mandateId: approverMandateId,
+  });
+  if (!gate.ok) {
+    await writeStepUpEvidence(evidence, {
+      organizationId,
+      type: "step_up.resolution_rejected",
+      authorizationId: stepUp.id,
+      originalMandateId: stepUp.mandate_id,
+      approverMandateId: gate.mandateId,
+      reasons: gate.reasons,
+      idempotencyKey: params.idempotencyKey,
+      now,
+    });
+    return { kind: "rejected", reasons: gate.reasons };
+  }
+
+  // Rule 1 (the D-59 fix): checked first among the substantive rules,
+  // ahead of rule 2, own reason code. gate.ok === true here, so
+  // gate.mandateId is a real, authenticated, properly-bound mandate --
+  // this is a valid credential that simply cannot approve its own escalation.
+  if (gate.mandateId === stepUp.mandate_id) {
+    const reasons: Reason[] = [
+      {
+        code: ReasonCode.DENY_STEP_UP_SELF_APPROVAL,
+        message:
+          "The resolving credential's mandate is the same mandate that produced this step-up.",
+      },
+    ];
+    await writeStepUpEvidence(evidence, {
+      organizationId,
+      type: "step_up.resolution_rejected",
+      authorizationId: stepUp.id,
+      originalMandateId: stepUp.mandate_id,
+      approverMandateId: gate.mandateId,
+      reasons,
+      idempotencyKey: params.idempotencyKey,
+      now,
+    });
+    return { kind: "rejected", reasons };
+  }
+
+  // Rule 2: the approver must be named in the ORIGINAL mandate's current
+  // escalation.approvers. No "update mandate" path exists yet (D-62), so
+  // there's no staleness risk in reading this outside the lock below.
+  const originalMandate = await repo.getMandateDetail(stepUp.mandate_id);
+  const approvers = originalMandate?.policy.escalation?.approvers ?? [];
+  if (!approvers.includes(gate.mandateId)) {
+    const reasons: Reason[] = [
+      {
+        code: ReasonCode.DENY_MANDATE_NOT_AN_APPROVER,
+        message: "This mandate is not named in the principal mandate's list of approvers.",
+      },
+    ];
+    await writeStepUpEvidence(evidence, {
+      organizationId,
+      type: "step_up.resolution_rejected",
+      authorizationId: stepUp.id,
+      originalMandateId: stepUp.mandate_id,
+      approverMandateId: gate.mandateId,
+      reasons,
+      idempotencyKey: params.idempotencyKey,
+      now,
+    });
+    return { kind: "rejected", reasons };
+  }
+
+  // Rules 3/4 + Additions B/C/D. Atomic under a globally-ordered pair of
+  // mandate locks -- sorted by id, not "original then approver" -- so two
+  // concurrent resolutions can never wait on each other in a cycle (a 3+
+  // approver cycle is accepted, D-62 Addition A; this locking order is
+  // what keeps it deadlock-free regardless of cycle length).
+  //
+  // Evidence is written AFTER this block, once the lock has released --
+  // never from inside it. `EvidenceRepository`'s own lock (a real Postgres
+  // transaction, same as `AuthorizationRepository`'s) is a *different*
+  // repository's transaction; nesting one Prisma `$transaction()` inside
+  // another isn't a savepoint, it's a second competing transaction on the
+  // same pool -- confirmed live, it starved the connection and blew the
+  // 20s transaction timeout (`P2028`) before this was fixed. Matches
+  // `authorize()`'s own existing precedent (`verifyAgentKey`'s evidence
+  // write already happens outside the mandate lock there, not inside it).
+  const [firstLockId, secondLockId] = [stepUp.mandate_id, gate.mandateId].sort() as [string, string];
+  const lockResult = await repo.withMandateLock(firstLockId, () =>
+    repo.withMandateLock(secondLockId, async () => {
+      // Re-check under lock (Addition D): a concurrent resolution or a
+      // TTL sweep may have already settled this since the caller fetched
+      // `stepUp`. First writer wins; every later caller -- including this
+      // one, on a retry -- replays the recorded outcome, never re-runs
+      // evaluate() (Addition C: single-use, idempotent by construction).
+      const fresh = await repo.getAuthorization(stepUp.id);
+      if (!fresh) throw new Error(`authorization vanished mid-resolution: ${stepUp.id}`);
+      if (fresh.status !== "PENDING_STEP_UP") {
+        return { kind: "replayed" as const, authorization: fresh };
+      }
+
+      const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);
+      const result = evaluate({
+        policy: gate.policy,
+        action: stepUp.action,
+        merchant: stepUp.merchant,
+        spend,
+        now,
+      });
+
+      if (result.decision === Decision.ALLOW) {
+        // Addition B: the approval permanently costs real budget on the
+        // approver's own mandate -- never released -- so its cumulative
+        // and velocity limits actually accumulate from approvals, not
+        // only from its own authorize() calls.
+        await repo.recordApproverLedgerEntry(gate.mandateId, stepUp.id, stepUp.action.amount, now);
+        const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "approved", now);
+        return { kind: "approved" as const, authorization: updated, reasons: result.reasons };
+      }
+
+      // DENY reuses the approver's own DENY_* codes verbatim (rule 4).
+      // STEP_UP declines too -- single-level, an approver cannot
+      // escalate further -- with its own dedicated code instead of the
+      // approver's STEP_UP_* reasons, which would otherwise read as if
+      // this step-up were still open.
+      const declineReasons: Reason[] =
+        result.decision === Decision.DENY
+          ? result.reasons
+          : [
+              {
+                code: ReasonCode.DENY_APPROVER_ESCALATION_NOT_SUPPORTED,
+                message:
+                  "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
+              },
+            ];
+      const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "declined", now);
+      return { kind: "declined" as const, authorization: updated, reasons: declineReasons };
+    }),
+  );
+
+  if (lockResult.kind !== "replayed") {
+    await writeStepUpEvidence(evidence, {
+      organizationId,
+      type: lockResult.kind === "approved" ? "step_up.approved" : "step_up.declined",
+      authorizationId: stepUp.id,
+      originalMandateId: stepUp.mandate_id,
+      approverMandateId: gate.mandateId,
+      reasons: lockResult.reasons,
+      idempotencyKey: params.idempotencyKey,
+      now,
+    });
+  }
+
+  return { kind: "resolved", authorization: lockResult.authorization };
+}
+
+/**
+ * Rule 6: one evidence entry per distinct mandate id involved -- "both
+ * mandates' chains" in practice means two events with different
+ * `subjectId` on the same organization's one physical chain (evidence is
+ * organization-scoped, not mandate-scoped). Collapses to one write when
+ * `approverMandateId` is absent or equal to `originalMandateId` (rule-1
+ * self-approval), so a rejection never produces two identical rows.
+ */
+async function writeStepUpEvidence(
+  evidence: EvidenceRepository,
+  input: {
+    organizationId: string;
+    type: "step_up.approved" | "step_up.declined" | "step_up.resolution_rejected";
+    authorizationId: string;
+    originalMandateId: string;
+    approverMandateId?: string;
+    reasons: Reason[];
+    idempotencyKey?: string;
+    now: Date;
+  },
+): Promise<void> {
+  const mandateIds = new Set<string>([input.originalMandateId]);
+  if (input.approverMandateId) mandateIds.add(input.approverMandateId);
+
+  await evidence.withOrganizationLock(input.organizationId, async () => {
+    for (const mandateId of mandateIds) {
+      await evidence.appendEvent({
+        organizationId: input.organizationId,
+        type: input.type,
+        subjectType: "mandate",
+        subjectId: mandateId,
+        payload: {
+          authorization_id: input.authorizationId,
+          original_mandate_id: input.originalMandateId,
+          approver_mandate_id: input.approverMandateId ?? null,
+          reasons: input.reasons.map((r) => ({ code: r.code, message: r.message })),
+          idempotency_key: input.idempotencyKey ?? null,
+        },
+        now: input.now,
+      });
+    }
+  });
+}
+
+export type AgentKeyCheck = { ok: true } | { ok: false; reasons: Reason[] };
 
 /**
  * Verifies the agent's presented API key (D-18) and unconditionally records
@@ -284,7 +538,7 @@ type AgentKeyCheck = { ok: true } | { ok: false; reasons: Reason[] };
  * `DENY_AGENT_SUSPENDED` stays the mandate gate's job -- an agent's
  * suspended *status* is orthogonal to whether a given key is valid.
  */
-async function verifyAgentKey(
+export async function verifyAgentKey(
   agentKeys: AgentKeyRepository,
   evidence: EvidenceRepository,
   input: { organizationId: string; claimedAgentId: string; apiKey: string; now: Date },

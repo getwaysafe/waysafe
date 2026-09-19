@@ -50,6 +50,34 @@ export const ReasonCode = {
    */
   DENY_MERCHANT_UNRESOLVED: "DENY_MERCHANT_UNRESOLVED",
 
+  // --- DENY: approver-mandate step-up resolution (D-62) ------------------
+  /**
+   * The credential resolving a step-up belongs to the same mandate that
+   * produced it. The core D-59 fix: a mandate can never approve its own
+   * escalation, no matter how valid its credential otherwise is.
+   */
+  DENY_STEP_UP_SELF_APPROVAL: "DENY_STEP_UP_SELF_APPROVAL",
+  /**
+   * The credential resolving a step-up is a real, valid mandate -- just
+   * not one named in the principal mandate's `escalation.approvers`.
+   */
+  DENY_MANDATE_NOT_AN_APPROVER: "DENY_MANDATE_NOT_AN_APPROVER",
+  /**
+   * The approver's own `evaluate()` also returned STEP_UP for this action.
+   * Approval authority is single-level (D-62): an approver can authorize
+   * within its own mandate, never escalate to a further approver.
+   */
+  DENY_APPROVER_ESCALATION_NOT_SUPPORTED: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+  /**
+   * `escalation.approvers`, combined with mandates that already exist,
+   * would form a cycle -- a mandate naming itself (the degenerate
+   * 1-cycle) or two mandates naming each other. Rejected at mandate
+   * creation, not at step-up resolution (D-62). Cycles of three or more
+   * are not caught here -- see DECISIONS.md D-62 and THREAT-MODEL.md for
+   * why that's a deliberate, bounded gap rather than an oversight.
+   */
+  DENY_APPROVER_CYCLE: "DENY_APPROVER_CYCLE",
+
   // --- STEP_UP ----------------------------------------------------------
   STEP_UP_AMOUNT_THRESHOLD: "STEP_UP_AMOUNT_THRESHOLD",
   STEP_UP_CUMULATIVE_THRESHOLD: "STEP_UP_CUMULATIVE_THRESHOLD",
@@ -106,6 +134,14 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "A required constraint of the mandate is not satisfied by this action.",
   DENY_MERCHANT_UNRESOLVED:
     "The merchant could not be resolved to a verifiable identity.",
+  DENY_STEP_UP_SELF_APPROVAL:
+    "A mandate cannot resolve its own step-up; the resolving credential must belong to a different, authorized approver mandate.",
+  DENY_MANDATE_NOT_AN_APPROVER:
+    "This mandate is not named in the principal mandate's list of approvers.",
+  DENY_APPROVER_ESCALATION_NOT_SUPPORTED:
+    "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
+  DENY_APPROVER_CYCLE:
+    "This mandate's approvers would form a cycle with a mandate that already exists.",
   STEP_UP_AMOUNT_THRESHOLD:
     "The amount is above the mandate's step-up threshold.",
   STEP_UP_CUMULATIVE_THRESHOLD:

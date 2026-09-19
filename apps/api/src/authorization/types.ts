@@ -26,9 +26,29 @@ import type {
   Policy,
   ProposedAction,
   Reason,
+  ReasonCode,
   ResolvedMerchant,
   SpendSnapshot,
 } from "@waysafe/core";
+
+/**
+ * Thrown by `createMandate` when a policy fails a creation-time structural
+ * check that isn't expressible in `validatePolicyCoherence` alone (D-62):
+ * the check needs to know the mandate's own id, or another mandate's
+ * current policy, neither of which a pure `Policy` object has access to.
+ * Carries a real, permanent `ReasonCode` so the rejection is as
+ * inspectable as any other decision, even though it fires at creation
+ * time rather than at `evaluate()` time.
+ */
+export class MandateCreationError extends Error {
+  constructor(
+    public readonly code: ReasonCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MandateCreationError";
+  }
+}
 
 export type LedgerEntryType = "RESERVATION" | "RELEASE" | "CAPTURE" | "CREDIT";
 
@@ -140,6 +160,12 @@ export interface NewMandate {
   compilerModel?: string;
   /** Choices the compiler made that the principal did not state (D-6). */
   assumptions: string[];
+  /** Injectable for deterministic tests (D-62), same pattern as
+   * AuthorizeParams.id -- the D-62 cycle/self-reference check needs to
+   * know a mandate's own id before it's persisted, which is otherwise
+   * impossible to predict since createMandate always generates a fresh
+   * one. Omit in production; the repo generates one as before. */
+  id?: string;
 }
 
 export interface CreatedMandate {
@@ -269,6 +295,25 @@ export interface AuthorizationRepository {
     outcome: "approved" | "declined" | "expired",
     now: Date,
   ): Promise<StoredAuthorization>;
+
+  /**
+   * D-62 (Additions B): a step-up approval writes a permanent
+   * RESERVATION-shaped ledger entry against the APPROVER's mandate --
+   * never released -- so the approver's own cumulative and velocity
+   * limits accumulate real spend from approvals, not only from its own
+   * `authorize()` calls. `authorizationId` is the original step-up
+   * authorization being resolved: a real, valid correlation reference
+   * even though it belongs to a different mandate than `mandateId` --
+   * `LedgerEntry` has no FK tying the two together, only an index. Must
+   * be called from inside `withMandateLock` for `mandateId` (the
+   * approver's mandate, not the original one).
+   */
+  recordApproverLedgerEntry(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void>;
 
   /**
    * Every PENDING_STEP_UP authorization whose TTL has already passed as of

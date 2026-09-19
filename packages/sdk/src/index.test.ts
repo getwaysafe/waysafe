@@ -24,6 +24,7 @@ import {
   NetworkError,
   NoActiveMandateError,
   NotFoundError,
+  StepUpResolutionRejectedError,
   UnauthorizedError,
   UnknownRailError,
   ValidationError,
@@ -364,8 +365,8 @@ describe("asExecutable() / execute()", () => {
   });
 });
 
-describe("approveStepUp() / declineStepUp()", () => {
-  it("approve posts outcome:approved and returns the updated decision", async () => {
+describe("resolveStepUp() (D-62)", () => {
+  it("posts the approver's identity, never a bare outcome flag", async () => {
     let sentBody: Record<string, unknown> | undefined;
     const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       sentBody = JSON.parse(init!.body as string);
@@ -373,32 +374,57 @@ describe("approveStepUp() / declineStepUp()", () => {
     });
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
-    const result = await client.approveStepUp("auth_test");
-    expect(sentBody).toEqual({ outcome: "approved" });
+    const result = await client.resolveStepUp("auth_test", {
+      agentId: "agt_approver",
+      principalId: "prin_approver",
+      mandateId: "mdt_approver",
+    });
+    expect(sentBody).toEqual({
+      agent_id: "agt_approver",
+      principal_id: "prin_approver",
+      mandate_id: "mdt_approver",
+      idempotency_key: undefined,
+    });
     expect(result.status).toBe("STEP_UP_APPROVED");
     expect(asExecutable(result)).not.toBeNull();
   });
 
-  it("decline posts outcome:declined", async () => {
-    let sentBody: Record<string, unknown> | undefined;
-    const fetchImpl = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      sentBody = JSON.parse(init!.body as string);
-      return jsonResponse(200, receiptWith({ status: "STEP_UP_DECLINED" }));
-    });
+  it("a DENY-shaped resolution is not executable", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, receiptWith({ status: "STEP_UP_DECLINED" })));
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
-    const result = await client.declineStepUp("auth_test");
-    expect(sentBody).toEqual({ outcome: "declined" });
+    const result = await client.resolveStepUp("auth_test", {
+      agentId: "agt_approver",
+      principalId: "prin_approver",
+    });
     expect(asExecutable(result)).toBeNull();
   });
 
-  it("THE ATTACK: answering a step-up twice throws AuthorizationStatusConflictError, not a silent no-op", async () => {
+  it("THE ATTACK: the same mandate that produced the step-up is refused (403), not silently approved", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(409, { error: "not_pending_step_up", status: "STEP_UP_DECLINED" }),
+      jsonResponse(403, {
+        error: "step_up_resolution_rejected",
+        reasons: [{ code: "DENY_STEP_UP_SELF_APPROVAL", message: "same mandate" }],
+      }),
     );
     const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
 
-    const error = await client.approveStepUp("auth_test").catch((e: unknown) => e);
+    const error = await client
+      .resolveStepUp("auth_test", { agentId: "agt_same", principalId: "prin_same" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(StepUpResolutionRejectedError);
+    expect((error as StepUpResolutionRejectedError).reasons[0]?.code).toBe("DENY_STEP_UP_SELF_APPROVAL");
+  });
+
+  it("resolving a status resolveStepUp was never the endpoint for throws AuthorizationStatusConflictError", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(409, { error: "not_pending_step_up", status: "EXECUTED" }),
+    );
+    const client = clientWith(fetchImpl as unknown as typeof globalThis.fetch);
+
+    const error = await client
+      .resolveStepUp("auth_test", { agentId: "agt_approver", principalId: "prin_approver" })
+      .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AuthorizationStatusConflictError);
   });
 });

@@ -36,22 +36,23 @@ import {
   type ResolvedMerchant,
   type SpendSnapshot,
 } from "@waysafe/core";
-import type {
-  AgentListItem,
-  AuthorizationRepository,
-  CreatedAgent,
-  CreatedMandate,
-  MandateDetail,
-  MandateGateResult,
-  MandateListItem,
-  MandateSummary,
-  NewAgent,
-  NewMandate,
-  RecordExecutionInput,
-  RecordRefundInput,
-  ResolveMandateInput,
-  SaveAuthorizationInput,
-  StoredAuthorization,
+import {
+  MandateCreationError,
+  type AgentListItem,
+  type AuthorizationRepository,
+  type CreatedAgent,
+  type CreatedMandate,
+  type MandateDetail,
+  type MandateGateResult,
+  type MandateListItem,
+  type MandateSummary,
+  type NewAgent,
+  type NewMandate,
+  type RecordExecutionInput,
+  type RecordRefundInput,
+  type ResolveMandateInput,
+  type SaveAuthorizationInput,
+  type StoredAuthorization,
 } from "./types.js";
 import { assertValidActor } from "./actor.js";
 
@@ -259,7 +260,30 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return row ? toStoredAuthorization(row) : null;
   }
 
+  /**
+   * D-62: resolving a step-up as an approver needs two mandate locks at
+   * once (the original mandate's and the approver's), acquired as a
+   * nested `withMandateLock` call. Prisma's `$transaction()` does not
+   * nest safely -- calling it again while one is already open, on the
+   * same client, opens a second, independent transaction (a second
+   * connection, or a wait for one), not a nested savepoint; against a
+   * real pool that starves or times out (confirmed live: a nested call
+   * here blew the 20s TRANSACTION_OPTIONS timeout on a real Postgres
+   * run before this fix, `P2028`). So: if `mandateLockContext` already
+   * holds an active transaction, reuse it -- add this mandate's row lock
+   * to the SAME transaction rather than opening a second one. Postgres
+   * allows any number of `FOR UPDATE` locks within one transaction; this
+   * makes a nested call strictly safer than two separate ones would have
+   * been, since everything commits or rolls back together.
+   */
   async withMandateLock<T>(mandateId: string, fn: () => Promise<T>): Promise<T> {
+    const activeTx = mandateLockContext.getStore();
+    if (activeTx) {
+      if (!this.disableLockForTesting) {
+        await activeTx.$queryRaw`SELECT id FROM mandates WHERE id = ${mandateId} FOR UPDATE`;
+      }
+      return fn();
+    }
     return this.prisma.$transaction(async (tx) => {
       if (!this.disableLockForTesting) {
         await tx.$queryRaw`SELECT id FROM mandates WHERE id = ${mandateId} FOR UPDATE`;
@@ -381,6 +405,35 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return toStoredAuthorization(updated);
   }
 
+  async recordApproverLedgerEntry(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void> {
+    const client = this.client;
+    const auth = await client.authorization.findUnique({ where: { id: authorizationId } });
+    if (!auth) throw new Error(`no such authorization: ${authorizationId}`);
+
+    const timezone = await this.timezoneFor(mandateId);
+    const keys = windowKeys(now, timezone);
+    await client.ledgerEntry.create({
+      data: {
+        id: generateId(ID_PREFIX.evidence),
+        organizationId: auth.organizationId,
+        mandateId,
+        authorizationId,
+        type: "RESERVATION",
+        amount,
+        currency: auth.currency,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      },
+    });
+  }
+
   async listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]> {
     const rows = await this.client.authorization.findMany({
       where: { status: "PENDING_STEP_UP", stepUpExpiresAt: { lte: now } },
@@ -401,9 +454,43 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     await client.mandate.update({ where: { id: mandateId }, data: { status: "ACTIVE" } });
   }
 
+  /**
+   * D-62 (Addition A): rejects a mandate whose `escalation.approvers`
+   * would form a cycle with a mandate that already exists -- a mandate
+   * naming itself (the degenerate 1-cycle) or two mandates naming each
+   * other. Deliberately does not walk the full graph -- a 3+ cycle isn't
+   * caught here. See the in-memory repository's own `checkApproverCycle`
+   * (identical logic, synchronous there since it reads a local Map) and
+   * DECISIONS.md D-62 for why that's an accepted, bounded gap.
+   */
+  private async checkApproverCycle(mandateId: string, policy: Policy): Promise<void> {
+    const approvers = policy.escalation?.approvers ?? [];
+    if (approvers.includes(mandateId)) {
+      throw new MandateCreationError(
+        "DENY_APPROVER_CYCLE",
+        "a mandate cannot name itself as its own approver",
+      );
+    }
+    for (const approverId of approvers) {
+      const approverMandate = await this.client.mandate.findUnique({
+        where: { id: approverId },
+        include: { currentVersion: true },
+      });
+      const approverPolicy = approverMandate?.currentVersion?.policy as unknown as Policy | undefined;
+      if (approverPolicy?.escalation?.approvers?.includes(mandateId)) {
+        throw new MandateCreationError(
+          "DENY_APPROVER_CYCLE",
+          `mandate ${approverId} already names this mandate as its own approver, forming a cycle`,
+        );
+      }
+    }
+  }
+
   async createMandate(input: NewMandate, now: Date): Promise<CreatedMandate> {
-    const mandateId = generateId(ID_PREFIX.mandate);
+    const mandateId = input.id ?? generateId(ID_PREFIX.mandate);
     const mandateVersionId = generateId(ID_PREFIX.mandate_version);
+
+    await this.checkApproverCycle(mandateId, input.policy);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.mandate.create({

@@ -31,14 +31,15 @@ import { InMemoryPrincipalRepository } from "./principals/in-memory-repository.j
 import type { PrincipalRecord, PrincipalRepository } from "./principals/types.js";
 import { InMemoryInstrumentRepository } from "./instruments/in-memory-repository.js";
 import type { Instrument, InstrumentRepository } from "./instruments/types.js";
-import { authorize, resolveStepUp } from "./authorization/service.js";
+import { authorize, resolveStepUp, resolveStepUpAsApprover } from "./authorization/service.js";
 import { InMemoryAuthorizationRepository } from "./authorization/in-memory-repository.js";
-import type {
-  AgentListItem,
-  AuthorizationRepository,
-  MandateDetail,
-  MandateListItem,
-  StoredAuthorization,
+import {
+  MandateCreationError,
+  type AgentListItem,
+  type AuthorizationRepository,
+  type MandateDetail,
+  type MandateListItem,
+  type StoredAuthorization,
 } from "./authorization/types.js";
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import type { EvidenceRepository } from "./evidence/types.js";
@@ -118,8 +119,18 @@ const CreateAgentKeyBodySchema = z.object({
   name: z.string().min(1),
 });
 
+/** D-62: the caller names the APPROVER mandate resolving this step-up --
+ * never an outcome. Mirrors AuthorizationRequestSchema's own identity
+ * fields (agent_id/principal_id/mandate_id): the credential presented
+ * must match agent_id (D-18's rule, reused via verifyAgentKey), and
+ * mandate_id optionally pins which of that agent's mandates is acting,
+ * same as authorize() itself. Replacing `{outcome}` -- the exact D-59
+ * hole -- is the point of this change. */
 const StepUpBodySchema = z.object({
-  outcome: z.enum(["approved", "declined"]),
+  agent_id: z.string().min(1),
+  principal_id: z.string().min(1),
+  mandate_id: z.string().min(1).optional(),
+  idempotency_key: z.string().min(8).max(255).optional(),
 });
 
 const ExecuteBodySchema = z.object({
@@ -607,20 +618,35 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.code(422).send({ error: "invalid_policy", issues: parsed.issues });
     }
 
-    const created = await repos.authorization.createMandate(
-      {
-        organizationId: request.auth!.organizationId,
-        principalId: body.data.principal_id,
-        agentIds: body.data.agent_ids,
-        policy: parsed.policy,
-        policyHash: hashPolicy(parsed.policy),
-        intentText: body.data.intent_text,
-        compilerName: body.data.compiler_name,
-        compilerModel: body.data.compiler_model,
-        assumptions: body.data.assumptions,
-      },
-      new Date(),
-    );
+    let created;
+    try {
+      created = await repos.authorization.createMandate(
+        {
+          organizationId: request.auth!.organizationId,
+          principalId: body.data.principal_id,
+          agentIds: body.data.agent_ids,
+          policy: parsed.policy,
+          policyHash: hashPolicy(parsed.policy),
+          intentText: body.data.intent_text,
+          compilerName: body.data.compiler_name,
+          compilerModel: body.data.compiler_model,
+          assumptions: body.data.assumptions,
+        },
+        new Date(),
+      );
+    } catch (err) {
+      // D-62 Addition A: a mandate whose escalation.approvers would form
+      // a cycle with a mandate that already exists is rejected here,
+      // same shape as any other policy-validation failure -- not a
+      // step-up-time gate.
+      if (err instanceof MandateCreationError) {
+        return reply.code(422).send({
+          error: "invalid_policy",
+          issues: [{ path: "/escalation/approvers", message: err.message, severity: "error", code: err.code }],
+        });
+      }
+      throw err;
+    }
 
     return reply.code(201).send({
       mandate_id: created.mandateId,
@@ -780,10 +806,23 @@ export function buildServer(options: BuildServerOptions = {}) {
     return reply.send(toReceiptJSON(current));
   });
 
-  /** Approve or decline a pending step-up. Declining (or a stale pending
-   * step-up simply being looked at past its TTL) releases the reservation --
-   * approving does not execute; POST .../execute is the separate, explicit
-   * step for that, same as for a fresh ALLOW. */
+  /**
+   * D-62: resolves a needs-higher-authority step-up as an approver
+   * mandate -- closing D-59 (an agent credential resolving its own
+   * step-up). The caller names an APPROVER's identity, never an
+   * outcome; the real evaluate() engine decides ALLOW/DENY/STEP_UP
+   * against the approver's own mandate. Declining (or a stale pending
+   * step-up simply being looked at past its TTL) releases the original
+   * reservation -- approving does not execute; POST .../execute is the
+   * separate, explicit step for that, same as for a fresh ALLOW.
+   *
+   * A step-up already resolved (approved, declined, or expired) replays
+   * its recorded outcome at 200, never re-evaluates (Addition C) --
+   * matches expireIfNeeded's own lazy-expiry contract just below. Any
+   * other non-pending status (AUTHORIZED, DENIED, EXECUTED) was never a
+   * step-up this endpoint could act on, and stays a 409.
+   */
+  const REPLAYABLE_STEP_UP_STATUSES = new Set(["STEP_UP_APPROVED", "STEP_UP_DECLINED", "EXPIRED"]);
   app.post("/v1/authorizations/:id/step-up", async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = StepUpBodySchema.safeParse(request.body);
@@ -799,11 +838,30 @@ export function buildServer(options: BuildServerOptions = {}) {
     const now = new Date();
     const current = await expireIfNeeded(stored, now);
     if (current.status !== "PENDING_STEP_UP") {
+      if (REPLAYABLE_STEP_UP_STATUSES.has(current.status)) {
+        return reply.send(toReceiptJSON(current));
+      }
       return reply.code(409).send({ error: "not_pending_step_up", status: current.status });
     }
 
-    const updated = await resolveStepUp(repos.authorization, current.mandate_id, id, body.data.outcome, now);
-    return reply.send(toReceiptJSON(updated));
+    const result = await resolveStepUpAsApprover(
+      { authorization: repos.authorization, agentKeys: repos.agentKeys, evidence: repos.evidence },
+      {
+        organizationId: request.auth!.organizationId,
+        stepUp: current,
+        approverAgentId: body.data.agent_id,
+        approverPrincipalId: body.data.principal_id,
+        approverMandateId: body.data.mandate_id,
+        apiKey: request.auth!.apiKey,
+        idempotencyKey: body.data.idempotency_key,
+        now,
+      },
+    );
+
+    if (result.kind === "rejected") {
+      return reply.code(403).send({ error: "step_up_resolution_rejected", reasons: result.reasons });
+    }
+    return reply.send(toReceiptJSON(result.authorization));
   });
 
   /**

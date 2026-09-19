@@ -29,7 +29,9 @@
  *    examples/quickstart.ts uses, so the demo still runs with nothing
  *    configured at all.
  *  - The two step-up moments pause for a real keypress -- "a real human
- *    approval" is not a euphemism for calling approveStepUp() on a timer.
+ *    approval" is not a euphemism for resolveStepUp() on a timer, and
+ *    (D-62) the human acts through a real, separate approver mandate, not
+ *    a bare yes/no flag on the agent's own credential.
  *    Run this at a terminal, not piped or redirected, so stdin is a TTY;
  *    without one, it auto-decides (documented at the prompt itself) rather
  *    than hanging forever, so a CI run or a accidental pipe doesn't stall.
@@ -42,6 +44,7 @@
 
 import { createInterface } from "node:readline/promises";
 import { Waysafe, asExecutable, verifyEvidenceIndependently } from "@waysafe/sdk";
+import { POLICY_SCHEMA_VERSION } from "@waysafe/core";
 
 const section = (title: string) => console.log(`\n\x1b[1m\x1b[36m${title}\x1b[0m`);
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -207,6 +210,77 @@ async function startServer(): Promise<{
   };
 }
 
+/**
+ * Silent setup: registers a second, independent mandate that will act as
+ * the demo mandate's approver (D-62). Nothing about creating or
+ * authenticating an approver mandate is special -- an ordinary mandate,
+ * the same passkey ceremony as any other; what makes it an approver is
+ * being named in the demo mandate's escalation.approvers. Prints nothing
+ * of its own, matching the section 3 authentication narration's own
+ * framing: this demo's two step-up moments are a human deciding whether
+ * to act through this approver mandate, not a bare yes/no flag.
+ */
+async function registerApproverMandate(
+  org: Waysafe,
+  baseUrl: string,
+): Promise<{ mandateId: string; agentId: string; principalId: string; client: Waysafe }> {
+  const { createVirtualAuthenticator, buildRegistrationResponse, buildAuthenticationResponse } = await import(
+    "../apps/api/src/webauthn/test-support/virtual-authenticator.js"
+  );
+  const agent = await org.createAgent({ name: "demo approver" });
+  const principal = await org.createPrincipal({ display_name: "Demo Approver Principal" });
+  const mandate = await org.createMandate({
+    principal_id: principal.principal_id,
+    agent_ids: [agent.agent_id],
+    policy: {
+      schema_version: POLICY_SCHEMA_VERSION,
+      summary: "Approver: may authorize up to $2,000/month, any merchant this mandate is asked about.",
+      currency: "USD",
+      per_transaction_max: 200000,
+      cumulative_limits: [{ window: "month", max_amount: 200000 }],
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+      categories: { allow: [], deny: [], unlisted: "ALLOW" },
+      step_up: { ttl_seconds: 900 },
+      accounting: {},
+      expires_at: "2099-01-01T00:00:00.000Z",
+    },
+    intent_text: "approver mandate for the demo",
+  });
+
+  const authenticator = createVirtualAuthenticator();
+  const registerOptions = await org.getMandateAuthenticationOptions(mandate.mandate_id);
+  await org.verifyMandateAuthentication(mandate.mandate_id, {
+    mode: "register",
+    challenge: registerOptions.challenge,
+    response: buildRegistrationResponse({
+      authenticator,
+      rpId: registerOptions.rp_id,
+      origin: registerOptions.origin,
+      challenge: registerOptions.challenge,
+    }),
+  });
+  const authOptions = await org.getMandateAuthenticationOptions(mandate.mandate_id);
+  const authResult = await org.verifyMandateAuthentication(mandate.mandate_id, {
+    mode: "authenticate",
+    challenge: authOptions.challenge,
+    response: buildAuthenticationResponse({
+      authenticator,
+      rpId: authOptions.rp_id,
+      origin: authOptions.origin,
+      challenge: authOptions.challenge,
+    }),
+  });
+  if (authResult.kind !== "activated") throw new Error("expected the approver mandate to activate");
+
+  const key = await org.createAgentKey(agent.agent_id, { name: "demo approver key" });
+  return {
+    mandateId: mandate.mandate_id,
+    agentId: agent.agent_id,
+    principalId: principal.principal_id,
+    client: new Waysafe({ baseUrl, apiKey: key.api_key }),
+  };
+}
+
 function printDecision(label: string, decision: Awaited<ReturnType<Waysafe["authorize"]>>): void {
   console.log(`  ${dim(label)}`);
   console.log(`  decision: ${bold(decision.decision)}   status: ${bold(decision.status)}`);
@@ -228,6 +302,10 @@ async function main() {
     `  ${ok("connected")} to ${baseUrl} (${usingRealDatabase ? "real Postgres" : "in-memory, no database configured"})`,
   );
   await beat();
+
+  // Silent setup for attempts 3 and 4 below -- see registerApproverMandate's
+  // own doc comment.
+  const approver = await registerApproverMandate(org, baseUrl);
 
   section("2. The instruction, in the principal's own words");
   const instruction =
@@ -259,7 +337,9 @@ async function main() {
   const mandate = await org.createMandate({
     principal_id: principalId,
     agent_ids: [agent.agent_id],
-    policy: compiled.policy,
+    // escalation.approvers names the approver mandate registered silently
+    // above (D-62) -- see attempts 3 and 4 below.
+    policy: { ...compiled.policy, escalation: { approvers: [approver.mandateId] } },
     intent_text: instruction,
   });
 
@@ -354,19 +434,31 @@ async function main() {
   console.log(
     dim("  bestbuy.com is a real, verified merchant -- it's simply not on this mandate's allowlist."),
   );
-  const approveLegit = await askYesNo("A verified merchant, just unlisted. Approve this step-up?", true);
+  console.log(
+    dim(
+      "  the same agent that triggered this can't resolve it (D-59/D-62) -- only a different," +
+        " named approver mandate can. That's a real credential now, not a button.",
+    ),
+  );
+  const approveLegit = await askYesNo(
+    "A verified merchant, just unlisted. Act through the approver mandate to resolve this?",
+    true,
+  );
   if (approveLegit) {
-    const approved = await agentClient.approveStepUp(stepUpLegit.authorization_id);
-    console.log(`  ${ok("approved")} -- status is now ${approved.status}`);
-    const executable = asExecutable(approved);
+    const resolved = await approver.client.resolveStepUp(stepUpLegit.authorization_id, {
+      agentId: approver.agentId,
+      principalId: approver.principalId,
+      mandateId: approver.mandateId,
+    });
+    console.log(`  ${ok(resolved.status)} -- the approver's own evaluate() decided this, not a flag`);
+    const executable = asExecutable(resolved);
     if (executable) {
       const result = await agentClient.execute(executable, { rail: "demo_rail", paymentMethodRef: "pm_demo" });
       console.log(`  ${ok("executed")} -- status is now ${result.status}`);
       executed.push(result.authorization_id);
     }
   } else {
-    const declined = await agentClient.declineStepUp(stepUpLegit.authorization_id);
-    console.log(`  ${warn("declined")} -- status is now ${declined.status}`);
+    console.log(dim("  left pending -- it expires on its own TTL (D-31), nobody declines it by hand."));
   }
   await beat(1200);
 
@@ -394,17 +486,20 @@ async function main() {
         " compare merchant.trust to attempt 3's VERIFIED.",
     ),
   );
-  const approveSpoof = await askYesNo(
-    "An unverifiable claim of a well-known name. Approve this step-up anyway?",
-    false,
+  console.log(
+    dim(
+      "  even the approver mandate can't rubber-stamp this: D-34's VERIFIED-for-ALLOW rule is" +
+        " unconditional, on every mandate, approver included. Watch it fail on its own.",
+    ),
   );
-  if (approveSpoof) {
-    const approved = await agentClient.approveStepUp(stepUpSpoof.authorization_id);
-    console.log(`  ${warn("approved")} -- status is now ${approved.status}`);
-  } else {
-    const declined = await agentClient.declineStepUp(stepUpSpoof.authorization_id);
-    console.log(`  ${ok("declined")} -- status is now ${declined.status}. The spoofing attempt is refused.`);
-  }
+  const resolvedSpoof = await approver.client.resolveStepUp(stepUpSpoof.authorization_id, {
+    agentId: approver.agentId,
+    principalId: approver.principalId,
+    mandateId: approver.mandateId,
+  });
+  console.log(
+    `  ${ok(resolvedSpoof.status)} -- an unverified claim can't earn ALLOW through the approver either.`,
+  );
   await beat(1200);
 
   section("8. The signed receipt");

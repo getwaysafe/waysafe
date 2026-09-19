@@ -6175,6 +6175,242 @@ this page would mislead an integrator about what the engine actually
 enforces, which is exactly the failure mode checking against the code
 first (rather than the PRD) was meant to prevent.
 
+## D-62 — Approver mandates, built: closes D-59
+
+D-59 named a real gap: `POST /v1/authorizations/:id/step-up` checked
+only that the presented credential belonged to the organization, so the
+same agent key that produced a `STEP_UP` decision could resolve it
+immediately after -- `STEP_UP` and `ALLOW` were the same outcome for
+anyone holding that one key. This closes it: resolving a step-up now
+requires a *different*, named approver mandate's own credential, and the
+real `evaluate()` engine decides the outcome -- never a caller-supplied
+flag.
+
+**Schema.** `escalation.approvers: string[]` (mandate ids), additive,
+default `[]`. An approver mandate is an ordinary mandate; nothing marks
+it as one except appearing in another mandate's `escalation.approvers`,
+set at creation like any other policy field -- no new ceremony, no
+approver-specific creation path (explicitly out of scope, and untouched).
+
+**The endpoint, six rules.** `POST /v1/authorizations/:id/step-up`'s
+body is now `{ agent_id, principal_id, mandate_id? }` -- an approver's
+identity, mirroring `AuthorizationRequestSchema`'s own fields, never an
+outcome. `resolveStepUpAsApprover` (`apps/api/src/authorization/
+service.ts`) implements all six: (1) the resolving mandate cannot be the
+one that produced the step-up (`DENY_STEP_UP_SELF_APPROVAL`, checked
+first, own code -- the literal D-59 fix); (2) it must be named in the
+principal mandate's current `escalation.approvers`
+(`DENY_MANDATE_NOT_AN_APPROVER`); (3) `evaluate()` runs again for the
+same `action`/`merchant` (reused verbatim from the stored authorization,
+never re-resolved) against the approver's own policy and a fresh spend
+snapshot; (4) ALLOW -> `STEP_UP_APPROVED`, DENY -> `STEP_UP_DECLINED`
+with the approver's own `DENY_*` codes verbatim, STEP_UP -> also
+`STEP_UP_DECLINED`, with `DENY_APPROVER_ESCALATION_NOT_SUPPORTED`
+(single-level: an approver cannot chain to a further approver); (5) a
+rejection at rules 1/2 mutates nothing -- the step-up stays
+`PENDING_STEP_UP` for a real approver to still resolve before TTL; (6)
+evidence is written for every attempt, one event per distinct mandate id
+involved (`step_up.resolution_rejected` for 1/2, `step_up.approved` /
+`step_up.declined` for a real 3/4 outcome).
+
+**Addition A -- cycles, decided explicitly.** Rules 1 and 2 alone don't
+stop mutual approval (A names B, B names A back). Decision: reject the
+exact 1-cycle (self-reference) and 2-cycle (mutual pair) at **mandate
+creation**, via a new `DENY_APPROVER_CYCLE` -- checked by looking at
+whether a named approver's own current policy already lists the mandate
+being created back, which needs no graph walk, just one hop per
+approver named. Cycles of three or more (A->B->C->A) are **not** caught
+here -- said plainly, not left undiscussed: catching those needs a full
+reachability walk across every mandate in an organization on every
+creation, and this build doesn't do that. Accepted as a bounded risk
+specifically because of Addition B: `evaluate()` in a longer cycle still
+runs against each approver's *own* policy, and every approval still
+costs real, permanent budget on that approver's own mandate, so a cycle
+cannot be used to escalate authority without limit -- only up to
+whichever link's own signed cumulative cap is weakest. Proven, not just
+argued: `service.test.ts`'s "a real runtime 3-cycle is bounded by each
+approver's own cap" test builds a genuine X->Y->Z->X cycle, confirms
+creation is *not* rejected, then shows Y's own cumulative cap stops a
+second approval regardless of the cycle. (The self-reference/2-cycle
+check needed `NewMandate` to gain an optional, injectable `id` --
+mirroring `AuthorizeParams.id`'s existing "injectable for deterministic
+tests" precedent -- since a repo-generated id can't otherwise be checked
+against itself in a test, and a real caller can never predict a
+not-yet-created id to trigger this path today anyway; see THREAT-MODEL.md
+for that structural-unreachability note, carried over from the same
+reasoning D-61 used for other checked-but-currently-unreachable cases.)
+
+**Addition B -- the ledger fix rule 5's "mutates nothing" needed
+qualifying.** It mutates no *policy* -- but an approval writes a
+permanent `RESERVATION`-typed ledger entry against the **approver's own
+mandate**, never released, or "within bounds" would be unenforceable:
+without it, an approver's own cumulative and velocity limits would never
+accumulate from the approvals it grants, only from its own `authorize()`
+calls. `AuthorizationRepository` gained `recordApproverLedgerEntry`
+(both repos); `authorizationId` on that row is the *original* step-up
+being resolved -- a real, valid correlation reference even though it
+belongs to a different mandate than the entry's own `mandateId`, since
+`LedgerEntry` has no FK tying the two together, only an index. Tested
+directly: an approver denies once its own approvals in a period exceed
+its cumulative cap.
+
+**Addition C -- single-use, idempotent by construction.** A step-up
+resolves at most once; every subsequent call -- same approver retrying
+after a lost response, a different approver, anyone -- replays the
+recorded outcome and reason codes under the mandate lock, never
+re-running `evaluate()`. This falls out of checking `status ===
+"PENDING_STEP_UP"` fresh, under lock, before doing any real work; no
+separate idempotency-key-to-request-hash table was built; the field is
+still accepted on the request and recorded on the evidence event for
+correlation, since the single-use replay already provides everything
+the three required tests (retry, second approver, resolve-after-decline)
+need without it.
+
+**Addition D -- concurrency, real races.** Two mandate locks are needed
+at once (the original's and the approver's) -- acquired in **globally
+sorted order by mandate id**, never "original first," specifically so
+concurrent resolutions across a longer approver cycle can never wait on
+each other in a circle regardless of cycle length. Inside the lock, a
+fresh status check makes the loser of any race -- another approver, or
+the TTL sweep -- replay the winner's outcome instead of erroring.
+Proven with real `Promise.all` races in `service.test.ts`, not asserted:
+two approvers resolving simultaneously (exactly one ledger charge,
+exactly one approver id appears across the evidence rows even though a
+single resolution legitimately writes two events, one per mandate) and
+approval racing TTL expiry (the new approver path never throws on
+losing; the pre-existing D-31 expiry primitive keeps its own documented
+"throws if it loses the race" contract, unchanged).
+
+**Addition E -- lifecycle.** `STEP_UP_APPROVED` is executable exactly
+the way `AUTHORIZED` already was -- `asExecutable()` needed no change,
+only what can now produce that status. Full sequence, real end to end:
+`authorize()` -> `STEP_UP` -> `resolveStepUp(id, approver)` ->
+`STEP_UP_APPROVED` -> `execute()`. Documented on `/docs` with the actual
+sequence, not just prose.
+
+**Addition F -- evidence disclosure, noted, no code change.** Writing
+the attempt to both mandates' chains means the approver's own evidence
+trail now carries another principal's merchant and amount. Fine for an
+in-org treasury service; a real disclosure across organizations if the
+approver belongs to a different one. `THREAT-MODEL.md` names this as a
+real, accepted disclosure, not an oversight -- no code change made or
+needed for this entry.
+
+**A second-order design point, decided but not in the original ask:**
+should the evidence write for a resolution happen inside the same
+mandate lock as the status transition (maximal atomicity) or after it
+releases? Chose *after*, and it mattered for a real reason, not just
+style -- see the bug below.
+
+**Real bug found live, not in code review: nested Prisma transactions.**
+The first live run of the full flow against a real Postgres database
+(`npm run demo`, real `DATABASE_URL`) blew `TRANSACTION_OPTIONS`'s 20s
+timeout with `P2028` ("transaction already closed"). Two independent
+transaction-nesting hazards, both real:
+
+1. `PrismaAuthorizationRepository.withMandateLock` unconditionally
+   called `this.prisma.$transaction(...)` on every invocation. A nested
+   call for the approver's mandate, from inside the original mandate's
+   already-open transaction, opened a *second*, independent transaction
+   competing for a connection on the same pool -- not a savepoint, which
+   is what nesting one nominally does in a well-behaved ORM. Fixed by
+   having `withMandateLock` check `mandateLockContext.getStore()` first:
+   if a transaction is already active, reuse it and add this mandate's
+   `FOR UPDATE` lock to it, rather than opening a second one. Postgres
+   allows any number of row locks within one transaction; this makes a
+   nested call strictly *safer* than two separate transactions would
+   have been, not just functional -- both mandates' state now commits or
+   rolls back together.
+2. The evidence write for a real resolution was originally called from
+   *inside* the (now-fixed) nested mandate-lock block, but
+   `EvidenceRepository`'s own lock is a *different* repository's
+   transaction (`PrismaEvidenceRepository`'s `orgLockContext`, unrelated
+   to `mandateLockContext`) -- fixing (1) didn't fix this, since the two
+   repositories don't share a transaction context. Fixed by moving the
+   evidence write to run *after* the mandate-lock block releases, never
+   from inside it -- which turns out to match `authorize()`'s own
+   existing precedent exactly: `verifyAgentKey`'s evidence write already
+   happens outside `authorize()`'s own mandate lock, not inside it. D-62
+   didn't invent a new pattern here, it just violated the existing one
+   once, on the way to discovering why the existing one is right.
+
+Neither hazard existed in the in-memory suite, which uses a real
+per-mandate `Mutex` with no connection pool to exhaust -- exactly the
+gap D-15 already named for the row lock itself ("proves the *service's*
+locking logic is correct... only a real transaction against real
+Postgres proves the database itself serializes two connections the same
+way"), now confirmed to extend to lock *composition*, not just a single
+lock. A new Postgres-backed regression test
+(`prisma-repository.test.ts`, `WAYSAFE_REQUIRE_DB` honored the same way
+D-15's other tests are) runs the full resolution end to end against a
+real database and would catch either hazard returning; it completes in
+~3s.
+
+**Reason codes** (additive, `packages/core/src/reason-codes.ts`):
+`DENY_STEP_UP_SELF_APPROVAL`, `DENY_MANDATE_NOT_AN_APPROVER`,
+`DENY_APPROVER_ESCALATION_NOT_SUPPORTED`, `DENY_APPROVER_CYCLE`. All
+proposed and shown before being written, per non-negotiable #7. The
+ledger-cap denial (Addition B) deliberately got no new code -- it
+reuses the existing, already-generic `DENY_CUMULATIVE_LIMIT_EXCEEDED` /
+`DENY_VELOCITY_LIMIT_EXCEEDED`, which don't care whether the spend came
+from a real transaction or an approval.
+
+**SDK and callers.** `approveStepUp`/`declineStepUp` -- literally the
+vulnerable shape, a bare outcome flag any credential could set -- are
+gone, replaced by `resolveStepUp(authorizationId, { agentId,
+principalId, mandateId?, idempotencyKey? })`. Every caller of the old
+methods needed a real fix, not a shim, since the old flow (the same
+agent approving its own step-up) is now rejected by construction:
+`examples/quickstart.ts` (new silent `registerApproverMandate` helper,
+section 6 now demonstrates the rejected self-approval attempt followed
+by a real approver resolution -- real captured output, not written by
+hand), `examples/demo.ts` (same pattern, plus attempt 4's spoofed-merchant
+moment now shows the approver's own `evaluate()` structurally refusing
+an unverified claim via D-34, a stronger demonstration than the old
+human-discretion framing), `packages/sdk/src/integration.test.ts` and
+`index.test.ts` (rewritten, including a real self-approval-then-real-
+approval round trip against a live server), and `apps/dashboard`'s
+authorization detail page (the Approve/Decline buttons -- exactly the
+D-59 vulnerability, shipped -- removed; the dashboard's org session was
+never a valid approver identity under the new model and building a real
+approver-selection UI is explicitly out of scope for this entry, so the
+page now says plainly what calling `resolveStepUp` from a real approver
+integration requires, and does not pretend to offer it).
+
+**Out of scope, confirmed untouched:** delegation depth beyond
+single-level (stays undocumented as a reservation, per D-61's own
+finding that no such field exists to claim); the needs-evidence step-up
+class (merchant trust, already separate, still SPECIFIED); any approver
+UI; any change to how approver mandates are created.
+
+`/docs`'s Escalation table and Approver Mandates section flip from
+SPECIFIED to IMPLEMENTED with the real reason codes and the full
+sequence; `SECURITY.md`'s known-issues entry and `THREAT-MODEL.md` §1.3
+are updated to say the defect is closed, by what, citing these tests,
+in the same commit as this entry.
+
+Full suite green: 595 passed, 1 pre-existing expected skip (Stripe
+Issuing funding gap, D-48), 1 pre-existing expected failure (x402
+Safe cosigner testnet gas, D-42/D-49) -- both unrelated to this entry,
+confirmed by re-running each in isolation. `npm run typecheck` clean
+across the whole repo including `examples/**`. `apps/dashboard` and
+`apps/site` both build clean (`next build`); the dashboard build isn't
+part of `npm run typecheck`'s own sweep (excluded, same as
+`apps/site`), so it was verified directly rather than assumed.
+
+**Change cost if wrong:** the highest of any entry in this file so far,
+because this is non-negotiable #1's authorization path and non-negotiable
+#7's public reason-code surface at once. The cycle decision (Addition A)
+is the one judgment call most likely to be revisited -- if a 3+-cycle
+abuse pattern ever shows up in practice, the fix is a real graph walk at
+creation time, additive, no reason-code change needed since
+`DENY_APPROVER_CYCLE` already names the right condition generically. The
+nested-transaction fix is low-cost to get wrong in the other direction
+(reverting it silently reintroduces a hang under real concurrency, not a
+loud failure in the in-memory suite) -- which is exactly why the new
+Postgres regression test exists as a standing tripwire, not just a
+one-time confirmation.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

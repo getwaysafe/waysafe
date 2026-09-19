@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { CurrencySchema, MinorUnitsSchema } from "./money.js";
 import { MerchantRefSchema } from "./merchant.js";
+import type { ReasonCode } from "./reason-codes.js";
 
 export const POLICY_SCHEMA_VERSION = "waysafe.policy/v1" as const;
 
@@ -143,6 +144,19 @@ export const ConstraintSchema = z.object({
   ),
 });
 
+/**
+ * D-62: who may resolve a needs-higher-authority step-up on this mandate.
+ * `approvers` names other mandates by id -- an approver mandate is an
+ * ordinary mandate; nothing marks it as one except appearing here. Absent
+ * or empty means no approver is configured, so a needs-higher-authority
+ * step-up is unresolvable and expires to DENY (D-31's existing TTL path).
+ * Setting or changing this list is an ordinary policy change: it requires
+ * mandate-creation authority (non-negotiable #5), same as any other field.
+ */
+export const EscalationSchema = z.object({
+  approvers: z.array(z.string().min(1)).default([]),
+});
+
 export const PolicySchema = z.object({
   schema_version: z.literal(POLICY_SCHEMA_VERSION),
 
@@ -159,6 +173,7 @@ export const PolicySchema = z.object({
   merchants: MerchantRulesSchema,
   categories: CategoryRulesSchema,
   step_up: StepUpRulesSchema,
+  escalation: EscalationSchema.default({}),
   accounting: AccountingSchema,
 
   time_window: TimeWindowSchema.optional(),
@@ -177,6 +192,7 @@ export type CumulativeLimit = z.infer<typeof CumulativeLimitSchema>;
 export type MerchantRules = z.infer<typeof MerchantRulesSchema>;
 export type CategoryRules = z.infer<typeof CategoryRulesSchema>;
 export type StepUpRules = z.infer<typeof StepUpRulesSchema>;
+export type Escalation = z.infer<typeof EscalationSchema>;
 export type Accounting = z.infer<typeof AccountingSchema>;
 export type Constraint = z.infer<typeof ConstraintSchema>;
 export type TimeWindow = z.infer<typeof TimeWindowSchema>;
@@ -187,6 +203,10 @@ export interface PolicyIssue {
   path: string;
   message: string;
   severity: "error" | "warning";
+  /** Set only for issues that also correspond to a permanent ReasonCode
+   * (D-62's cycle rejection, e.g.) -- most coherence issues have no
+   * decision-time equivalent and leave this unset. */
+  code?: ReasonCode;
 }
 
 /**

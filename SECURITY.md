@@ -38,16 +38,16 @@ discourage looking further.
   (the finding) and
   [§7](docs/THREAT-MODEL.md#7-revocation-and-incident-response) (the named,
   unbuilt remediation direction).
-- **An agent credential can resolve its own step-up.** `POST
-  /v1/authorizations/:id/step-up` checks only that the credential belongs to
-  the right organization — the same agent key that produced a `STEP_UP`
-  decision can approve it immediately after, with no human and no second
-  credential involved. This is a defect in the current implementation, not
-  an accepted design. See
+- **Approver-cycle risk, bounded by design (D-62).** Resolving a step-up now
+  requires a different, named approver mandate's own credential — closing
+  the defect that used to be listed here (an agent credential resolving its
+  own step-up). Two mandates naming each other as approver are rejected at
+  creation, but a longer cycle (three or more) is not caught there; it's
+  accepted as bounded by every approval permanently costing real budget on
+  the approving mandate's own cumulative cap, not by validation. See
   [`docs/THREAT-MODEL.md` §1.3](docs/THREAT-MODEL.md#13-agent-api-keys-and-org-credentials)
-  for the full finding (§2.4 cross-references it) and the Approver Mandates
-  design at [waysafe.ai/docs](https://waysafe.ai/docs) that's meant to close
-  it.
+  for the closure, the residual risk of a leaked key paired with a leaked
+  approver key, and the cycle reasoning in full.
 - **The evidence chain has no external anchor.** Verifying a chain proves
   Waysafe signed the record and nothing was altered after the fact. It does
   not prove completeness — that nothing happened outside what you were

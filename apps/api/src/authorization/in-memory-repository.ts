@@ -27,23 +27,24 @@ import {
   type ResolvedMerchant,
   type SpendSnapshot,
 } from "@waysafe/core";
-import type {
-  AgentListItem,
-  AuthorizationRepository,
-  CreatedAgent,
-  CreatedMandate,
-  LedgerEntryType,
-  MandateDetail,
-  MandateGateResult,
-  MandateListItem,
-  MandateSummary,
-  NewAgent,
-  NewMandate,
-  RecordExecutionInput,
-  RecordRefundInput,
-  ResolveMandateInput,
-  SaveAuthorizationInput,
-  StoredAuthorization,
+import {
+  MandateCreationError,
+  type AgentListItem,
+  type AuthorizationRepository,
+  type CreatedAgent,
+  type CreatedMandate,
+  type LedgerEntryType,
+  type MandateDetail,
+  type MandateGateResult,
+  type MandateListItem,
+  type MandateSummary,
+  type NewAgent,
+  type NewMandate,
+  type RecordExecutionInput,
+  type RecordRefundInput,
+  type ResolveMandateInput,
+  type SaveAuthorizationInput,
+  type StoredAuthorization,
 } from "./types.js";
 import { Mutex } from "../util/mutex.js";
 import { assertValidActor } from "./actor.js";
@@ -117,6 +118,39 @@ export interface SeededMandate {
   mandateId: string;
   mandateVersionId: string;
   policyHash: string;
+}
+
+/**
+ * D-62 (Addition A): rejects a mandate whose `escalation.approvers` would
+ * form a cycle with a mandate that already exists -- a mandate naming
+ * itself (the degenerate 1-cycle) or two mandates naming each other.
+ * Deliberately does not walk the full graph, so a 3+ cycle (A names B,
+ * B names C, C names A) is not caught here -- see DECISIONS.md D-62 for
+ * why that's an accepted, bounded gap rather than an oversight: it can
+ * only be closed at runtime, by making sure an approval always costs
+ * real budget on the approver's own mandate (Addition B).
+ */
+function checkApproverCycle(
+  mandates: Map<string, MandateRow>,
+  mandateId: string,
+  policy: Policy,
+): void {
+  const approvers = policy.escalation?.approvers ?? [];
+  if (approvers.includes(mandateId)) {
+    throw new MandateCreationError(
+      "DENY_APPROVER_CYCLE",
+      "a mandate cannot name itself as its own approver",
+    );
+  }
+  for (const approverId of approvers) {
+    const approverMandate = mandates.get(approverId);
+    if (approverMandate?.currentVersion.policy.escalation?.approvers?.includes(mandateId)) {
+      throw new MandateCreationError(
+        "DENY_APPROVER_CYCLE",
+        `mandate ${approverId} already names this mandate as its own approver, forming a cycle`,
+      );
+    }
+  }
 }
 
 export class InMemoryAuthorizationRepository implements AuthorizationRepository {
@@ -448,6 +482,30 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return auth;
   }
 
+  async recordApproverLedgerEntry(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void> {
+    const mandate = this.mandates.get(mandateId);
+    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
+    const keys = windowKeys(now, timezone);
+    const entries = this.ledgerByMandate.get(mandateId) ?? [];
+    entries.push({
+      id: generateId(ID_PREFIX.evidence),
+      mandateId,
+      authorizationId,
+      type: "RESERVATION",
+      amount,
+      dayKey: keys.day,
+      weekKey: keys.week,
+      monthKey: keys.month,
+      createdAt: now,
+    });
+    this.ledgerByMandate.set(mandateId, entries);
+  }
+
   async listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]> {
     return [...this.authorizations.values()]
       .filter(
@@ -480,7 +538,8 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       }
     }
 
-    const mandateId = generateId(ID_PREFIX.mandate);
+    const mandateId = input.id ?? generateId(ID_PREFIX.mandate);
+    checkApproverCycle(this.mandates, mandateId, input.policy);
     const mandateVersionId = generateId(ID_PREFIX.mandate_version);
 
     this.mandates.set(mandateId, {

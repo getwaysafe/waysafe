@@ -25,6 +25,7 @@ import {
   FixtureIntentCompiler,
   generateEvidenceSigningKeyPair,
   loadCompilerFixtures,
+  POLICY_SCHEMA_VERSION,
 } from "@waysafe/core";
 import { buildServer, type ServerRepos } from "../../../apps/api/src/server.js";
 import { InMemoryAgentKeyRepository } from "../../../apps/api/src/agent-keys/in-memory-repository.js";
@@ -40,7 +41,13 @@ import {
   createVirtualAuthenticator,
 } from "../../../apps/api/src/webauthn/test-support/virtual-authenticator.js";
 import { FakeAdapter } from "../../../apps/api/src/execution/test-support/fake-adapter.js";
-import { Waysafe, asExecutable, NoActiveMandateError, verifyEvidenceIndependently } from "./index.js";
+import {
+  Waysafe,
+  asExecutable,
+  NoActiveMandateError,
+  StepUpResolutionRejectedError,
+  verifyEvidenceIndependently,
+} from "./index.js";
 
 let app: ReturnType<typeof buildServer>;
 let repos: ServerRepos;
@@ -205,13 +212,69 @@ describe("the full journey through the SDK against a real server", () => {
     expect(asExecutable(decision)).toBeNull();
   });
 
-  it("a step-up decision is approved through the SDK and becomes executable", async () => {
+  it("D-62: a step-up decision is resolved by a real approver mandate through the SDK and becomes executable", async () => {
     // The "procurement-demo" fixture (fixtures/compiler/procurement.json):
     // "Ask me before spending more than $150" produces STEP_UP at $203 --
     // above the step-up threshold, but not a hard DENY the way
     // PROCUREMENT_STRICT's "Never spend more than $150" is.
     const instruction =
       "You may spend $500 per month on office supplies. Amazon and Staples are approved. Ask me before spending more than $150 in a single transaction. Ask me before buying from another merchant.";
+
+    // An approver mandate, registered and authenticated the same way any
+    // other mandate is (D-62: nothing special about creating one) --
+    // generous enough bounds that it can actually approve the $203 below.
+    const approverAgent = await orgClient.createAgent({ name: "sdk step-up approver bot" });
+    const approverPrincipalId = `prin_sdk_stepup_approver_${Date.now()}`;
+    const approverPolicy = {
+      schema_version: POLICY_SCHEMA_VERSION,
+      summary: "Approver: may authorize up to $2,000/month on office supplies at Staples.",
+      currency: "USD",
+      per_transaction_max: toMinorUnits(2000, "USD"),
+      cumulative_limits: [{ window: "month", max_amount: toMinorUnits(2000, "USD") }],
+      merchants: {
+        allow: [{ scheme: "domain", value: "staples.com", label: "Staples" }],
+        deny: [],
+        unlisted: "STEP_UP",
+      },
+      categories: { allow: ["office_supplies"], deny: [], unlisted: "STEP_UP" },
+      step_up: { ttl_seconds: 900 },
+      accounting: {},
+      expires_at: "2099-01-01T00:00:00.000Z",
+    };
+    const approverMandate = await orgClient.createMandate({
+      principal_id: approverPrincipalId,
+      agent_ids: [approverAgent.agent_id],
+      policy: approverPolicy,
+      intent_text: "approver mandate for the SDK step-up integration test",
+    });
+    const approverAuthenticator = createVirtualAuthenticator();
+    const approverRegisterOptions = await orgClient.getMandateAuthenticationOptions(
+      approverMandate.mandate_id,
+    );
+    await orgClient.verifyMandateAuthentication(approverMandate.mandate_id, {
+      mode: "register",
+      challenge: approverRegisterOptions.challenge,
+      response: buildRegistrationResponse({
+        authenticator: approverAuthenticator,
+        rpId: approverRegisterOptions.rp_id,
+        origin: approverRegisterOptions.origin,
+        challenge: approverRegisterOptions.challenge,
+      }),
+    });
+    const approverAuthOptions = await orgClient.getMandateAuthenticationOptions(approverMandate.mandate_id);
+    await orgClient.verifyMandateAuthentication(approverMandate.mandate_id, {
+      mode: "authenticate",
+      challenge: approverAuthOptions.challenge,
+      response: buildAuthenticationResponse({
+        authenticator: approverAuthenticator,
+        rpId: approverAuthOptions.rp_id,
+        origin: approverAuthOptions.origin,
+        challenge: approverAuthOptions.challenge,
+      }),
+    });
+    const approverKey = await orgClient.createAgentKey(approverAgent.agent_id, {
+      name: "sdk step-up approver key",
+    });
 
     const agent = await orgClient.createAgent({ name: "sdk step-up bot" });
     const compiled = await orgClient.compileMandate({ instruction });
@@ -221,7 +284,10 @@ describe("the full journey through the SDK against a real server", () => {
     const mandate = await orgClient.createMandate({
       principal_id: principalId,
       agent_ids: [agent.agent_id],
-      policy: compiled.policy,
+      // Names the approver mandate above -- the principal's own
+      // enrollment signature is the WebAuthn ceremony just below, no new
+      // ceremony (D-62).
+      policy: { ...compiled.policy, escalation: { approvers: [approverMandate.mandate_id] } },
       intent_text: instruction,
     });
 
@@ -269,7 +335,24 @@ describe("the full journey through the SDK against a real server", () => {
     expect(decision.step_up!.authorization_id).toBe(decision.authorization_id);
     expect(asExecutable(decision)).toBeNull();
 
-    const approved = await agentClient.approveStepUp(decision.authorization_id);
+    // THE ATTACK, inline: the same agent that triggered the step-up
+    // cannot resolve its own escalation (D-59's fix) -- rejected, not
+    // silently approved.
+    const selfAttempt = await agentClient
+      .resolveStepUp(decision.authorization_id, { agentId: agent.agent_id, principalId })
+      .catch((e: unknown) => e);
+    expect(selfAttempt).toBeInstanceOf(StepUpResolutionRejectedError);
+    expect((selfAttempt as StepUpResolutionRejectedError).reasons[0]?.code).toBe(
+      "DENY_STEP_UP_SELF_APPROVAL",
+    );
+
+    // The real approver, a different mandate entirely, resolves it for real.
+    const approverClient = new Waysafe({ baseUrl, apiKey: approverKey.api_key });
+    const approved = await approverClient.resolveStepUp(decision.authorization_id, {
+      agentId: approverAgent.agent_id,
+      principalId: approverPrincipalId,
+      mandateId: approverMandate.mandate_id,
+    });
     expect(approved.status).toBe("STEP_UP_APPROVED");
     expect(asExecutable(approved)).not.toBeNull();
   });

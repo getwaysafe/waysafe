@@ -777,9 +777,14 @@ describe("payment execution and step-up completion (Week 4)", () => {
     expect(second.statusCode).toBe(409);
   });
 
-  it("step-up: approve makes it executable; decline releases the reservation and blocks execution", async () => {
+  it("D-62: a real approver mandate resolves a step-up -- ALLOW makes it executable, DENY releases the reservation and blocks execution", async () => {
+    // The approver: an ordinary mandate, maximally permissive (createActiveMandate's
+    // own defaults) -- what makes it an approver is being named below, nothing else.
+    const approver = await createActiveMandate();
+
     const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate({
       step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 900 },
+      escalation: { approvers: [approver.mandateId] },
     });
 
     const stepUpDecision = await app.inject({
@@ -791,46 +796,110 @@ describe("payment execution and step-up completion (Week 4)", () => {
     expect(stepUpDecision.json().decision).toBe(Decision.STEP_UP);
     const stepUpId = stepUpDecision.json().id;
 
-    const declined = await app.inject({
+    // D-59: the SAME agent that triggered this cannot resolve it.
+    const selfAttempt = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${stepUpId}/step-up`,
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: { agent_id: agentId, principal_id: principalId },
+    });
+    expect(selfAttempt.statusCode).toBe(403);
+    expect(selfAttempt.json().reasons[0].code).toBe("DENY_STEP_UP_SELF_APPROVAL");
+
+    // An org credential is no longer a valid resolver either -- it has no
+    // agentId at all, so it can never match a real approver mandate.
+    const orgAttempt = await app.inject({
       method: "POST",
       url: `/v1/authorizations/${stepUpId}/step-up`,
       headers: authed(),
-      payload: { outcome: "declined" },
+      payload: { agent_id: approver.agentId, principal_id: approver.principalId },
     });
-    expect(declined.json().status).toBe("STEP_UP_DECLINED");
-
-    const rejectedExecute = await app.inject({
-      method: "POST",
-      url: `/v1/authorizations/${stepUpId}/execute`,
-      headers: authed(),
-      payload: { rail: "fake", payment_method_ref: "pm_test" },
-    });
-    expect(rejectedExecute.statusCode).toBe(409);
-
-    const secondDecision = await app.inject({
-      method: "POST",
-      url: "/v1/authorizations",
-      headers: { authorization: `Bearer ${agentApiKey}` },
-      payload: authorizeRequest(mandateId, agentId, principalId, 25),
-    });
-    const secondId = secondDecision.json().id;
+    expect(orgAttempt.statusCode).toBe(403);
 
     const approved = await app.inject({
       method: "POST",
-      url: `/v1/authorizations/${secondId}/step-up`,
-      headers: authed(),
-      payload: { outcome: "approved" },
+      url: `/v1/authorizations/${stepUpId}/step-up`,
+      headers: { authorization: `Bearer ${approver.agentApiKey}` },
+      payload: { agent_id: approver.agentId, principal_id: approver.principalId, mandate_id: approver.mandateId },
     });
     expect(approved.json().status).toBe("STEP_UP_APPROVED");
 
-    const executed = await app.inject({
+    // (This mandate's approver is generous -- to show a genuine DECLINE,
+    // create a second, tightly-capped step-up and a second, tight approver.)
+    const tightApprover = await createActiveMandate({ per_transaction_max: toMinorUnits(1, "USD") });
+    const { agentId: agentId2, principalId: principalId2, mandateId: mandateId2, agentApiKey: agentApiKey2 } =
+      await createActiveMandate({
+        step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 900 },
+        escalation: { approvers: [tightApprover.mandateId] },
+      });
+    const secondDecision = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey2}` },
+      payload: authorizeRequest(mandateId2, agentId2, principalId2, 25),
+    });
+    const secondId = secondDecision.json().id;
+
+    const declinedForReal = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${secondId}/step-up`,
+      headers: { authorization: `Bearer ${tightApprover.agentApiKey}` },
+      payload: {
+        agent_id: tightApprover.agentId,
+        principal_id: tightApprover.principalId,
+        mandate_id: tightApprover.mandateId,
+      },
+    });
+    expect(declinedForReal.json().status).toBe("STEP_UP_DECLINED");
+
+    const rejectedExecute = await app.inject({
       method: "POST",
       url: `/v1/authorizations/${secondId}/execute`,
       headers: authed(),
       payload: { rail: "fake", payment_method_ref: "pm_test" },
     });
+    expect(rejectedExecute.statusCode).toBe(409);
+
+    const executed = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${stepUpId}/execute`,
+      headers: authed(),
+      payload: { rail: "fake", payment_method_ref: "pm_test" },
+    });
     expect(executed.statusCode).toBe(200);
     expect(executed.json().status).toBe("EXECUTED");
+  });
+
+  it("D-62: a second resolve attempt on an already-resolved step-up replays the recorded outcome at 200, not a 409", async () => {
+    const approver = await createActiveMandate();
+    const { agentId, principalId, mandateId, agentApiKey } = await createActiveMandate({
+      step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 900 },
+      escalation: { approvers: [approver.mandateId] },
+    });
+    const decided = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: { authorization: `Bearer ${agentApiKey}` },
+      payload: authorizeRequest(mandateId, agentId, principalId, 20),
+    });
+    const id = decided.json().id;
+
+    const first = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/step-up`,
+      headers: { authorization: `Bearer ${approver.agentApiKey}` },
+      payload: { agent_id: approver.agentId, principal_id: approver.principalId, mandate_id: approver.mandateId },
+    });
+    expect(first.json().status).toBe("STEP_UP_APPROVED");
+
+    const second = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${id}/step-up`,
+      headers: { authorization: `Bearer ${approver.agentApiKey}` },
+      payload: { agent_id: approver.agentId, principal_id: approver.principalId, mandate_id: approver.mandateId },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().status).toBe("STEP_UP_APPROVED");
   });
 
   it("THE ATTACK: a pending step-up past its TTL cannot be executed, even without an explicit decline", async () => {

@@ -134,10 +134,12 @@ export class IdempotencyConflictError extends WaysafeError {
   }
 }
 
-/** 409, from `execute()` or `approveStepUp()`/`declineStepUp()`: the
- * authorization's current status doesn't allow the operation you asked for
- * (already executed, not pending step-up, etc). `authorizationStatus` is the
- * status that blocked it. */
+/** 409, from `execute()` or `resolveStepUp()`: the authorization's current
+ * status doesn't allow the operation you asked for -- already executed, or
+ * a status `resolveStepUp` was never the endpoint for in the first place
+ * (D-62: an already-resolved or expired step-up replays its recorded
+ * outcome instead of throwing this). `authorizationStatus` is the status
+ * that blocked it. */
 export class AuthorizationStatusConflictError extends WaysafeError {
   constructor(
     message: string,
@@ -147,6 +149,26 @@ export class AuthorizationStatusConflictError extends WaysafeError {
   ) {
     super(message, status, body);
     this.name = "AuthorizationStatusConflictError";
+  }
+}
+
+/** 403 step_up_resolution_rejected, from `resolveStepUp()` (D-62): the
+ * presented approver was refused before any decision was made -- the
+ * same mandate that produced the step-up, or a mandate not named in the
+ * principal mandate's approvers. Distinct from a DECLINED outcome, which
+ * is a real decision this SDK returns, not throws: this means the
+ * step-up is still pending, untouched, waiting for a real approver.
+ * `reasons` carries the specific rejection code
+ * (`DENY_STEP_UP_SELF_APPROVAL`, `DENY_MANDATE_NOT_AN_APPROVER`). */
+export class StepUpResolutionRejectedError extends WaysafeError {
+  constructor(
+    message: string,
+    status: number,
+    body: unknown,
+    readonly reasons: Reason[],
+  ) {
+    super(message, status, body);
+    this.name = "StepUpResolutionRejectedError";
   }
 }
 
@@ -317,8 +339,10 @@ export interface AuthorizationDecision {
    * Present only while `status` is `PENDING_STEP_UP`. Deliberately *not* a
    * URL to a hosted approval page (I-10): `authorization_id` and
    * `expires_at` are the only two things a developer's own approval UI
-   * needs -- show the receipt, get a yes/no, call `approveStepUp` or
-   * `declineStepUp`.
+   * needs -- show the receipt, then call `resolveStepUp(authorization_id,
+   * approver)` naming which approver mandate is deciding (D-62). The
+   * outcome is never a raw yes/no flag: `resolveStepUp` runs the real
+   * `evaluate()` engine against the approver's own policy.
    */
   step_up: { authorization_id: string; expires_at: string } | null;
   created_at: string;
@@ -701,6 +725,13 @@ function mapError(path: string, status: number, body: unknown): WaysafeError {
         body,
         (isRecord(body) ? (body.status as AuthorizationStatus) : undefined) ?? "DENIED",
       );
+    case "step_up_resolution_rejected":
+      return new StepUpResolutionRejectedError(
+        message,
+        status,
+        body,
+        isRecord(body) && Array.isArray(body.reasons) ? (body.reasons as Reason[]) : [],
+      );
     case "execution_rejected":
       return new ExecutionRejectedError(
         message,
@@ -915,25 +946,35 @@ export class Waysafe {
     return toDecision(body, false);
   }
 
-  /** Approve a pending step-up. Does not execute -- `execute()` (via
-   * `asExecutable()`) is the separate, explicit step for that. */
-  async approveStepUp(authorizationId: string): Promise<AuthorizationDecision> {
-    return this.resolveStepUp(authorizationId, "approved");
-  }
-
-  /** Decline a pending step-up. Releases any budget the step-up held. */
-  async declineStepUp(authorizationId: string): Promise<AuthorizationDecision> {
-    return this.resolveStepUp(authorizationId, "declined");
-  }
-
-  private async resolveStepUp(
+  /**
+   * Resolve a `needs-higher-authority` step-up as an approver mandate
+   * (D-62). Never a bare approve/decline flag -- that was the D-59 hole:
+   * any credential in the organization, including the same one that
+   * triggered the step-up, could resolve it. `approver` names the
+   * mandate actually deciding, and the real `evaluate()` engine runs
+   * against its own policy: ALLOW resolves to `STEP_UP_APPROVED`
+   * (`asExecutable()` then returns non-null, same as a fresh `ALLOW`);
+   * DENY or STEP_UP resolves to `STEP_UP_DECLINED`. Throws
+   * `StepUpResolutionRejectedError` if the approver itself is refused
+   * (the same mandate that produced the step-up, or one not named in
+   * the principal mandate's `escalation.approvers`) -- the step-up
+   * stays pending in that case, for a real approver to resolve. Already
+   * resolved or expired: replays the recorded outcome, never
+   * re-evaluates.
+   */
+  async resolveStepUp(
     authorizationId: string,
-    outcome: "approved" | "declined",
+    approver: { agentId: string; principalId: string; mandateId?: string; idempotencyKey?: string },
   ): Promise<AuthorizationDecision> {
     const { body } = await this.request<ReceiptWire>(
       "POST",
       `/v1/authorizations/${authorizationId}/step-up`,
-      { outcome },
+      {
+        agent_id: approver.agentId,
+        principal_id: approver.principalId,
+        mandate_id: approver.mandateId,
+        idempotency_key: approver.idempotencyKey,
+      },
     );
     return toDecision(body, false);
   }

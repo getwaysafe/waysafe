@@ -43,6 +43,7 @@ describe("policy schema", () => {
     expect(policy.accounting.refunds_credit_budget).toBe(true);
     expect(policy.step_up.ttl_seconds).toBe(900);
     expect(policy.constraints).toEqual([]);
+    expect(policy.escalation.approvers).toEqual([]);
   });
 
   it("rejects decimal amounts, because money is integer minor units", () => {
@@ -195,5 +196,28 @@ describe("money", () => {
     expect(toMinorUnits(6.87, "USD")).toBe(687);
     expect(toMinorUnits(1800, "USD")).toBe(180000);
     expect(toMinorUnits(0.1 + 0.2, "USD")).toBe(30);
+  });
+});
+
+describe("D-62: escalation.approvers", () => {
+  it("accepts a policy naming approver mandates", () => {
+    const result = parsePolicy(
+      basePolicy({ escalation: { approvers: ["mdt_approver_1", "mdt_approver_2"] } }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.policy!.escalation.approvers).toEqual(["mdt_approver_1", "mdt_approver_2"]);
+  });
+
+  it("defaults to no approvers when the field is absent -- additive, not required", () => {
+    const input = basePolicy() as Record<string, unknown>;
+    expect(input.escalation).toBeUndefined();
+    const result = parsePolicy(input);
+    expect(result.ok).toBe(true);
+    expect(result.policy!.escalation).toEqual({ approvers: [] });
+  });
+
+  it("rejects an empty-string mandate id in the approvers list", () => {
+    const result = parsePolicy(basePolicy({ escalation: { approvers: [""] } }));
+    expect(result.ok).toBe(false);
   });
 });

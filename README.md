@@ -132,14 +132,15 @@ just unit-tested:**
   broadcast to the real network and reverted on-chain, not simulated — see
   [waysafe.ai/proof](https://waysafe.ai/proof) for the actual transaction
   hashes.
+- Approver mandates (D-62) — resolving a step-up runs the real `evaluate()`
+  engine a second time, against a *different*, named approver mandate's own
+  policy. Closes a real, previously-open gap (D-59): an agent credential
+  could resolve its own step-up before this shipped. See
+  [waysafe.ai/docs](https://waysafe.ai/docs)'s Policy Schema Reference for
+  the full mechanics.
 
 **Not built — specified or discussed, never shipped:**
 
-- **Approver mandates.** The step-up model described in `/docs`'s Policy
-  Schema Reference — a second authorization evaluated against a distinct
-  approver mandate — is a design, not code. Today, any valid credential in
-  an organization can resolve a step-up, including the same agent credential
-  that triggered it (D-59) — a real, open gap, not a documented limitation.
 - **A KMS- or HSM-backed signer.** Every private key in this codebase today
   is loaded from an environment variable into plain process memory
   ("EnvSigner") — no hardware or service boundary between a process
