@@ -181,13 +181,15 @@ export default function HomePage() {
       <section className="section-dark section" style={{ paddingTop: 0 }}>
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
-            Rail-native schemes issue a credential. Waysafe is the signer.
+            One agent, several rails
           </p>
           <p className="muted" style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
-            AP2, Visa Intelligent Commerce, and Mastercard Agent Pay do delegated authorization
-            inside one rail, by issuing a credential the agent carries. Waysafe is the required
-            signer instead — the transaction cannot complete without a decision Waysafe produced,
-            and the record reads the same whether the rail underneath is a card network or a chain.
+            AP2, Visa Intelligent Commerce and Mastercard Agent Pay each solve delegated
+            authorization within their own rail, by issuing a credential the agent carries. An
+            agent rarely spends on one rail. Waysafe is the required signer across them: the
+            transaction cannot complete without a decision Waysafe produced, that decision can
+            take a rail&rsquo;s own credential as an input, and the record reads the same whether
+            the rail underneath is a card network or a chain.
           </p>
         </div>
       </section>
