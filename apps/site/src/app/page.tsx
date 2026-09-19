@@ -17,9 +17,16 @@ export default function HomePage() {
             className="muted"
             style={{ fontSize: "1.15rem", maxWidth: 680, marginTop: 24, lineHeight: 1.6 }}
           >
-            A rail-side authorization and evidence layer. The payment rail asks Waysafe before money
-            moves — and every decision is signed, chained, and independently verifiable. Cards and
-            on-chain, one record.
+            The required signer for agent payments. The rail asks Waysafe before money moves —
+            every decision signed, chained, and independently verifiable. Cards and stablecoin
+            wallets, one record.
+          </p>
+          <p
+            className="muted"
+            style={{ fontSize: "1.02rem", maxWidth: 680, marginTop: 12, lineHeight: 1.6 }}
+          >
+            For the rails, processors, and platforms that hold liability when an agent spends
+            wrongly.
           </p>
           <div style={{ display: "flex", gap: 14, marginTop: 36, flexWrap: "wrap" }}>
             <Link href="/docs" className="btn btn-primary">
@@ -49,7 +56,7 @@ export default function HomePage() {
       <section className="section-light section">
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
-            The bypass
+            Without the agent&rsquo;s cooperation
           </p>
           <h2 className="display" style={{ fontSize: "clamp(1.5rem, 3.5vw, 2.1rem)", marginTop: 0 }}>
             An agent&rsquo;s cooperation is never the control.
@@ -163,7 +170,8 @@ export default function HomePage() {
               <p className="muted" style={{ lineHeight: 1.65, margin: 0 }}>
                 Every decision is written to a signed log, each entry carrying the hash of the one
                 before it; anyone with Waysafe&rsquo;s public key can verify the record&rsquo;s
-                integrity without asking Waysafe.
+                integrity without asking Waysafe. When an agent is wrong, you can show who
+                authorized what — to a party that doesn&rsquo;t trust you.
               </p>
             </div>
           </div>
@@ -173,7 +181,7 @@ export default function HomePage() {
       <section className="section-dark section" style={{ paddingTop: 0 }}>
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
-            Why this isn&rsquo;t Intelligent Commerce
+            Rail-native schemes issue a credential. Waysafe is the signer.
           </p>
           <p className="muted" style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
             AP2, Visa Intelligent Commerce, and Mastercard Agent Pay do delegated authorization

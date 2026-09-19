@@ -8,7 +8,7 @@ import { CONTACT_EMAIL } from "@/lib/constants";
 import { BUILD_SHA, BUILT_AT } from "@/lib/build-info";
 
 export const metadata: Metadata = {
-  title: "Waysafe — the rail-side authorization and evidence layer",
+  title: "Waysafe — the required signer for agent payments",
   description:
     "Waysafe decides whether an AI agent may take an economic action. The payment rail asks before money moves, and every decision is signed, chained, and independently verifiable.",
   other: {
