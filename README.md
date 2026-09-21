@@ -74,10 +74,11 @@ Same run, same mandate, a purchase over the hard cap:
   asExecutable() on a DENY: null
 ```
 
-Sections 5–6 and 8–10 of the same run (execution, a step-up you approve
-yourself, a typed SDK error, and independently verifying the signed evidence
-chain) are elided here for length — run `npm run quickstart` yourself, or
-read `examples/quickstart.ts` directly. Same commands and output as
+Sections 5–6 and 8–10 of the same run (execution, a step-up resolved by a
+real approver mandate after a rejected self-approval attempt (D-62), a typed
+SDK error, and independently verifying the signed evidence chain) are elided
+here for length — run `npm run quickstart` yourself, or read
+`examples/quickstart.ts` directly. Same commands and output as
 [waysafe.ai/docs](https://waysafe.ai/docs).
 
 ## The nine non-negotiables
