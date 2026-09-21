@@ -1108,7 +1108,7 @@ describe("D-62: resolving a step-up as an approver mandate", () => {
     const events = await repos.evidence.listForOrganization(ORG);
     const declineEvent = events.find((e) => e.type === "step_up.declined");
     expect(declineEvent?.payload).toMatchObject({
-      reasons: [expect.objectContaining({ code: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED" })],
+      reasons: [expect.objectContaining({ code: "DENY_APPROVER_WOULD_ESCALATE" })],
     });
   });
 

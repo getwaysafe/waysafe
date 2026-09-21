@@ -6205,7 +6205,7 @@ same `action`/`merchant` (reused verbatim from the stored authorization,
 never re-resolved) against the approver's own policy and a fresh spend
 snapshot; (4) ALLOW -> `STEP_UP_APPROVED`, DENY -> `STEP_UP_DECLINED`
 with the approver's own `DENY_*` codes verbatim, STEP_UP -> also
-`STEP_UP_DECLINED`, with `DENY_APPROVER_ESCALATION_NOT_SUPPORTED`
+`STEP_UP_DECLINED`, with `DENY_APPROVER_WOULD_ESCALATE`
 (single-level: an approver cannot chain to a further approver); (5) a
 rejection at rules 1/2 mutates nothing -- the step-up stays
 `PENDING_STEP_UP` for a real approver to still resolve before TTL; (6)
@@ -6348,7 +6348,7 @@ real database and would catch either hazard returning; it completes in
 
 **Reason codes** (additive, `packages/core/src/reason-codes.ts`):
 `DENY_STEP_UP_SELF_APPROVAL`, `DENY_MANDATE_NOT_AN_APPROVER`,
-`DENY_APPROVER_ESCALATION_NOT_SUPPORTED`, `DENY_APPROVER_CYCLE`. All
+`DENY_APPROVER_WOULD_ESCALATE`, `DENY_APPROVER_CYCLE`. All
 proposed and shown before being written, per non-negotiable #7. The
 ledger-cap denial (Addition B) deliberately got no new code -- it
 reuses the existing, already-generic `DENY_CUMULATIVE_LIMIT_EXCEEDED` /

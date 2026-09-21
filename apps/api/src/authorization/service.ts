@@ -456,7 +456,7 @@ export async function resolveStepUpAsApprover(
           ? result.reasons
           : [
               {
-                code: ReasonCode.DENY_APPROVER_ESCALATION_NOT_SUPPORTED,
+                code: ReasonCode.DENY_APPROVER_WOULD_ESCALATE,
                 message:
                   "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
               },

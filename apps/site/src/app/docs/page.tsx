@@ -267,7 +267,7 @@ const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP"; desc
     description: "This mandate is not named in the principal mandate's list of approvers.",
   },
   {
-    code: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+    code: "DENY_APPROVER_WOULD_ESCALATE",
     decision: "DENY",
     description:
       "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
@@ -635,7 +635,7 @@ const ESCALATION_FIELDS: PolicyFieldRow[] = [
     field: "an approver mandate escalating further",
     type: "—",
     status: "IMPLEMENTED",
-    reasonCode: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+    reasonCode: "DENY_APPROVER_WOULD_ESCALATE",
     semantics: "Single-level by design, enforced as a refusal: an approver's own STEP_UP declines the resolution rather than chaining to a further approver.",
   },
   {
@@ -1146,7 +1146,7 @@ const waysafe = new Waysafe({
           Authority is <strong>single-level</strong>: an approver may authorize transactions but
           may not mint another approver, and cannot escalate a step-up further. If the approver&rsquo;s
           own <code>evaluate()</code> also returns <code>STEP_UP</code> for the action, the
-          resolution declines with <code>DENY_APPROVER_ESCALATION_NOT_SUPPORTED</code> — it does
+          resolution declines with <code>DENY_APPROVER_WOULD_ESCALATE</code> — it does
           not chain to a second approver. A delegation-depth field is not currently reserved
           anywhere in <code>packages/core</code> — checked directly, not assumed — so this stays
           documented as a gap rather than a reservation that doesn&rsquo;t exist. The intent

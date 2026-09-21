@@ -67,7 +67,7 @@ export const ReasonCode = {
    * Approval authority is single-level (D-62): an approver can authorize
    * within its own mandate, never escalate to a further approver.
    */
-  DENY_APPROVER_ESCALATION_NOT_SUPPORTED: "DENY_APPROVER_ESCALATION_NOT_SUPPORTED",
+  DENY_APPROVER_WOULD_ESCALATE: "DENY_APPROVER_WOULD_ESCALATE",
   /**
    * `escalation.approvers`, combined with mandates that already exist,
    * would form a cycle -- a mandate naming itself (the degenerate
@@ -138,7 +138,7 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "A mandate cannot resolve its own step-up; the resolving credential must belong to a different, authorized approver mandate.",
   DENY_MANDATE_NOT_AN_APPROVER:
     "This mandate is not named in the principal mandate's list of approvers.",
-  DENY_APPROVER_ESCALATION_NOT_SUPPORTED:
+  DENY_APPROVER_WOULD_ESCALATE:
     "The approver's own policy also requires escalation for this action; approval authority is single-level and cannot chain to a further approver.",
   DENY_APPROVER_CYCLE:
     "This mandate's approvers would form a cycle with a mandate that already exists.",
