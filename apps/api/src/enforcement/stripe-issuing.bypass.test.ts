@@ -41,6 +41,7 @@ import {
   POLICY_SCHEMA_VERSION,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { buildServer, type ServerRepos } from "../server.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
@@ -120,7 +121,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
     repos = {
       authorization: authorizationRepo,
       agentKeys: new InMemoryAgentKeyRepository(),
-      evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
+      evidence: new InMemoryEvidenceRepository(new FakeEd25519Signer()),
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),

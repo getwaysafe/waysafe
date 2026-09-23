@@ -8,6 +8,7 @@ import {
   Decision,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { authorize, resolveStepUp } from "../authorization/service.js";
@@ -47,7 +48,7 @@ function policyFrom(overrides: Record<string, unknown> = {}): Policy {
 async function setup(policyOverrides: Record<string, unknown> = {}) {
   const authorization = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
     principalId: PRINCIPAL,

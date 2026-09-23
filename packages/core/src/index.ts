@@ -6,6 +6,7 @@ export * from "./domain.js";
 export * from "./time.js";
 export * from "./evidence.js";
 export * from "./evidence-signing.js";
+export * from "./signer.js";
 export * from "./payment-adapter.js";
 export * from "./enforcement.js";
 export * from "./engine/index.js";

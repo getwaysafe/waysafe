@@ -19,6 +19,7 @@ import {
   ReasonCode,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { buildServer, type ServerRepos } from "../server.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
@@ -121,7 +122,7 @@ function buildAuthorization(
 
 async function setup() {
   const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
   const instruments = new InMemoryInstrumentRepository();
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
@@ -285,7 +286,7 @@ describe("handleIssuingAuthorizationRequest", () => {
       "cap but together exceed the monthly cumulative cap -- the second is declined, not both approved",
     async () => {
       const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-      const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+      const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
       const instruments = new InMemoryInstrumentRepository();
       // A per-transaction cap high enough that $300 individually always
       // passes -- the $500/month cumulative cap is the only thing that can
@@ -374,7 +375,7 @@ describe("handleIssuingAuthorizationRequest", () => {
     ["PENDING_AUTHENTICATION" as const, ReasonCode.DENY_MANDATE_NOT_AUTHENTICATED],
   ])("declines a %s mandate with %s, and records it in evidence", async (status, expectedCode) => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,
@@ -468,7 +469,7 @@ describe("provisionCardForMandate (D-37/D-38)", () => {
 
   it("THE ATTACK: refuses to provision -- and never touches Stripe at all -- when the mandate was never authenticated", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,
@@ -490,7 +491,7 @@ describe("provisionCardForMandate (D-37/D-38)", () => {
 
   it("records the acceptance as its own evidence event, distinct from mandate.authenticated", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const authenticatedAt = new Date("2026-08-01T09:30:00.000Z");
     const { mandateId, mandateVersionId } = authorization.seedMandate({
@@ -517,7 +518,7 @@ describe("provisionCardForMandate (D-37/D-38)", () => {
 
   it("THE ATTACK: sends Stripe the moment the principal actually authenticated, never a fresh timestamp taken at provisioning time", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     // Authenticated ten days before provisioning ever runs -- if
     // provisionCardForMandate took `now` (or Date.now()) as the acceptance
@@ -570,7 +571,7 @@ describe("POST /v1/enforcement/stripe-issuing (route, signature verification)", 
     repos = {
       authorization: authorizationRepo,
       agentKeys: new InMemoryAgentKeyRepository(),
-      evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
+      evidence: new InMemoryEvidenceRepository(new FakeEd25519Signer()),
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),

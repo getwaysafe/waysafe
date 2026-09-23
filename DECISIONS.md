@@ -6411,6 +6411,120 @@ loud failure in the in-memory suite) -- which is exactly why the new
 Postgres regression test exists as a standing tripwire, not just a
 one-time confirmation.
 
+## D-63 — A `Signer` interface: the key boundary now exists in code
+
+Refactor, not a feature. No behavior change, no new key, no new env var, no
+new endpoint, no change to the evidence format or to `proof.json`. The goal
+was narrow and worth stating exactly: **"produce a signature" should stop
+meaning "the private key is in this process."** Today it still is -- what
+changed is that saying otherwise is now a new class rather than a rewrite.
+
+**The interface** (`packages/core/src/signer.ts`): `keyId`, `algorithm`,
+`sign(payload)`, `publicKey()`. Deliberately an interface and nothing else
+-- no key loading, no implementation, and no `node:crypto` import at all,
+so it stays a pure type that costs the D-43 browser bundle nothing.
+`address()` is on a separate `Secp256k1Signer`, off the base interface, for
+the same reason THREAT-MODEL §1.2 draws the distinction it does: the Safe
+cosigner needs an EVM address because Safe ownership *is* an address, and
+the Ed25519 attestation key must not appear to have one, since having none
+is precisely why it cannot move funds. **No `Signer` exposes its private
+key**; an implementation that added an accessor would have removed the only
+property the interface exists to provide.
+
+**Three signers, never one.** `SignerSet` names the three roles matching
+THREAT-MODEL §1's three keys, and `assertDistinctSigners` refuses to start
+if any two share a key. It compares **public keys**, not env-var strings or
+object identity: the realistic misconfiguration is two env vars set to the
+same value, loaded into two separate instances -- identity comparison misses
+that entirely, string comparison misses two encodings of one key, and
+neither can compare a future KMS signer that has no env-var string at all.
+Throws rather than warns: a deployment whose key separation is smaller than
+its own threat model claims should not start and quietly make that untrue.
+
+**`EnvSigner`** (`apps/api/src/signing/env-signer.ts`) is the only
+production implementation. Same env vars, same formats, same ephemeral dev
+fallback as before; the decoded key now lives in a `#private` class field.
+`keyId` is derived from the public key exactly as `computeKeyId` already
+did, so **existing evidence `key_id` values are unchanged** -- asserted
+directly, not assumed.
+
+**Byte-for-byte compatibility is tested, not argued** (the whole refactor is
+worthless if it silently changed what gets signed): `env-signer.test.ts`
+signs a fixed payload through `EnvEd25519Signer` and compares to
+`node:crypto`'s `sign(null, payload, rawKey)`, and through
+`EnvSecp256k1Signer` against viem's `privateKeyToAccount(...).signMessage`,
+for the same fixed keys. It also asserts a Signer-produced evidence
+signature is identical to `signEventHash`'s and verifies under the existing
+unchanged verifier. `proof.json` and every fixture verify unchanged.
+
+**One core interface change was unavoidable:** `EnforcementAdapter.toResponse`
+now returns `TResponse | Promise<TResponse>`. x402's co-signature is signed
+inside `toResponse`, and `Signer.sign` is async because a real KMS is a
+network call. Stripe Issuing's adapter signs nothing and still returns
+synchronously; both satisfy the type, and every caller awaits. The rail's
+own window is unaffected -- this is an in-process signature resolving
+immediately, not a new round trip.
+
+**What did NOT get migrated, and why -- the honest part.** The on-chain Safe
+path still takes a raw private key.
+`@safe-global/protocol-kit`'s `Safe.init({ signer })` accepts only
+`HexAddress | PrivateKey | PasskeyArgType | PasskeyClient` (checked in the
+installed package's own types, not assumed) -- there is no callback or
+custom-account option, so a `Signer` that by definition never yields its key
+cannot be handed to it. Closing this needs an EIP-1193 provider shim backed
+by `Signer.sign()`, covering every RPC method protocol-kit calls. That is
+real work on the single code path whose live broadcast test is currently
+blocked on testnet gas (D-42/D-49's standing condition), which means a
+subtle mistake there could not be detected in this session. Deliberately not
+attempted blind. `EnvSecp256k1Signer` is still constructed and used for that
+key's *identity* -- address derivation and the distinctness check -- so the
+role exists in the signer set; only the signing call itself is unmigrated.
+
+**Remaining raw-key uses after the migration, all four categories checked
+individually rather than counted:** the Safe path above (4 uses, the real
+gap); `keygen.ts` (2 -- it *generates* keys, which a Signer structurally
+cannot do); `fund-session-key.ts` (3 -- a one-off ops script moving gas
+between EOAs); and the dashboard demo's `agent-runtime.ts` (2 -- the
+*agent's own* session key, which Waysafe never holds by design, D-42).
+`loadEvidenceSigningKey` in core is now dead in production (only its own
+test calls it) but left exported rather than removed, since deleting a
+public core export is a behavior change outside this refactor's scope -- a
+genuine, if small, second way to construct a key outside `EnvSigner`, noted
+here rather than quietly left for someone to find.
+
+**`FakeEd25519Signer`** (`packages/core/src/test-support/`) is seeded and
+deterministic -- real Ed25519 keys and real signatures, since most of these
+tests exist to prove verification works; "fake" means the key is a fixed
+test value, never that the crypto is stubbed. Every test that previously
+read or generated a key env var now uses it. That conversion caught a real
+regression immediately: two default-seeded fakes are the *same* key, which
+broke the existing "a chain does not verify against a different
+repository's public key" attack test -- fixed by seeding the two
+repositories differently, which is what that test needed to be meaningful
+anyway.
+
+**Log-redaction test** (step 7 of the task, and the one most likely to rot):
+instantiates both signers, signs, then logs the signer objects, a realistic
+request context holding them, `JSON.stringify` of that context, `String(...)`
+of each, and `Object.keys(...)`, capturing stdout -- and asserts the key
+appears in none of it, in every encoding it could plausibly surface in
+(base64 PKCS8, raw hex seed, 0x-prefixed and bare hex, raw DER hex).
+
+Full suite green: 618 passed, 1 skipped, 1 pre-existing expected failure
+(the x402 Safe broadcast case, testnet gas, unrelated and unchanged).
+`npm run typecheck` clean. `npm run quickstart` runs end to end and its
+evidence chain still verifies independently.
+
+**Change cost if wrong:** moderate and mostly contained. The compatibility
+tests are the real safety net -- if the indirection ever changes what gets
+signed, they fail loudly rather than producing a chain that verifies against
+nothing. The `toResponse` signature change is the widest blast radius (a
+core interface), but it is additive in effect: a synchronous adapter still
+type-checks and still works. The Safe path is the one to be careful with
+later: whoever builds the EIP-1193 shim should fund the cosigner EOA first
+so the broadcast test can actually verify the change, rather than shipping
+it against a self-skipping test.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

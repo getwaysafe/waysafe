@@ -19,13 +19,14 @@ import {
   verifyEvidenceChain,
   type EvidenceEvent,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { PrismaEvidenceRepository } from "./prisma-repository.js";
 
 const prisma = new PrismaClient();
 const SUITE_NAME = "PrismaEvidenceRepository: organization lock against real Postgres";
 const reachable = await probeDatabase(prisma);
-const SIGNING_KEY = generateEvidenceSigningKeyPair().privateKey;
+const SIGNING_KEY = new FakeEd25519Signer();
 
 requireDbOrExplainSkip(SUITE_NAME, reachable);
 
@@ -105,7 +106,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       );
 
       const events = await repo.listForOrganization(organizationId);
-      expect(events[0]!.key_id).toBe(computeKeyId(SIGNING_KEY));
+      expect(events[0]!.key_id).toBe(SIGNING_KEY.keyId);
       expect(events[0]!.key_id).toBe(repo.getActiveKeyId());
 
       const publicKey = loadEvidencePublicKey(repo.getPublicKey());

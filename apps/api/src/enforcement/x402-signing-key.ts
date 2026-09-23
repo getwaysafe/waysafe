@@ -14,8 +14,7 @@
  * ephemeral-key dev fallback.
  */
 
-import { generateEvidenceSigningKeyPair, loadEvidenceSigningKey } from "@waysafe/core";
-import type { KeyObject } from "node:crypto";
+import { EnvEd25519Signer } from "../signing/env-signer.js";
 
 /**
  * Loads `WAYSAFE_X402_COSIGNER_KEY` if set; otherwise generates a fresh key
@@ -25,9 +24,9 @@ import type { KeyObject } from "node:crypto";
  * persists, or -- once a real 2-of-2 account design lands -- for anything
  * registered on-chain as this key's counterpart.
  */
-export function loadOrGenerateX402SigningKey(warn?: (message: string) => void): KeyObject {
+export function loadOrGenerateX402SigningKey(warn?: (message: string) => void): EnvEd25519Signer {
   const configured = process.env.WAYSAFE_X402_COSIGNER_KEY;
-  if (configured) return loadEvidenceSigningKey(configured);
+  if (configured) return EnvEd25519Signer.fromBase64Pkcs8(configured);
 
   (warn ?? console.warn)(
     "WAYSAFE_X402_COSIGNER_KEY not set -- generated an ephemeral x402 co-signer key for this " +
@@ -35,5 +34,5 @@ export function loadOrGenerateX402SigningKey(warn?: (message: string) => void): 
       "and this key has no real on-chain counterpart yet (D-40's custody tension). Generate a real " +
       "one with `npm run keygen -w @waysafe/api`.",
   );
-  return generateEvidenceSigningKeyPair().privateKey;
+  return EnvEd25519Signer.ephemeral();
 }

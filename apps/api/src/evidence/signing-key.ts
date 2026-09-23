@@ -5,8 +5,7 @@
  * deliberately doesn't do.
  */
 
-import { generateEvidenceSigningKeyPair, loadEvidenceSigningKey } from "@waysafe/core";
-import type { KeyObject } from "node:crypto";
+import { EnvEd25519Signer } from "../signing/env-signer.js";
 
 /**
  * Loads `WAYSAFE_EVIDENCE_SIGNING_KEY` if set; otherwise generates a fresh key
@@ -23,14 +22,14 @@ import type { KeyObject } from "node:crypto";
  * generate a real key with `npm run keygen -w @waysafe/api` and set the env
  * var.
  */
-export function loadOrGenerateEvidenceSigningKey(warn?: (message: string) => void): KeyObject {
+export function loadOrGenerateEvidenceSigningKey(warn?: (message: string) => void): EnvEd25519Signer {
   const configured = process.env.WAYSAFE_EVIDENCE_SIGNING_KEY;
-  if (configured) return loadEvidenceSigningKey(configured);
+  if (configured) return EnvEd25519Signer.fromBase64Pkcs8(configured);
 
   (warn ?? console.warn)(
     "WAYSAFE_EVIDENCE_SIGNING_KEY not set -- generated an ephemeral evidence-signing key for this " +
       "process only. Signatures will not verify after a restart or from a different process. " +
       "Generate a real one with `npm run keygen -w @waysafe/api`.",
   );
-  return generateEvidenceSigningKeyPair().privateKey;
+  return EnvEd25519Signer.ephemeral();
 }

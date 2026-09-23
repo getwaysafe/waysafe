@@ -498,7 +498,7 @@ export async function handleIssuingAuthorizationRequest(
         },
       ],
     };
-    return { response: adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
+    return { response: await adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
   }
 
   const instrument = await repos.instruments.getInstrument(parsed.instrumentRef);
@@ -512,7 +512,7 @@ export async function handleIssuingAuthorizationRequest(
         },
       ],
     };
-    return { response: adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
+    return { response: await adapter.toResponse(result, authorization), mandateId: null, authorizationId: null };
   }
 
   const mandateId = instrument.mandate_id;
@@ -601,5 +601,5 @@ export async function handleIssuingAuthorizationRequest(
     }),
   );
 
-  return { response: adapter.toResponse(stored.result, authorization), mandateId, authorizationId: stored.authorization.id };
+  return { response: await adapter.toResponse(stored.result, authorization), mandateId, authorizationId: stored.authorization.id };
 }

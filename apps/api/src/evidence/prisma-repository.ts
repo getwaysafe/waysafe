@@ -24,16 +24,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
-  computeKeyId,
   exportPublicKeyBase64,
   ID_PREFIX,
   computeEventHash,
   generateId,
-  signEventHash,
   type EvidenceEvent,
   type EvidenceKeyDirectoryEntry,
 } from "@waysafe/core";
-import type { KeyObject } from "node:crypto";
+import type { EvidenceSigner } from "../signing/types.js";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -61,12 +59,12 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
 
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly signingKey: KeyObject,
+    private readonly signer: EvidenceSigner,
     options: PrismaEvidenceRepositoryOptions = {},
   ) {
     this.disableLockForTesting = options.disableLockForTesting ?? false;
-    this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
-    this.keyId = computeKeyId(signingKey);
+    this.publicKeyBase64 = exportPublicKeyBase64(signer.publicKeyObject());
+    this.keyId = signer.keyId;
   }
 
   private get client(): Db {
@@ -114,7 +112,7 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
         payload: input.payload as unknown as Prisma.InputJsonValue,
         previousHash,
         hash,
-        signature: signEventHash(this.signingKey, hash),
+        signature: Buffer.from(await this.signer.sign(Buffer.from(hash, "hex"))).toString("base64"),
         keyId: this.keyId,
         createdAt: input.now,
       },

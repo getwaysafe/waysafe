@@ -16,17 +16,15 @@
  */
 
 import {
-  computeKeyId,
   exportPublicKeyBase64,
   ID_PREFIX,
   computeEventHash,
   generateId,
-  signEventHash,
   type EvidenceEvent,
   type EvidenceKeyDirectoryEntry,
 } from "@waysafe/core";
-import type { KeyObject } from "node:crypto";
 import { Mutex } from "../util/mutex.js";
+import type { EvidenceSigner } from "../signing/types.js";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
 
 export class InMemoryEvidenceRepository implements EvidenceRepository {
@@ -35,9 +33,9 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
   private readonly publicKeyBase64: string;
   private readonly keyId: string;
 
-  constructor(private readonly signingKey: KeyObject) {
-    this.publicKeyBase64 = exportPublicKeyBase64(signingKey);
-    this.keyId = computeKeyId(signingKey);
+  constructor(private readonly signer: EvidenceSigner) {
+    this.publicKeyBase64 = exportPublicKeyBase64(signer.publicKeyObject());
+    this.keyId = signer.keyId;
   }
 
   async withOrganizationLock<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
@@ -76,7 +74,7 @@ export class InMemoryEvidenceRepository implements EvidenceRepository {
       payload: input.payload,
       previous_hash: previousHash,
       hash,
-      signature: signEventHash(this.signingKey, hash),
+      signature: Buffer.from(await this.signer.sign(Buffer.from(hash, "hex"))).toString("base64"),
       key_id: this.keyId,
       created_at: input.now,
     };

@@ -21,6 +21,7 @@ import {
   verifyEvidenceChain,
   POLICY_SCHEMA_VERSION,
   REASON_CODE_DESCRIPTIONS,
+  assertDistinctSigners,
   type EvidenceEvent,
   type IntentCompiler,
   type PaymentAdapter,
@@ -44,6 +45,7 @@ import {
 import { InMemoryEvidenceRepository } from "./evidence/in-memory-repository.js";
 import type { EvidenceRepository } from "./evidence/types.js";
 import { loadOrGenerateEvidenceSigningKey } from "./evidence/signing-key.js";
+import { EnvSecp256k1Signer } from "./signing/env-signer.js";
 import { asExecutable } from "./execution/executable.js";
 import { executePayment } from "./execution/service.js";
 import { StripeAdapter } from "./payments/stripe-adapter.js";
@@ -62,7 +64,6 @@ import {
 } from "./enforcement/x402.js";
 import { loadOrGenerateX402SigningKey } from "./enforcement/x402-signing-key.js";
 import {
-  addressFromPrivateKey,
   createOnChainSafeDeployer,
   createReuseSafeDeployer,
   settleTwoOfTwoTransfer,
@@ -399,12 +400,14 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   const compiler = options.compiler ?? createCompilerFromEnv(loadCompilerFixtures());
 
+  // D-63: the evidence signer, named so the boot-time distinctness assertion
+  // below can compare its public key against the other two roles'.
+  const evidenceSigner = loadOrGenerateEvidenceSigningKey((msg) => app.log.warn(msg));
+
   const repos: ServerRepos = options.repos ?? {
     authorization: new InMemoryAuthorizationRepository(EMPTY_DIRECTORY),
     agentKeys: new InMemoryAgentKeyRepository(),
-    evidence: new InMemoryEvidenceRepository(
-      loadOrGenerateEvidenceSigningKey((msg) => app.log.warn(msg)),
-    ),
+    evidence: new InMemoryEvidenceRepository(evidenceSigner),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
     principals: new InMemoryPrincipalRepository(),
@@ -459,6 +462,49 @@ export function buildServer(options: BuildServerOptions = {}) {
   const x402Adapter = new X402EnforcementAdapter(x402SigningKey);
   const x402RpcUrl = process.env.POLYGON_AMOY_RPC_URL;
   const x402SafeCosignerKey = process.env.WAYSAFE_SAFE_COSIGNER_KEY as Hex | undefined;
+
+  /**
+   * D-63: the three signers of docs/THREAT-MODEL.md §1, as three distinct
+   * objects. `assertDistinctSigners` compares their *public keys* and
+   * refuses to start if any two match -- the realistic misconfiguration
+   * being two env vars accidentally set to the same key, which comparing
+   * env-var names or object identity would miss entirely.
+   *
+   * Only asserted when the Safe cosigner is actually configured: without
+   * it there is no third signer to compare, and this server still runs
+   * (x402 settlement is simply unavailable, exactly as before). The two
+   * Ed25519 signers are always both present, so the pair that can most
+   * plausibly be duplicated is always checked.
+   */
+  const safeCosignerSigner = x402SafeCosignerKey
+    ? EnvSecp256k1Signer.fromHex(x402SafeCosignerKey)
+    : undefined;
+
+  void (async () => {
+    try {
+      if (safeCosignerSigner) {
+        await assertDistinctSigners({
+          evidence: evidenceSigner,
+          x402Attestation: x402SigningKey,
+          safeCosigner: safeCosignerSigner,
+        });
+      } else {
+        const [evidenceKey, attestationKey] = await Promise.all([
+          evidenceSigner.publicKey(),
+          x402SigningKey.publicKey(),
+        ]);
+        if (Buffer.from(evidenceKey).equals(Buffer.from(attestationKey))) {
+          throw new Error(
+            'signers "evidence" and "x402Attestation" are the same key -- each role must have its own key ' +
+              "(see docs/THREAT-MODEL.md §1: the three keys have different blast radii and are never interchangeable)",
+          );
+        }
+      }
+    } catch (err) {
+      app.log.error(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  })();
 
   /**
    * D-42: which `X402SafeDeployer` `POST /v1/instruments/x402` uses.
@@ -1224,8 +1270,9 @@ export function buildServer(options: BuildServerOptions = {}) {
         organizationId: request.auth!.organizationId,
         mandateId: body.data.mandate_id,
         sessionKeyAddress: body.data.session_key_address,
-        cosignerAddress: x402SafeCosignerKey
-          ? addressFromPrivateKey(x402SafeCosignerKey)
+        // D-63: derived through the Signer, not from the raw key.
+        cosignerAddress: safeCosignerSigner
+          ? await safeCosignerSigner.address()
           : "0x0000000000000000000000000000000000000000",
       },
       new Date(),

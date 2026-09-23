@@ -27,6 +27,7 @@ import {
   loadCompilerFixtures,
   POLICY_SCHEMA_VERSION,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { buildServer, type ServerRepos } from "../../../apps/api/src/server.js";
 import { InMemoryAgentKeyRepository } from "../../../apps/api/src/agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../../../apps/api/src/authorization/in-memory-repository.js";
@@ -64,7 +65,7 @@ beforeAll(async () => {
       createStaticDirectory([{ domain: "staples.com", display_name: "Staples" }]),
     ),
     agentKeys: new InMemoryAgentKeyRepository(),
-    evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
+    evidence: new InMemoryEvidenceRepository(new FakeEd25519Signer()),
     webauthn: new InMemoryWebauthnRepository(),
     providerEvents: new InMemoryProviderEventRepository(),
     principals: new InMemoryPrincipalRepository(),

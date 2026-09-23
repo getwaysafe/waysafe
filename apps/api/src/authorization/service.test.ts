@@ -10,6 +10,7 @@ import {
   type Policy,
   type AuthorizationRequest,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryAuthorizationRepository } from "./in-memory-repository.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
@@ -66,7 +67,7 @@ const NOW = new Date("2026-08-24T12:00:00.000Z");
 async function repoWithMandate(policy: Policy, overrides: Record<string, unknown> = {}) {
   const repo = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
   const seeded = repo.seedMandate({
     organizationId: ORG,
     principalId: PRINCIPAL,
@@ -370,7 +371,7 @@ describe("the actor-state gate (outside the pure engine)", () => {
   it("denies when no mandate matches and does not persist anything", async () => {
     const repo = new InMemoryAuthorizationRepository(DIRECTORY);
     const agentKeys = new InMemoryAgentKeyRepository();
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const created = await agentKeys.createKey(
       { organizationId: ORG, agentId: AGENT, name: "test key" },
       NOW,
@@ -943,7 +944,7 @@ async function setupApproverScenario(
 ) {
   const repo = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
 
   const approverPolicy = policyFrom({
     // A real approver's own threshold is well above what it's approving,
@@ -1298,7 +1299,7 @@ describe("D-62 Addition A: approver cycles are rejected at mandate creation", ()
   it("Addition A+B together: a real runtime 3-cycle is bounded by each approver's own cap, not unlimited", async () => {
     const repo = new InMemoryAuthorizationRepository(DIRECTORY);
     const agentKeys = new InMemoryAgentKeyRepository();
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
 
     // X needs a LOW step-up threshold so its own authorize() calls

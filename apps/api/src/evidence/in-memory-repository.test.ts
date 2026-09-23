@@ -6,6 +6,7 @@ import {
   loadEvidencePublicKey,
   verifyEvidenceChain,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryEvidenceRepository } from "./in-memory-repository.js";
 
 const ORG = "org_test";
@@ -14,7 +15,7 @@ const NOW = new Date("2026-08-24T12:00:00.000Z");
 
 describe("InMemoryEvidenceRepository", () => {
   it("assigns increasing sequence numbers and links each event to the previous hash", async () => {
-    const repo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const repo = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const first = await repo.withOrganizationLock(ORG, () =>
       repo.appendEvent({
         organizationId: ORG,
@@ -43,7 +44,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("produces a chain that verifyEvidenceChain accepts", async () => {
-    const repo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const repo = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     for (let i = 0; i < 5; i++) {
       await repo.withOrganizationLock(ORG, () =>
         repo.appendEvent({
@@ -63,7 +64,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("D-53: stamps every appended event with the repository's own key_id, published via getKeyDirectory", async () => {
-    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const signingKey = new FakeEd25519Signer();
     const repo = new InMemoryEvidenceRepository(signingKey);
     const event = await repo.withOrganizationLock(ORG, () =>
       repo.appendEvent({
@@ -76,7 +77,7 @@ describe("InMemoryEvidenceRepository", () => {
       }),
     );
 
-    expect(event.key_id).toBe(computeKeyId(signingKey));
+    expect(event.key_id).toBe(signingKey.keyId);
     expect(event.key_id).toBe(repo.getActiveKeyId());
 
     const directory = repo.getKeyDirectory();
@@ -91,7 +92,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("D-53: an event with no key_id (the pre-D-53 shape) still verifies via the legacy publicKey fallback, even when a keyDirectory is also supplied", async () => {
-    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const signingKey = new FakeEd25519Signer();
     const repo = new InMemoryEvidenceRepository(signingKey);
     await repo.withOrganizationLock(ORG, () =>
       repo.appendEvent({
@@ -115,7 +116,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("signs every event, verifiably against the repository's own published public key (D-26/OQ-8)", async () => {
-    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const signingKey = new FakeEd25519Signer();
     const repo = new InMemoryEvidenceRepository(signingKey);
     for (let i = 0; i < 3; i++) {
       await repo.withOrganizationLock(ORG, () =>
@@ -138,7 +139,11 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("THE ATTACK: a chain this repository produced does not verify against a different repository's public key", async () => {
-    const repo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    // Distinct seeds on purpose: FakeEd25519Signer is deterministic, so two
+    // default-seeded signers are the *same* key and this attack would have
+    // nothing to prove. The two repositories must genuinely hold different
+    // keys for "verified against the wrong key" to mean anything.
+    const repo = new InMemoryEvidenceRepository(new FakeEd25519Signer("this-repo"));
     await repo.withOrganizationLock(ORG, () =>
       repo.appendEvent({
         organizationId: ORG,
@@ -151,7 +156,7 @@ describe("InMemoryEvidenceRepository", () => {
     );
     const events = await repo.listForOrganization(ORG);
 
-    const otherRepo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const otherRepo = new InMemoryEvidenceRepository(new FakeEd25519Signer("a-different-repo"));
     const wrongPublicKey = loadEvidencePublicKey(otherRepo.getPublicKey());
 
     const result = verifyEvidenceChain(events, wrongPublicKey);
@@ -160,7 +165,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("keeps each organization's chain independent", async () => {
-    const repo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const repo = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     await repo.withOrganizationLock(ORG, () =>
       repo.appendEvent({
         organizationId: ORG,
@@ -189,7 +194,7 @@ describe("InMemoryEvidenceRepository", () => {
   });
 
   it("serializes concurrent appends to the same organization with no gaps or duplicate sequences", async () => {
-    const repo = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const repo = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const COUNT = 25;
 
     await Promise.all(

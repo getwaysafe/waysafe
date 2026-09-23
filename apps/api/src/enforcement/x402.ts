@@ -29,6 +29,7 @@
  */
 
 import { createHash, type KeyObject } from "node:crypto";
+import type { Signer } from "@waysafe/core";
 import {
   Decision,
   ID_PREFIX,
@@ -210,6 +211,18 @@ export function signCoSignaturePayload(privateKey: KeyObject, payload: X402CoSig
   return signEventHash(privateKey, coSignaturePayloadHash(payload));
 }
 
+/** The same signature, produced through a `Signer` rather than a raw key
+ * (D-63). Byte-identical to `signCoSignaturePayload` for the same key --
+ * asserted directly in x402.test.ts, so the indirection can never silently
+ * change what gets signed. */
+export async function signCoSignaturePayloadWith(
+  signer: Signer,
+  payload: X402CoSignaturePayload,
+): Promise<string> {
+  const hash = coSignaturePayloadHash(payload);
+  return Buffer.from(await signer.sign(Buffer.from(hash, "hex"))).toString("base64");
+}
+
 /** Never throws -- a malformed signature fails closed (false), same
  * convention as `verifyEventSignature` itself. Deliberately ignores
  * `authorization_id` (never signed -- see `X402CoSignaturePayload`'s doc
@@ -273,7 +286,7 @@ function merchantAssertionFromRequirement(callback: X402Callback): MerchantAsser
 export class X402Adapter implements EnforcementAdapter<X402Callback, X402EnforcementResponse> {
   readonly name = "x402";
 
-  constructor(private readonly signingKey: KeyObject) {}
+  constructor(private readonly signer: Signer) {}
 
   parseRequest(callback: X402Callback): EnforcementRequest | null {
     if (!callback.instrumentRef) return null;
@@ -297,7 +310,7 @@ export class X402Adapter implements EnforcementAdapter<X402Callback, X402Enforce
     };
   }
 
-  toResponse(result: EngineResult, callback: X402Callback): X402EnforcementResponse {
+  async toResponse(result: EngineResult, callback: X402Callback): Promise<X402EnforcementResponse> {
     const base = {
       decision: result.decision,
       reason_codes: result.reasons.map((r) => r.code),
@@ -331,7 +344,7 @@ export class X402Adapter implements EnforcementAdapter<X402Callback, X402Enforce
       co_signature: {
         ...payload,
         authorization_id: "", // filled by handleX402PaymentRequest once the row exists; never signed
-        signature: signCoSignaturePayload(this.signingKey, payload),
+        signature: await signCoSignaturePayloadWith(this.signer, payload),
       },
     };
   }
@@ -530,7 +543,7 @@ export async function handleX402PaymentRequest(
       asset: "unknown",
     };
     return {
-      response: adapter.toResponse(result, { instrumentRef: params.instrumentRef, resourceUrl: params.resourceUrl, requirement }),
+      response: await adapter.toResponse(result, { instrumentRef: params.instrumentRef, resourceUrl: params.resourceUrl, requirement }),
       mandateId: null,
     };
   }
@@ -646,7 +659,7 @@ export async function handleX402PaymentRequest(
     }),
   );
 
-  const response = adapter.toResponse(stored.result, callback);
+  const response = await adapter.toResponse(stored.result, callback);
   if (response.co_signature) {
     response.co_signature.authorization_id = stored.authorization.id;
   }

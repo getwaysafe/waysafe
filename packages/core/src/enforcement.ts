@@ -52,6 +52,14 @@ export interface EnforcementAdapter<TCallback = unknown, TResponse = unknown> {
   /**
    * Turn a decision back into whatever shape this rail's protocol expects
    * as its synchronous response.
+   *
+   * May return a promise (D-63): an adapter that signs its response --
+   * x402's co-signature -- now goes through a `Signer`, whose `sign` is
+   * async because a KMS-backed implementation is a network call. Adapters
+   * that sign nothing (Stripe Issuing, whose response is a bare
+   * `{approved}`) still return synchronously; both satisfy this type, and
+   * every caller awaits. The rail's own window is unchanged -- this is an
+   * in-process signature today, resolving immediately.
    */
-  toResponse(result: EngineResult, callback: TCallback): TResponse;
+  toResponse(result: EngineResult, callback: TCallback): TResponse | Promise<TResponse>;
 }

@@ -71,8 +71,8 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
   const { InMemoryWebauthnRepository } = await import("../apps/api/src/webauthn/in-memory-repository.js");
   const { InMemoryProviderEventRepository } = await import("../apps/api/src/webhooks/in-memory-repository.js");
   const { FakeAdapter } = await import("../apps/api/src/execution/test-support/fake-adapter.js");
-  const { createStaticDirectory, FixtureIntentCompiler, generateEvidenceSigningKeyPair, loadCompilerFixtures } =
-    await import("@waysafe/core");
+  const { createStaticDirectory, FixtureIntentCompiler, loadCompilerFixtures } = await import("@waysafe/core");
+  const { FakeEd25519Signer } = await import("@waysafe/core/test-support/fake-signer.js");
 
   const agentKeys = new InMemoryAgentKeyRepository();
   const app = buildServer({
@@ -87,7 +87,7 @@ async function startLocalServerAndMintOrgCredential(): Promise<{
         ]),
       ),
       agentKeys,
-      evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
+      evidence: new InMemoryEvidenceRepository(new FakeEd25519Signer()),
       webauthn: new InMemoryWebauthnRepository(),
       providerEvents: new InMemoryProviderEventRepository(),
       principals: new InMemoryPrincipalRepository(),

@@ -52,6 +52,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { generateEvidenceSigningKeyPair, toMinorUnits, Decision } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { createStaticDirectory, parsePolicy, POLICY_SCHEMA_VERSION, type Policy } from "@waysafe/core";
 import { erc20Abi, type Address, type Hex } from "viem";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
@@ -202,7 +203,7 @@ describe("THE BYPASS TEST, part 1: forging a co-signature requires Waysafe's rea
 describe("THE BYPASS TEST, part 2: a genuine co-signature is necessary but not sufficient to pay", () => {
   it("Waysafe's own ALLOW response carries no signed transfer authorization -- only a co-signature over the payment intent", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,
@@ -223,7 +224,7 @@ describe("THE BYPASS TEST, part 2: a genuine co-signature is necessary but not s
       NOW,
     );
 
-    const signingKey = generateEvidenceSigningKeyPair().privateKey;
+    const signingKey = new FakeEd25519Signer();
     const adapter = new X402Adapter(signingKey);
     const decision = await handleX402PaymentRequest(
       { authorization, evidence, instruments },

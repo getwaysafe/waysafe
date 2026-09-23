@@ -8,6 +8,7 @@ import {
   toMinorUnits,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { authorize } from "../authorization/service.js";
@@ -45,7 +46,7 @@ function policyFrom(): Policy {
 async function setupExecutedAuthorization() {
   const authorization = new InMemoryAuthorizationRepository(DIRECTORY);
   const agentKeys = new InMemoryAgentKeyRepository();
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
   const providerEvents = new InMemoryProviderEventRepository();
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
@@ -207,7 +208,7 @@ describe("handleStripeWebhook: issuing_authorization.updated (D-35 capture)", ()
 
   async function setupApprovedCardAuthorization() {
     const authorization = new InMemoryAuthorizationRepository(DIRECTORY);
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const providerEvents = new InMemoryProviderEventRepository();
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({

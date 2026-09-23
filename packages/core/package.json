@@ -7,7 +7,11 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./browser": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" }
+    "./browser": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" },
+    "./test-support/fake-signer.js": {
+      "types": "./dist/test-support/fake-signer.d.ts",
+      "default": "./dist/test-support/fake-signer.js"
+    }
   },
   "scripts": {
     "build": "tsc -b",

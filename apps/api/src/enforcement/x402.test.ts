@@ -20,6 +20,7 @@ import {
   ReasonCode,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
 import { InMemoryInstrumentRepository } from "../instruments/in-memory-repository.js";
@@ -107,7 +108,7 @@ function fetcherFor(requirement: X402PaymentRequirement): X402Fetcher {
 
 async function setup() {
   const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-  const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+  const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
   const instruments = new InMemoryInstrumentRepository();
   const { mandateId } = authorization.seedMandate({
     organizationId: ORG,
@@ -125,7 +126,7 @@ async function setup() {
   return { authorization, evidence, instruments, mandateId, instrumentId: instrument.id };
 }
 
-const signingKey = generateEvidenceSigningKeyPair().privateKey;
+const signingKey = new FakeEd25519Signer();
 
 describe("X402Adapter.parseRequest", () => {
   const adapter = new X402Adapter(signingKey);
@@ -190,21 +191,21 @@ describe("X402Adapter.toResponse", () => {
     requirement: buildRequirement(),
   };
 
-  it("produces a validly-signed co-signature only on ALLOW", () => {
-    const response = adapter.toResponse(
+  it("produces a validly-signed co-signature only on ALLOW", async () => {
+    const response = await adapter.toResponse(
       { decision: Decision.ALLOW, reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }] },
       callback,
     );
     expect(response.decision).toBe(Decision.ALLOW);
     expect(response.co_signature).not.toBeNull();
-    const publicKey = createPublicKey(signingKey);
+    const publicKey = signingKey.publicKeyObject();
     expect(verifyCoSignature(publicKey, response.co_signature!)).toBe(true);
     expect(response.co_signature!.pay_to).toBe(callback.requirement.payTo);
     expect(response.co_signature!.amount_atomic).toBe(callback.requirement.maxAmountRequired);
   });
 
-  it("D-33 point 4, mirrored: STEP_UP fails closed on this synchronous rail -- no co-signature", () => {
-    const response = adapter.toResponse(
+  it("D-33 point 4, mirrored: STEP_UP fails closed on this synchronous rail -- no co-signature", async () => {
+    const response = await adapter.toResponse(
       {
         decision: Decision.STEP_UP,
         reasons: [{ code: ReasonCode.STEP_UP_MERCHANT_UNVERIFIED, message: "needs a human" }],
@@ -215,30 +216,30 @@ describe("X402Adapter.toResponse", () => {
     expect(response.reason_codes).toEqual([ReasonCode.STEP_UP_MERCHANT_UNVERIFIED]);
   });
 
-  it("produces no co-signature on DENY", () => {
-    const response = adapter.toResponse(
+  it("produces no co-signature on DENY", async () => {
+    const response = await adapter.toResponse(
       { decision: Decision.DENY, reasons: [{ code: ReasonCode.DENY_MERCHANT_BLOCKED, message: "blocked" }] },
       callback,
     );
     expect(response.co_signature).toBeNull();
   });
 
-  it("a tampered co-signature fails verification", () => {
-    const response = adapter.toResponse(
+  it("a tampered co-signature fails verification", async () => {
+    const response = await adapter.toResponse(
       { decision: Decision.ALLOW, reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }] },
       callback,
     );
-    const publicKey = createPublicKey(signingKey);
+    const publicKey = signingKey.publicKeyObject();
     const tampered = { ...response.co_signature!, amount_atomic: "999999999999" };
     expect(verifyCoSignature(publicKey, tampered)).toBe(false);
   });
 
-  it("mutating authorization_id after signing does not invalidate the signature (it was never signed)", () => {
-    const response = adapter.toResponse(
+  it("mutating authorization_id after signing does not invalidate the signature (it was never signed)", async () => {
+    const response = await adapter.toResponse(
       { decision: Decision.ALLOW, reasons: [{ code: ReasonCode.ALLOW_WITHIN_MANDATE, message: "ok" }] },
       callback,
     );
-    const publicKey = createPublicKey(signingKey);
+    const publicKey = signingKey.publicKeyObject();
     response.co_signature!.authorization_id = "auth_filled_in_later";
     expect(verifyCoSignature(publicKey, response.co_signature!)).toBe(true);
   });
@@ -341,7 +342,7 @@ describe("handleX402PaymentRequest", () => {
 
   it("enforces the monthly cumulative limit across two payments that individually pass the per-transaction cap", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,
@@ -394,7 +395,7 @@ describe("handleX402PaymentRequest", () => {
 
   it("declines a mandate that has expired, even for an otherwise-allowlisted payee", async () => {
     const authorization = new InMemoryAuthorizationRepository(createStaticDirectory([]));
-    const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+    const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
     const instruments = new InMemoryInstrumentRepository();
     const { mandateId } = authorization.seedMandate({
       organizationId: ORG,

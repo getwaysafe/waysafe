@@ -16,6 +16,7 @@ import {
   ReasonCode,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { InMemoryAuthorizationRepository } from "../authorization/in-memory-repository.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { authorize } from "../authorization/service.js";
@@ -46,7 +47,7 @@ function repos(): WebauthnServiceRepos & { authorization: InMemoryAuthorizationR
   return {
     webauthn: new InMemoryWebauthnRepository(),
     authorization: new InMemoryAuthorizationRepository(createStaticDirectory([])),
-    evidence: new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey),
+    evidence: new InMemoryEvidenceRepository(new FakeEd25519Signer()),
   };
 }
 

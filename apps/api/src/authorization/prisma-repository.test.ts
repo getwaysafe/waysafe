@@ -38,6 +38,7 @@ import {
   type MandateStatus,
   type Policy,
 } from "@waysafe/core";
+import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { probeDatabase, requireDbOrExplainSkip } from "../test-support/db-gate.js";
 import { InMemoryAgentKeyRepository } from "../agent-keys/in-memory-repository.js";
 import { InMemoryEvidenceRepository } from "../evidence/in-memory-repository.js";
@@ -54,7 +55,7 @@ import { authorize, resolveStepUpAsApprover, sweepExpiredStepUps, type Authorize
 // two repositories here keeps this file's scope narrow -- authorize() only
 // needs *a* valid, unrevoked key for the seeded agent, not a real one.
 const agentKeys = new InMemoryAgentKeyRepository();
-const evidence = new InMemoryEvidenceRepository(generateEvidenceSigningKeyPair().privateKey);
+const evidence = new InMemoryEvidenceRepository(new FakeEd25519Signer());
 
 const prisma = new PrismaClient();
 const SUITE_NAME = "PrismaAuthorizationRepository: row lock against real Postgres";
@@ -695,7 +696,7 @@ describe.skipIf(!reachable)(SUITE_NAME, () => {
       );
 
       const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
-      const prismaEvidence = new PrismaEvidenceRepository(prisma, generateEvidenceSigningKeyPair().privateKey);
+      const prismaEvidence = new PrismaEvidenceRepository(prisma, new FakeEd25519Signer());
       const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence: prismaEvidence };
 
       const result = await authorize(repos, {

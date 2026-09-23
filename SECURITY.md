@@ -59,6 +59,15 @@ discourage looking further.
 Every private signing key in this codebase today is loaded from an
 environment variable directly into process memory — no hardware security
 module, no key management service, no boundary between a process compromise
-and a key compromise. See
+and a key compromise.
+
+A `Signer` interface now sits in front of that (D-63), with `EnvSigner` as
+its only implementation. This is a code-structure change, not a security
+improvement: the key is still a plaintext env var decoded into ordinary
+process memory, and an attacker with code execution in the process reaches
+it exactly as before. What it buys is that a KMS-backed signer becomes a new
+class plus config rather than a rewrite of every signing call site. See
 [`docs/THREAT-MODEL.md` §5](docs/THREAT-MODEL.md#5-where-the-private-keys-actually-live-envsigner)
-for exactly what that does and doesn't mean for each key in the system.
+for exactly what that does and doesn't mean for each key in the system,
+including the one path (the on-chain Safe cosigner) that does not yet sign
+through the interface at all.
