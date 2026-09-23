@@ -1,5 +1,21 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import proof from "@/data/proof.json";
+import { SITE_TITLE } from "@/lib/constants";
+
+const DESCRIPTION =
+  "Spend authorization for AI agents, enforced by the payment rail — not the agent. Even a compromised agent can't spend outside its mandate.";
+
+/** Overrides the root layout's site-wide default for this page only; the
+ * layout's `other: { "build-sha" }` is merged in, not replaced. og:title is
+ * the same constant the <title> uses, so the two cannot drift apart. */
+export const metadata: Metadata = {
+  description: DESCRIPTION,
+  openGraph: {
+    title: SITE_TITLE,
+    description: DESCRIPTION,
+  },
+};
 
 export default function HomePage() {
   const proofCapturedDate = new Date(proof.captured_at).toISOString().slice(0, 10);

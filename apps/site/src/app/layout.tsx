@@ -4,11 +4,11 @@ import { Bricolage_Grotesque, DM_Sans, JetBrains_Mono } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
 import { WaysafeMark } from "@/components/WaysafeMark";
-import { CONTACT_EMAIL } from "@/lib/constants";
+import { CONTACT_EMAIL, SITE_TITLE } from "@/lib/constants";
 import { BUILD_SHA, BUILT_AT } from "@/lib/build-info";
 
 export const metadata: Metadata = {
-  title: "Waysafe — the required signer for agent payments",
+  title: SITE_TITLE,
   description:
     "Waysafe decides whether an AI agent may take an economic action. The payment rail asks before money moves, and every decision is signed, chained, and independently verifiable.",
   other: {
