@@ -64,13 +64,13 @@ import {
   createVirtualAuthenticator,
 } from "../webauthn/test-support/virtual-authenticator.js";
 import {
-  addressFromPrivateKey,
   attachForgedSignature,
   buildUsdcTransfer,
   createAmoyPublicClient,
   signWithOneOwnerOnly,
   simulateExecTransaction,
 } from "../enforcement/x402-safe.js";
+import { EnvSecp256k1Signer } from "../signing/env-signer.js";
 import { StripeIssuingAdapter, handleIssuingAuthorizationRequest } from "../enforcement/stripe-issuing.js";
 import type { Address, Hex } from "viem";
 
@@ -220,8 +220,12 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
       return reply.code(404).send({ error: "not_found" });
     }
     const safeAddress = instrument.external_ref as Address;
-    const cosignerAddress = addressFromPrivateKey(cosignerPrivateKey);
-    const sessionKeyAddress = addressFromPrivateKey(sessionKeyPrivateKey);
+    // D-63: addresses derived through the Signer, not a raw-key helper.
+    // The session key is the *agent's* own key (D-42) -- this demo plays
+    // the agent's runtime, so it legitimately holds one; deriving its
+    // address the same way keeps a single path for both.
+    const cosignerAddress = await EnvSecp256k1Signer.fromHex(cosignerPrivateKey).address();
+    const sessionKeyAddress = await EnvSecp256k1Signer.fromHex(sessionKeyPrivateKey).address();
 
     // Small, fixed, and never actually spent -- every case below is
     // simulated (eth_call), never broadcast, so this amount never leaves

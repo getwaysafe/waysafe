@@ -6,7 +6,6 @@ import {
   generateEvidenceSigningKeyPair,
   loadEvidenceKeyDirectory,
   loadEvidencePublicKey,
-  loadEvidenceSigningKey,
   signEventHash,
   verifyEventSignature,
 } from "./evidence-signing.js";
@@ -69,12 +68,10 @@ describe("signing and verifying", () => {
 });
 
 describe("key export/import round-trips", () => {
-  it("a private key survives base64 PKCS8 export and reload, and still signs verifiably", () => {
-    const { privateKey, publicKey } = generateEvidenceSigningKeyPair();
-    const reloaded = loadEvidenceSigningKey(exportPrivateKeyBase64(privateKey));
-    const signature = signEventHash(reloaded, HASH);
-    expect(verifyEventSignature(publicKey, HASH, signature)).toBe(true);
-  });
+  // The private-key *reload* half of this round-trip moved to
+  // apps/api's env-signer.test.ts with D-63: @waysafe/core no longer
+  // decodes a private key at all, so the test for decoding lives where
+  // the decoding does.
 
   it("a public key survives base64 SPKI export and reload, and still verifies", () => {
     const { privateKey, publicKey } = generateEvidenceSigningKeyPair();

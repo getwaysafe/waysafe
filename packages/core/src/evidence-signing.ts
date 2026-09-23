@@ -24,7 +24,6 @@
 
 import {
   createHash,
-  createPrivateKey,
   createPublicKey,
   generateKeyPairSync,
   sign,
@@ -45,17 +44,14 @@ export function generateEvidenceSigningKeyPair(): EvidenceSigningKeyPair {
   return { privateKey, publicKey };
 }
 
-/** Base64 PKCS8 -- the format `WAYSAFE_EVIDENCE_SIGNING_KEY` is stored in. */
+/** Base64 PKCS8 -- the format `WAYSAFE_EVIDENCE_SIGNING_KEY` is stored in.
+ * Used by `npm run keygen` to print a freshly generated key for an
+ * operator to store. There is deliberately no counterpart that *decodes*
+ * a private key here any more (D-63): decoding is `EnvSigner`'s job, in
+ * apps/api, so `@waysafe/core` never turns a secret back into a usable
+ * signing key. */
 export function exportPrivateKeyBase64(privateKey: KeyObject): string {
   return (privateKey.export({ type: "pkcs8", format: "der" }) as Buffer).toString("base64");
-}
-
-export function loadEvidenceSigningKey(base64Pkcs8: string): KeyObject {
-  return createPrivateKey({
-    key: Buffer.from(base64Pkcs8, "base64"),
-    format: "der",
-    type: "pkcs8",
-  });
 }
 
 /** Base64 SPKI -- the format published for third parties to verify against.

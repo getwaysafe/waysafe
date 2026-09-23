@@ -17,6 +17,7 @@ import {
   verifyEventSignature,
 } from "@waysafe/core";
 import { EnvEd25519Signer, EnvSecp256k1Signer } from "./env-signer.js";
+import { viemAccountFor } from "./evm-account.js";
 
 // A fixed key, so these assertions are reproducible rather than "whatever
 // this run generated". Generated once for this test file and never used
@@ -34,6 +35,9 @@ const FIXED_ED25519_PKCS8_B64 = exportPrivateKeyBase64(
 
 // Likewise fixed, and likewise never used anywhere real.
 const FIXED_SECP256K1_HEX = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+
+/** A hex SHA-256 digest -- the shape an evidence event hash has. */
+const HASH_HEX = "b".repeat(64);
 
 describe("EnvEd25519Signer: byte-for-byte compatible with the old raw-key path (D-63)", () => {
   it("produces the identical signature bytes the old `sign(null, payload, key)` call did", async () => {
@@ -86,6 +90,15 @@ describe("EnvEd25519Signer: byte-for-byte compatible with the old raw-key path (
       type: "pkcs8",
     });
     expect(exportPublicKeyBase64(signer.publicKeyObject())).toBe(exportPublicKeyBase64(rawKey));
+  });
+
+  it("a generated key survives base64 PKCS8 export and reload through the Signer, and still signs verifiably", async () => {
+    // The round-trip that used to live in @waysafe/core's own test, moved
+    // here with D-63 because core no longer decodes a private key at all.
+    const { privateKey, publicKey } = generateEvidenceSigningKeyPair();
+    const signer = EnvEd25519Signer.fromBase64Pkcs8(exportPrivateKeyBase64(privateKey));
+    const signature = Buffer.from(await signer.sign(Buffer.from(HASH_HEX, "hex"))).toString("base64");
+    expect(verifyEventSignature(publicKey, HASH_HEX, signature)).toBe(true);
   });
 
   it("ephemeral() still works with no env var, same as the old loadOrGenerate fallback", async () => {
@@ -185,5 +198,83 @@ describe("EnvSigner exposes no route to the private key (D-63)", () => {
     expect(output).not.toContain(FIXED_SECP256K1_HEX.slice(2));
     // And the raw DER bytes, in case an object dump rendered them as a buffer.
     expect(output).not.toContain(Buffer.from(FIXED_ED25519_PKCS8_B64, "base64").toString("hex"));
+  });
+});
+
+describe("the viem Account wrapper signs identically to the raw account (D-63 completion)", () => {
+  it("signTypedData: a Safe-shaped EIP-712 payload signs byte-for-byte the same", async () => {
+    const signer = EnvSecp256k1Signer.fromHex(FIXED_SECP256K1_HEX);
+    const wrapped = await viemAccountFor(signer);
+    const raw = privateKeyToAccount(FIXED_SECP256K1_HEX);
+
+    // The exact shape protocol-kit signs for a Safe owner signature.
+    const typedData = {
+      domain: { chainId: 80002, verifyingContract: "0xFeCB8688Da42bC47AF08348E032007978C83CFb8" as const },
+      types: {
+        SafeTx: [
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "data", type: "bytes" },
+          { name: "operation", type: "uint8" },
+          { name: "safeTxGas", type: "uint256" },
+          { name: "baseGas", type: "uint256" },
+          { name: "gasPrice", type: "uint256" },
+          { name: "gasToken", type: "address" },
+          { name: "refundReceiver", type: "address" },
+          { name: "nonce", type: "uint256" },
+        ],
+      },
+      primaryType: "SafeTx" as const,
+      message: {
+        to: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582" as const,
+        value: 0n,
+        data: "0xa9059cbb" as const,
+        operation: 0,
+        safeTxGas: 0n,
+        baseGas: 0n,
+        gasPrice: 0n,
+        gasToken: "0x0000000000000000000000000000000000000000" as const,
+        refundReceiver: "0x0000000000000000000000000000000000000000" as const,
+        nonce: 7n,
+      },
+    };
+
+    expect(await wrapped.signTypedData(typedData as never)).toBe(
+      await raw.signTypedData(typedData as never),
+    );
+  });
+
+  it("signMessage: identical bytes through the wrapper", async () => {
+    const signer = EnvSecp256k1Signer.fromHex(FIXED_SECP256K1_HEX);
+    const wrapped = await viemAccountFor(signer);
+    const raw = privateKeyToAccount(FIXED_SECP256K1_HEX);
+    const message = { raw: `0x${"ab".repeat(32)}` } as const;
+
+    expect(await wrapped.signMessage({ message })).toBe(await raw.signMessage({ message }));
+  });
+
+  it("signTransaction: identical bytes through the wrapper", async () => {
+    const signer = EnvSecp256k1Signer.fromHex(FIXED_SECP256K1_HEX);
+    const wrapped = await viemAccountFor(signer);
+    const raw = privateKeyToAccount(FIXED_SECP256K1_HEX);
+    const tx = {
+      to: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582" as const,
+      value: 1n,
+      nonce: 3,
+      gas: 21000n,
+      maxFeePerGas: 30000000000n,
+      maxPriorityFeePerGas: 1000000000n,
+      chainId: 80002,
+      type: "eip1559" as const,
+    };
+
+    expect(await wrapped.signTransaction(tx as never)).toBe(await raw.signTransaction(tx as never));
+  });
+
+  it("the wrapper exposes the same address, and no key material", async () => {
+    const signer = EnvSecp256k1Signer.fromHex(FIXED_SECP256K1_HEX);
+    const wrapped = await viemAccountFor(signer);
+    expect(wrapped.address).toBe(privateKeyToAccount(FIXED_SECP256K1_HEX).address);
+    expect(JSON.stringify(wrapped)).not.toContain(FIXED_SECP256K1_HEX.slice(2));
   });
 });

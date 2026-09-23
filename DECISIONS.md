@@ -6525,6 +6525,97 @@ later: whoever builds the EIP-1193 shim should fund the cosigner EOA first
 so the broadcast test can actually verify the change, rather than shipping
 it against a self-skipping test.
 
+### D-63 completion: the three raw-key sites the first commit left behind
+
+The first D-63 commit (`c251a93`) migrated the evidence chain and the x402
+attestation but left raw private keys at three sites, reported honestly at
+the time rather than glossed. All three are now closed, and the pass
+condition is met: **every remaining `createPrivateKey`/`privateKeyToAccount`
+hit is inside `apps/api/src/signing/` or `packages/core/src/test-support/`.**
+
+**1. The Safe cosigner path -- the one that mattered most** (§7 names this
+key as the one with no kill switch). The previous entry said protocol-kit
+"has no callback or custom-account option," which was true but not the whole
+picture, and stopping there was the mistake. Reading
+`SafeProvider.getExternalSigner()` rather than only its types showed the
+actual branch: `isPrivateKey(signer) = typeof signer === "string" &&
+!isAddress(signer)`, so passing an **address** takes a different path
+entirely -- `createWalletClient({ account: <address>, transport:
+custom(provider) })`, a client with no local key that delegates every
+signing operation to the provider over JSON-RPC. That is the seam. Two
+adapters now sit in `apps/api/src/signing/evm-account.ts`: `viemAccountFor`
+(a `toAccount` `LocalAccount` delegating the three signing ops to the
+Signer) and `eip1193ProviderFor` (answers `personal_sign`, `eth_sign`,
+`eth_signTypedData_v4`, `eth_accounts` from that account; signs
+`eth_sendTransaction` locally and relays it as `eth_sendRawTransaction`,
+since a public node cannot sign for an account it does not hold; forwards
+everything else to the RPC). `deploySafeTwoOfTwo`,
+`createOnChainSafeDeployer`, `settleTwoOfTwoTransfer` and
+`executeSafeTransaction` now take a Signer; `addressFromPrivateKey` is
+deleted.
+
+**The correctness trap here was real and worth recording.** The task
+suggested delegating `signMessage`/`signTypedData`/`signTransaction` all to
+`Signer.sign()`. That would have been wrong: `sign()` is EIP-191
+`personal_sign`, while a Safe owner signature is EIP-712 typed data. The
+result would have been well-formed signatures that the Safe contract
+rejects as `GS026` ("invalid owner provided") -- the exact failure the
+bypass test exists to catch, reintroduced by the refactor meant to be
+behavior-preserving. `EnvSecp256k1Signer` therefore exposes the three EVM
+operations as genuinely distinct methods, each delegating to the private
+account, and a test asserts byte-equality against the raw account for all
+three -- including a real EIP-712 `SafeTx` payload shaped exactly as
+protocol-kit signs one.
+
+**2. `packages/core/src/evidence-signing.ts`** -- investigated as asked
+rather than assumed: `loadEvidenceSigningKey` had **zero** production
+callers (only its own test), i.e. a leftover, not a helper EnvSigner
+depended on. Deleted. `@waysafe/core` now contains no private-key
+*decoding* at all; what remains is keypair *generation* plus public-half
+export, which `npm run keygen` needs and a Signer structurally cannot
+provide. The export/reload round-trip test moved to `env-signer.test.ts`,
+where the decoding now lives, so the property is still covered.
+
+**3. `apps/api/src/enforcement/fund-session-key.ts`** -- not dead: a live
+operational script that moves Amoy POL from the cosigner EOA to the session
+EOA (the standing testnet-gas chore D-42/D-49 reference). Migrated. The
+co-signer signs the transfer through its Signer; the session key is only
+ever the *recipient* here, so all the script needs from it is an address --
+it never signs in this file.
+
+**Deliberately still raw, and why:** the bypass test's own session-key
+signing helpers (`signWithOneOwnerOnly`, `signTwoOfTwo`) and the dashboard
+demo's `agent-runtime.ts` hold a raw *session* key. That is the agent's own
+key, which Waysafe never holds by design (D-42) -- those call sites are
+playing the agent's runtime, which is the entire premise of the bypass
+cases. `keygen.ts` generates keys, which no Signer can do. None of these is
+a path to the Waysafe co-signer key.
+
+**Verification.** 622 passed, 1 skipped, 1 pre-existing expected failure.
+The live Amoy suite runs: six of its seven cases pass **through the new
+Signer path**, and the seventh fails exactly as before on
+`InsufficientFundsError` -- cosigner balance 0.00893 POL against a
+~0.0155 POL cost at 50 gwei. That failure is itself evidence the migration
+works: the transaction was fully built and signed through the wrapped
+Account and reached `eth_sendRawTransaction`, where the *node* rejected it
+for balance, not for any signature problem. Funding that EOA is a human
+step by standing convention, not something done here unasked; the session
+EOA is holding 0.03 POL idle if it is wanted as the source.
+
+**One unrelated blocker found and fixed on the way in.** The suite was
+already red before any of this work started -- 9 failures, not the 1 left
+at `c251a93`. Cause: fixtures and tests hardcoded `expires_at:
+"2026-09-23T12:00:00.000Z"`, which lapsed at noon UTC today, so every
+mandate built from them was `EXPIRED` and every authorization `DENY`d. A
+latent time bomb, unrelated to signing, that would have been misread as a
+D-63 regression. Bumped to a `2099-01-01` sentinel in all 14 places.
+**Worth flagging rather than burying:** two of those are recorded compiler
+fixtures whose own assumption text still says "expire in 30 days," so that
+recording's value and its prose no longer agree. Bumping a date was the
+minimal unblock; the durable fix (re-record, or have the fixture replay
+rebase a relative expiry onto `now`) is a product call, not one to make
+inside a signing refactor.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

@@ -68,6 +68,6 @@ process memory, and an attacker with code execution in the process reaches
 it exactly as before. What it buys is that a KMS-backed signer becomes a new
 class plus config rather than a rewrite of every signing call site. See
 [`docs/THREAT-MODEL.md` §5](docs/THREAT-MODEL.md#5-where-the-private-keys-actually-live-envsigner)
-for exactly what that does and doesn't mean for each key in the system,
-including the one path (the on-chain Safe cosigner) that does not yet sign
-through the interface at all.
+for exactly what that does and doesn't mean for each key in the system. All
+three keys — including the on-chain Safe cosigner — now sign through the
+interface; `@waysafe/core` no longer decodes a private key at all.

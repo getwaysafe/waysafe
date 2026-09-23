@@ -50,7 +50,7 @@
  */
 
 import { generateKeyPairSync } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { generateEvidenceSigningKeyPair, toMinorUnits, Decision } from "@waysafe/core";
 import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { createStaticDirectory, parsePolicy, POLICY_SCHEMA_VERSION, type Policy } from "@waysafe/core";
@@ -71,7 +71,6 @@ import {
 } from "./x402.js";
 import {
   AMOY_USDC_ADDRESS,
-  addressFromPrivateKey,
   attachForgedSignature,
   buildUsdcTransfer,
   createAmoyPublicClient,
@@ -81,6 +80,7 @@ import {
   signWithOneOwnerOnly,
   simulateExecTransaction,
 } from "./x402-safe.js";
+import { EnvSecp256k1Signer } from "../signing/env-signer.js";
 import { requireX402LiveOrExplainSkip } from "./test-support/x402-gate.js";
 
 const LIVE_PAYER_ACCOUNT_REACHABLE = probeX402SafeAccount();
@@ -275,8 +275,19 @@ describe.skipIf(!LIVE_PAYER_ACCOUNT_REACHABLE)(
     const safeAddress = process.env.WAYSAFE_X402_LIVE_PAYER_ACCOUNT! as Address;
     const cosignerPrivateKey = process.env.WAYSAFE_SAFE_COSIGNER_KEY! as Hex;
     const sessionKeyPrivateKey = process.env.WAYSAFE_X402_TEST_SESSION_KEY! as Hex;
-    const cosignerAddress = addressFromPrivateKey(cosignerPrivateKey);
-    const sessionKeyAddress = addressFromPrivateKey(sessionKeyPrivateKey);
+    // D-63: the co-signer now goes through a Signer. The session key stays
+    // a raw key here on purpose -- this block plays the *agent's* runtime,
+    // which holds its own key by design (D-42); that is the whole premise
+    // of the bypass cases below.
+    const cosignerSigner = EnvSecp256k1Signer.fromHex(cosignerPrivateKey);
+    // Resolved in beforeAll rather than inline: address() is async (a KMS
+    // signer would be a network call), and a describe callback is not.
+    let cosignerAddress: Address;
+    let sessionKeyAddress: Address;
+    beforeAll(async () => {
+      cosignerAddress = await cosignerSigner.address();
+      sessionKeyAddress = await EnvSecp256k1Signer.fromHex(sessionKeyPrivateKey).address();
+    });
 
     // Small and constant so repeated runs against the same funded Safe
     // don't need re-funding between them -- 0.1 test USDC per genuine
@@ -307,7 +318,7 @@ describe.skipIf(!LIVE_PAYER_ACCOUNT_REACHABLE)(
         cosignerPrivateKey,
         transaction: transfer,
       });
-      const txHash = await executeSafeTransaction({ rpcUrl, safeAddress, executorPrivateKey: cosignerPrivateKey, safeTransaction: fullySigned });
+      const txHash = await executeSafeTransaction({ rpcUrl, safeAddress, executor: cosignerSigner, safeTransaction: fullySigned });
       const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
       expect(receipt.status).toBe("success");
 

@@ -37,7 +37,7 @@ function policyFrom(): Policy {
     cumulative_limits: [],
     step_up: { ttl_seconds: 900 },
     accounting: {},
-    expires_at: "2026-09-23T12:00:00.000Z",
+    expires_at: "2099-01-01T00:00:00.000Z",
   });
   if (!result.ok) throw new Error(JSON.stringify(result.issues));
   return result.policy;
@@ -175,7 +175,7 @@ describe("handleStripeWebhook: issuing_authorization.updated (D-35 capture)", ()
       cumulative_limits: [],
       step_up: { ttl_seconds: 900 },
       accounting: {},
-      expires_at: "2026-09-23T12:00:00.000Z",
+      expires_at: "2099-01-01T00:00:00.000Z",
     });
     if (!result.ok) throw new Error(JSON.stringify(result.issues));
     return result.policy;

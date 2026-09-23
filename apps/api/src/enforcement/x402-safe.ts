@@ -47,7 +47,8 @@ import {
   type Hex,
   type PublicClient,
 } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { generatePrivateKey } from "viem/accounts";
+import { eip1193ProviderFor, viemAccountFor, type EvmSigner } from "../signing/evm-account.js";
 import { polygonAmoy } from "viem/chains";
 // `@safe-global/protocol-kit`'s shipped type declarations resolve as a CJS
 // module under this project's NodeNext moduleResolution, so a plain
@@ -260,20 +261,22 @@ export interface SafeDeploymentResult {
  * Deploys the 2-of-2 Safe for one mandate's x402 instrument. Idempotent:
  * if a Safe already sits at the predicted CREATE2 address (this function
  * was already run for these exact owners), it returns that address
- * without sending a second transaction. `deployerPrivateKey` pays gas --
- * either owner can be the deployer; nothing about Safe deployment requires
- * it to be a particular one.
+ * without sending a second transaction. `deployer` pays gas -- either
+ * owner can be the deployer; nothing about Safe deployment requires it to
+ * be a particular one. Takes a `Signer` rather than a raw key (D-63): the
+ * key never reaches viem or protocol-kit, only signatures do.
  */
 export async function deploySafeTwoOfTwo(params: {
   rpcUrl: string;
-  deployerPrivateKey: Hex;
+  deployer: EvmSigner;
   owners: SafeOwners;
 }): Promise<SafeDeploymentResult> {
   await assertAmoyChainId(params.rpcUrl);
 
+  const account = await viemAccountFor(params.deployer);
   const protocolKit = await Safe.init({
-    provider: params.rpcUrl,
-    signer: params.deployerPrivateKey,
+    provider: eip1193ProviderFor(params.rpcUrl, account),
+    signer: account.address,
     predictedSafe: { safeAccountConfig: safeAccountConfig(params.owners) },
   });
   const safeAddress = (await protocolKit.getAddress()) as Address;
@@ -283,7 +286,6 @@ export async function deploySafeTwoOfTwo(params: {
   }
 
   const deploymentTransaction = await protocolKit.createSafeDeploymentTransaction();
-  const account = privateKeyToAccount(params.deployerPrivateKey);
   const walletClient = createWalletClient({ account, chain: polygonAmoy, transport: http(params.rpcUrl) });
   const publicClient = createPublicClient({ chain: polygonAmoy, transport: http(params.rpcUrl) });
 
@@ -317,14 +319,14 @@ export async function deploySafeTwoOfTwo(params: {
  * shape, the same injectable-dependency pattern `X402Fetcher` already uses
  * for the same reason: the offline test suite substitutes a fake here,
  * never a real RPC call. */
-export function createOnChainSafeDeployer(params: { rpcUrl: string; cosignerPrivateKey: Hex }): {
+export function createOnChainSafeDeployer(params: { rpcUrl: string; cosigner: EvmSigner }): {
   deploySafe(owners: SafeOwners): Promise<{ safeAddress: string }>;
 } {
   return {
     async deploySafe(owners: SafeOwners) {
       const deployment = await deploySafeTwoOfTwo({
         rpcUrl: params.rpcUrl,
-        deployerPrivateKey: params.cosignerPrivateKey,
+        deployer: params.cosigner,
         owners,
       });
       return { safeAddress: deployment.safeAddress };
@@ -389,7 +391,7 @@ export function createReuseSafeDeployer(safeAddress: Address): {
 export async function settleTwoOfTwoTransfer(params: {
   rpcUrl: string;
   safeAddress: Address;
-  cosignerPrivateKey: Hex;
+  cosigner: EvmSigner;
   payTo: Address;
   amountAtomic: bigint;
   nonce: number;
@@ -398,9 +400,10 @@ export async function settleTwoOfTwoTransfer(params: {
   await assertAmoyChainId(params.rpcUrl);
 
   const transfer = buildUsdcTransfer(params.payTo, params.amountAtomic);
+  const cosignerAccount = await viemAccountFor(params.cosigner);
   const kit = await Safe.init({
-    provider: params.rpcUrl,
-    signer: params.cosignerPrivateKey,
+    provider: eip1193ProviderFor(params.rpcUrl, cosignerAccount),
+    signer: cosignerAccount.address,
     safeAddress: params.safeAddress,
   });
   const safeTransaction = await kit.createTransaction({
@@ -415,7 +418,7 @@ export async function settleTwoOfTwoTransfer(params: {
   return executeSafeTransaction({
     rpcUrl: params.rpcUrl,
     safeAddress: params.safeAddress,
-    executorPrivateKey: params.cosignerPrivateKey,
+    executor: params.cosigner,
     safeTransaction: cosigned,
   });
 }
@@ -495,21 +498,22 @@ export function attachForgedSignature(
   return safeTransaction;
 }
 
-/** Actually broadcasts a fully-signed Safe transaction. `executorPrivateKey`
- * pays gas -- must be a real owner key (Safe requires the caller to be an
- * owner or hold a valid signature set; either owner can execute once the
- * signature threshold is met). */
+/** Actually broadcasts a fully-signed Safe transaction. `executor` pays gas
+ * -- must be a real owner (Safe requires the caller to be an owner or hold
+ * a valid signature set; either owner can execute once the signature
+ * threshold is met). Takes a `Signer`, never a raw key (D-63). */
 export async function executeSafeTransaction(params: {
   rpcUrl: string;
   safeAddress: Address;
-  executorPrivateKey: Hex;
+  executor: EvmSigner;
   safeTransaction: SafeTransaction;
 }): Promise<Hex> {
   await assertAmoyChainId(params.rpcUrl);
 
+  const executorAccount = await viemAccountFor(params.executor);
   const kit = await Safe.init({
-    provider: params.rpcUrl,
-    signer: params.executorPrivateKey,
+    provider: eip1193ProviderFor(params.rpcUrl, executorAccount),
+    signer: executorAccount.address,
     safeAddress: params.safeAddress,
   });
 
@@ -520,9 +524,8 @@ export async function executeSafeTransaction(params: {
   // this file's own `simulateExecTransaction` builds, rather than letting
   // protocol-kit's default estimation risk an on-chain revert.
   const publicClient = createPublicClient({ chain: polygonAmoy, transport: http(params.rpcUrl) });
-  const executor = privateKeyToAccount(params.executorPrivateKey);
   const estimated = await publicClient.estimateContractGas({
-    account: executor.address,
+    account: executorAccount.address,
     address: params.safeAddress,
     abi: SAFE_EXEC_TRANSACTION_ABI,
     functionName: "execTransaction",
@@ -603,6 +606,6 @@ export async function createAmoyPublicClient(rpcUrl: string): Promise<PublicClie
   return createPublicClient({ chain: polygonAmoy, transport: http(rpcUrl) }) as PublicClient;
 }
 
-export function addressFromPrivateKey(privateKey: Hex): Address {
-  return privateKeyToAccount(privateKey).address;
-}
+/** D-63: address derivation now goes through the Signer
+ * (`EnvSecp256k1Signer.address()`); there is no longer a helper here that
+ * takes a raw private key. */

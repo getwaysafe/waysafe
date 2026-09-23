@@ -35,7 +35,7 @@ function policyFrom(overrides: Record<string, unknown>): Policy {
     },
     step_up: { ttl_seconds: 900 },
     accounting: {},
-    expires_at: "2026-09-23T12:00:00.000Z",
+    expires_at: "2099-01-01T00:00:00.000Z",
     ...overrides,
   });
   if (!result.ok) {

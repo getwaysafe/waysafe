@@ -522,8 +522,8 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (process.env.WAYSAFE_X402_REUSE_LIVE_SAFE === "1" && process.env.WAYSAFE_X402_LIVE_PAYER_ACCOUNT) {
       return createReuseSafeDeployer(process.env.WAYSAFE_X402_LIVE_PAYER_ACCOUNT as Address);
     }
-    if (x402RpcUrl && x402SafeCosignerKey) {
-      return createOnChainSafeDeployer({ rpcUrl: x402RpcUrl, cosignerPrivateKey: x402SafeCosignerKey });
+    if (x402RpcUrl && safeCosignerSigner) {
+      return createOnChainSafeDeployer({ rpcUrl: x402RpcUrl, cosigner: safeCosignerSigner });
     }
     return undefined;
   }
@@ -1093,14 +1093,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     let settlement: { tx_hash: string } | { error: string } | null = null;
     const coSignature = decision.response.co_signature;
     if (decision.response.decision === Decision.ALLOW && coSignature && body.data.session_signature) {
-      if (!x402RpcUrl || !x402SafeCosignerKey) {
+      if (!x402RpcUrl || !safeCosignerSigner) {
         settlement = { error: "x402 settlement is not configured on this server (POLYGON_AMOY_RPC_URL / WAYSAFE_SAFE_COSIGNER_KEY)." };
       } else {
         try {
           const txHash = await settleTwoOfTwoTransfer({
             rpcUrl: x402RpcUrl,
             safeAddress: instrument.external_ref as Address,
-            cosignerPrivateKey: x402SafeCosignerKey,
+            cosigner: safeCosignerSigner,
             payTo: coSignature.pay_to as Address,
             amountAtomic: BigInt(coSignature.amount_atomic),
             nonce: body.data.session_signature.nonce,

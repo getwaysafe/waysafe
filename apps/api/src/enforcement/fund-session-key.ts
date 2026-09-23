@@ -14,7 +14,8 @@
  */
 import { createPublicClient, createWalletClient, formatEther, http, parseEther } from "viem";
 import { polygonAmoy } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { EnvSecp256k1Signer } from "../signing/env-signer.js";
+import { viemAccountFor } from "../signing/evm-account.js";
 
 const rpcUrl = process.env.POLYGON_AMOY_RPC_URL;
 const cosignerKey = process.env.WAYSAFE_SAFE_COSIGNER_KEY;
@@ -27,8 +28,12 @@ if (!rpcUrl || !cosignerKey || !sessionKey) {
 
 const amount = parseEther(process.env.FUND_AMOUNT_POL ?? "0.03");
 
-const cosigner = privateKeyToAccount(cosignerKey as `0x${string}`);
-const session = privateKeyToAccount(sessionKey as `0x${string}`);
+// D-63: both keys go through a Signer. The co-signer actually signs the
+// transfer below; the session key is only ever the *recipient* here, so
+// all this needs from it is an address -- it never signs in this script.
+const cosignerSigner = EnvSecp256k1Signer.fromHex(cosignerKey);
+const cosigner = await viemAccountFor(cosignerSigner);
+const session = { address: await EnvSecp256k1Signer.fromHex(sessionKey).address() };
 
 const publicClient = createPublicClient({ chain: polygonAmoy, transport: http(rpcUrl) });
 const walletClient = createWalletClient({ account: cosigner, chain: polygonAmoy, transport: http(rpcUrl) });

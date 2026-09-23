@@ -39,12 +39,12 @@ import { erc20Abi } from "viem";
 import { generatePrivateKey } from "viem/accounts";
 import {
   AMOY_USDC_ADDRESS,
-  addressFromPrivateKey,
   assertAmoyChainId,
   createAmoyPublicClient,
   deploySafeTwoOfTwo,
   loadOrGenerateSafeCosignerKey,
 } from "./x402-safe.js";
+import { EnvSecp256k1Signer } from "../signing/env-signer.js";
 
 const ENV_PATH = fileURLToPath(new URL("../../../../.env", import.meta.url));
 
@@ -89,8 +89,8 @@ async function main() {
   }
   const sessionKey = process.env.WAYSAFE_X402_TEST_SESSION_KEY as `0x${string}`;
 
-  const cosignerAddress = addressFromPrivateKey(cosignerKey);
-  const sessionKeyAddress = addressFromPrivateKey(sessionKey);
+  const cosignerAddress = await EnvSecp256k1Signer.fromHex(cosignerKey).address();
+  const sessionKeyAddress = await EnvSecp256k1Signer.fromHex(sessionKey).address();
 
   const publicClient = await createAmoyPublicClient(rpcUrl!);
 
@@ -112,7 +112,9 @@ async function main() {
 
   const deployment = await deploySafeTwoOfTwo({
     rpcUrl: rpcUrl!,
-    deployerPrivateKey: cosignerKey,
+    // D-63: the cosigner key goes in as a Signer; the raw key never
+    // reaches viem or protocol-kit.
+    deployer: EnvSecp256k1Signer.fromHex(cosignerKey),
     owners: { sessionKeyAddress, cosignerAddress },
   });
 

@@ -25,7 +25,7 @@
 import { createHash, createPrivateKey, createPublicKey, sign, type KeyObject } from "node:crypto";
 import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { generateEvidenceSigningKeyPair, type Secp256k1Signer, type Signer } from "@waysafe/core";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 
 /** Ed25519 raw public key: the trailing 32 bytes of the SPKI DER, after its
  * fixed 12-byte header. `publicKey()` returns raw bytes by contract; the
@@ -100,12 +100,9 @@ export class EnvEd25519Signer implements Signer {
  * only one of the three with on-chain blast radius, and the only one that
  * needs an EVM address, because Safe ownership is an address.
  *
- * `signHash` is separate from the interface's `sign` for a real reason, not
- * convenience: Safe owner signatures are ECDSA over a 32-byte digest with
- * Ethereum's own recovery-id convention, which is a different operation
- * from "sign these arbitrary bytes". `sign()` implements the interface
- * contract (sign the payload as given, via viem's raw message signing);
- * `signHash()` is what the Safe path actually calls.
+ * Carries three EVM signing operations beyond the base interface's
+ * `sign()` -- see their own comment below for why collapsing them would
+ * produce invalid Safe signatures rather than merely inelegant code.
  */
 export class EnvSecp256k1Signer implements Secp256k1Signer {
   readonly algorithm = "secp256k1" as const;
@@ -133,6 +130,32 @@ export class EnvSecp256k1Signer implements Secp256k1Signer {
     return new Uint8Array(Buffer.from(signature.slice(2), "hex"));
   }
 
+  /**
+   * The three EVM signing primitives, exposed as distinct operations
+   * because they genuinely are distinct (D-63 completion). `sign()` above
+   * is EIP-191 `personal_sign`; a Safe owner signature over a
+   * `SafeTx` is EIP-712 typed data, and broadcasting needs a signed
+   * transaction envelope. Routing all three through `sign()` would produce
+   * signatures that are well-formed but **invalid** -- the Safe contract
+   * would reject them as coming from a non-owner, which is exactly the
+   * `GS026` failure mode the bypass test exists to detect.
+   *
+   * Each delegates to the private account, so the key still never leaves
+   * this class. A KMS-backed secp256k1 signer implements these three the
+   * same way against its own API; nothing outside needs to change.
+   */
+  async signMessage(...args: Parameters<PrivateKeyAccount["signMessage"]>): Promise<Hex> {
+    return this.#account.signMessage(...args);
+  }
+
+  async signTypedData(...args: Parameters<PrivateKeyAccount["signTypedData"]>): Promise<Hex> {
+    return this.#account.signTypedData(...args);
+  }
+
+  async signTransaction(...args: Parameters<PrivateKeyAccount["signTransaction"]>): Promise<Hex> {
+    return this.#account.signTransaction(...args);
+  }
+
   /** Raw uncompressed secp256k1 public key is not what anything here needs;
    * the address is the identity that matters on-chain, and it is a pure
    * function of the public key. Returned as bytes to satisfy the interface
@@ -141,7 +164,10 @@ export class EnvSecp256k1Signer implements Secp256k1Signer {
     return new Uint8Array(Buffer.from(this.#account.address.slice(2).toLowerCase(), "hex"));
   }
 
-  async address(): Promise<string> {
+  /** Narrowed to viem's `Address` rather than the interface's plain
+   * `string`: this is the implementation, and every EVM caller needs the
+   * narrow type. Still satisfies `Secp256k1Signer`. */
+  async address(): Promise<Address> {
     return this.#account.address;
   }
 }
