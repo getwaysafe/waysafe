@@ -79,7 +79,7 @@ real approver mandate after a rejected self-approval attempt (D-62), a typed
 SDK error, and independently verifying the signed evidence chain) are elided
 here for length — run `npm run quickstart` yourself, or read
 `examples/quickstart.ts` directly. Same commands and output as
-[waysafe.ai/docs](https://waysafe.ai/docs).
+[waysafe.ai/docs/quickstart](https://waysafe.ai/docs/quickstart).
 
 ## The nine non-negotiables
 
@@ -118,7 +118,7 @@ just unit-tested:**
 - The policy engine (`packages/core/src/engine/evaluate.ts`) — amount,
   merchant identity, category, time window, velocity, and step-up rules, all
   enforced against a proposed action. See
-  [waysafe.ai/docs](https://waysafe.ai/docs)'s Policy Schema Reference for
+  [waysafe.ai/docs/policy](https://waysafe.ai/docs/policy) for
   exactly which fields the engine enforces today versus which are
   specified-but-unbuilt or absent entirely.
 - The evidence chain — append-only, hash-chained, Ed25519-signed, with a
@@ -137,7 +137,7 @@ just unit-tested:**
   engine a second time, against a *different*, named approver mandate's own
   policy. Closes a real, previously-open gap (D-59): an agent credential
   could resolve its own step-up before this shipped. See
-  [waysafe.ai/docs](https://waysafe.ai/docs)'s Policy Schema Reference for
+  [waysafe.ai/docs/policy](https://waysafe.ai/docs/policy) for
   the full mechanics.
 
 **Not built — specified or discussed, never shipped:**
@@ -160,8 +160,9 @@ just unit-tested:**
 ## Links
 
 - [waysafe.ai](https://waysafe.ai) — the public site
-- [waysafe.ai/docs](https://waysafe.ai/docs) — SDK reference, a real
-  60-second quickstart, and the full Policy Schema Reference
+- [waysafe.ai/docs](https://waysafe.ai/docs) — the docs site: quickstart,
+  the two enforcement endpoints, SDK and REST reference, and the full
+  policy schema
 - [waysafe.ai/proof](https://waysafe.ai/proof) — one real captured run:
   signed evidence chain, Stripe Issuing decisions, and three real on-chain
   bypass rejections, with transaction hashes a third party can check

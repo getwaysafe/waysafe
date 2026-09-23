@@ -272,3 +272,88 @@ th {
     padding: 0 16px;
   }
 }
+
+/* --- Docs shell: sidebar on desktop, disclosure menu on mobile --------- */
+
+.docs-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+}
+
+.docs-aside {
+  position: sticky;
+  top: 88px;
+}
+
+.docs-sidebar {
+  border-left: 1px solid var(--hairline);
+  padding-left: 4px;
+}
+
+/* The mobile disclosure is hidden on desktop, and the sidebar on mobile. */
+.docs-menu-mobile {
+  display: none;
+}
+
+/* `.docs-main` owns its own measure, so the prose keeps the same reading
+   width it had as a single page -- the split is a reorganization, not a
+   re-layout. */
+.docs-main {
+  min-width: 0;
+}
+
+@media (max-width: 860px) {
+  .docs-shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .docs-aside {
+    position: static;
+  }
+  .docs-sidebar {
+    display: none;
+  }
+  .docs-menu-mobile {
+    display: block;
+    border-bottom: 1px solid var(--hairline);
+    padding-bottom: 12px;
+  }
+}
+
+/* Overview cards. */
+.docs-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.docs-card {
+  display: block;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 18px 20px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms ease, transform 120ms ease;
+}
+
+.docs-card:hover {
+  border-color: var(--teal-on-light);
+  transform: translateY(-1px);
+}
+
+.docs-card strong {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+}
+
+.docs-card span {
+  color: var(--slate);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}

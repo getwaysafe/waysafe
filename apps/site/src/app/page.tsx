@@ -71,7 +71,7 @@ export default function HomePage() {
             can&rsquo;t spend outside the mandate — Stripe&rsquo;s real-time authorization asks
             Waysafe before the network approves the charge, not after. That path runs the real
             engine against recorded Stripe Issuing authorization requests today; live sandbox
-            authorization is pending Stripe&rsquo;s provisioning. Hand the session key alone to a
+            authorization is pending Stripe&rsquo;s live Issuing onboarding. Hand the session key alone to a
             script with no Waysafe in it, and the transaction can&rsquo;t be signed — the
             payer&rsquo;s wallet is a genuine 2-of-2, and one key isn&rsquo;t enough. Neither script
             ever had to call Waysafe, agree with it, or even know it exists.
@@ -206,8 +206,8 @@ export default function HomePage() {
             </li>
             <li>
               Card decisions run the real engine against recorded Stripe Issuing authorization
-              requests. Live sandbox authorization is pending Stripe&rsquo;s provisioning of the
-              test-mode account.
+              requests. Live sandbox authorization is pending Stripe&rsquo;s live Issuing
+              onboarding.
             </li>
           </ul>
         </div>
