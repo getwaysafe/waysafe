@@ -20,9 +20,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   ID_PREFIX,
-  MerchantTrust,
   generateId,
-  merchantRefKey,
+  verifiedMerchantKeys,
   windowKeys,
   type Accounting,
   type ActorKind,
@@ -739,8 +738,12 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     const seen = new Set<string>();
     for (const row of rows) {
       const merchant = row.merchant as unknown as ResolvedMerchant;
-      if (merchant.trust !== MerchantTrust.VERIFIED) continue;
-      for (const ref of merchant.refs) seen.add(merchantRefKey(ref));
+      // D-69: only identifiers that themselves verified. Rows written before
+      // D-69 have refs with no `trust` field at all, so they contribute
+      // nothing here and a first-use step-up may fire once more per merchant
+      // than it strictly needed to -- the conservative direction, and not
+      // worth a backfill.
+      for (const key of verifiedMerchantKeys(merchant)) seen.add(key);
     }
     return seen;
   }

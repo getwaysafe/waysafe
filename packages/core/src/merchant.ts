@@ -23,6 +23,18 @@
  * `psp_account: "acct_realStaples"` is exactly the "Staples" attack the rest
  * of this file exists to stop, just moved to a different field. See
  * `MerchantAttestationSource` below and DECISIONS.md D-34.
+ *
+ * D-69: trust is per *identifier*, not per merchant. D-34 fixed *which* field
+ * confers trust but left one `trust` value covering every identifier in a
+ * single assertion, so trust bled sideways between them: an agent asserting
+ * `{domain: "staples.com", psp_account: "acct_attacker"}` got one VERIFIED
+ * merchant (the directory corroborated the domain) whose refs included the
+ * attacker's own PSP id, and `satisfiesAllowlist` consulted that merchant-
+ * level value rather than the trust of the identifier that actually matched.
+ * A PSP-id allowlist therefore ALLOWed an identifier nothing had verified,
+ * laundered through a sibling. Every identifier now carries its own trust,
+ * source and timestamp, and two conditions must both hold before a match can
+ * produce ALLOW -- see `satisfiesAllowlist`.
  */
 
 import { z } from "zod";
@@ -143,11 +155,47 @@ export const MerchantAssertionSchema = z.object({
 
 export type MerchantAssertion = z.infer<typeof MerchantAssertionSchema>;
 
+/**
+ * One resolved identifier, carrying *its own* trust -- D-69.
+ *
+ * Deliberately a separate type from `MerchantRef`: a `MerchantRef` is what a
+ * *policy* names (authored by a principal, no trust of its own, hashed into
+ * the frozen policy), and a `ResolvedMerchantRef` is what a *request* arrived
+ * with. Keeping them distinct means adding per-identifier trust changes no
+ * policy's shape and so no policy hash (non-negotiable #5).
+ */
+export interface ResolvedMerchantRef extends MerchantRef {
+  /**
+   * Trust in **this identifier alone**, never inherited from a sibling.
+   * Only ever VERIFIED or ASSERTED -- an identifier that could not be parsed
+   * never becomes a ref at all.
+   */
+  trust: MerchantTrust;
+  /** Who supplied this identifier (D-34). */
+  source: MerchantAttestationSource;
+  /**
+   * When this identifier was verified, ISO-8601, or `null` if it never was.
+   * A new identifier starts unverified: `trust: ASSERTED`, `verified_at: null`.
+   */
+  verified_at: string | null;
+}
+
 /** The engine's view of a merchant after resolution. */
 export interface ResolvedMerchant {
+  /**
+   * The **low-water mark** across identity refs -- VERIFIED only when every
+   * identity ref this request arrived with is itself verified (D-69).
+   *
+   * It was a high-water mark until D-69, which is what let trust bleed: one
+   * verified identifier made the whole merchant VERIFIED, siblings included.
+   * Reading this field is now safe in the conservative direction by
+   * construction, but it is a *summary* -- a decision about a specific
+   * identifier must consult that identifier's own `trust`, which is why
+   * `satisfiesAllowlist` checks both.
+   */
   trust: MerchantTrust;
   /** All identity references we could establish, strongest first. */
-  refs: MerchantRef[];
+  refs: ResolvedMerchantRef[];
   /** MCC if known, for category rules. */
   mcc?: string;
   /**
@@ -216,11 +264,18 @@ export function merchantRefKey(ref: MerchantRef): string {
   return `${ref.scheme}:${value}`;
 }
 
-export function merchantRefMatches(
+/**
+ * The resolved identifier a policy ref matches, or `undefined`.
+ *
+ * D-69: callers that decide anything need the matched identifier itself, not
+ * merely that *something* matched -- the trust that governs the decision is
+ * the matched identifier's own.
+ */
+export function findMatchingRef(
   ref: MerchantRef,
   resolved: ResolvedMerchant,
-): boolean {
-  return resolved.refs.some((candidate) => {
+): ResolvedMerchantRef | undefined {
+  return resolved.refs.find((candidate) => {
     if (candidate.scheme !== ref.scheme) return false;
     if (ref.scheme === MerchantScheme.DOMAIN) {
       return domainMatches(ref.value, candidate.value);
@@ -229,22 +284,116 @@ export function merchantRefMatches(
   });
 }
 
+export function merchantRefMatches(
+  ref: MerchantRef,
+  resolved: ResolvedMerchant,
+): boolean {
+  return findMatchingRef(ref, resolved) !== undefined;
+}
+
+/** Identity refs this request arrived with that nothing has verified (D-69). */
+export function unverifiedIdentityRefs(
+  resolved: ResolvedMerchant,
+): ResolvedMerchantRef[] {
+  return resolved.refs.filter(
+    (ref) => isIdentityScheme(ref.scheme) && ref.trust !== MerchantTrust.VERIFIED,
+  );
+}
+
+/**
+ * Every identity ref and its verdict, for a receipt -- "domain staples.com
+ * VERIFIED; psp_account acct_x UNVERIFIED" (D-69).
+ *
+ * This is what makes a laundered sibling legible on the receipt: a human
+ * resolving the step-up can see that the merchant's *domain* checked out while
+ * the account the money would actually reach did not, which reads very
+ * differently from a merchant nothing at all is known about.
+ */
+export function describeMerchantIdentifiers(resolved: ResolvedMerchant): string {
+  return resolved.refs
+    .filter((ref) => isIdentityScheme(ref.scheme))
+    .map(
+      (ref) =>
+        `${ref.scheme} ${ref.value} ${
+          ref.trust === MerchantTrust.VERIFIED ? "VERIFIED" : "UNVERIFIED"
+        }`,
+    )
+    .join("; ");
+}
+
+/**
+ * The identifiers a settled payment should be remembered under, for
+ * `step_up_on_first_use` (D-69).
+ *
+ * Verified identity refs only. Keying the seen set on *every* ref -- which is
+ * what it did before D-69 -- let an agent poison first-use detection: an
+ * unverified `psp_account` laundered through a verified domain was remembered
+ * as a merchant this mandate had transacted with, so the step-up the principal
+ * asked for on a genuinely new merchant never fired on its second appearance.
+ *
+ * A verified `domain` counts, not only the account that literally received the
+ * funds: `step_up_on_first_use` means "the first time with this merchant", and
+ * a directory-corroborated domain is that merchant's identity. The security
+ * property is that nothing *unverified* enters the set, and that holds either
+ * way.
+ */
+export function verifiedMerchantKeys(resolved: ResolvedMerchant): string[] {
+  return resolved.refs
+    .filter(
+      (ref) => isIdentityScheme(ref.scheme) && ref.trust === MerchantTrust.VERIFIED,
+    )
+    .map((ref) => merchantRefKey(ref));
+}
+
 /**
  * Does this resolved merchant satisfy an allowlist entry *with enough trust to
- * allow*? Matching on a `name` ref, or matching while the overall assertion is
- * unverified, is deliberately not enough.
+ * allow*? Matching on a `name` ref is deliberately not enough, and nor is
+ * matching an identifier that only a sibling's verification vouches for.
+ *
+ * D-69 requires **both** conditions, and each blocks a different attack:
+ *
+ *  1. The matched identifier is itself verified. Without this, an agent
+ *     asserting `{domain: "staples.com", psp_account: "acct_attacker"}`
+ *     satisfies a `psp_account` allowlist outright -- the directory verified
+ *     the domain, and the merchant-level trust that verification produced was
+ *     all the old check consulted.
+ *
+ *  2. No identity ref is unverified. Condition 1 alone still loses when the
+ *     allowlist names the *domain*: the domain genuinely verifies, but the
+ *     money is going to an `onchain_address` or `psp_account` nothing
+ *     corroborated. An unverified identifier anywhere in the assertion is an
+ *     unresolved claim about where funds land, so the ceiling is STEP_UP and a
+ *     human reads `describeMerchantIdentifiers`.
  */
 export function satisfiesAllowlist(
   allowlist: MerchantRef[],
   resolved: ResolvedMerchant,
-): { matched: boolean; verified: boolean; via?: MerchantRef } {
+): {
+  matched: boolean;
+  verified: boolean;
+  via?: MerchantRef;
+  /** The identifier that matched, with its own trust. */
+  matched_ref?: ResolvedMerchantRef;
+  /** Identity refs that blocked an otherwise-verified match (condition 2). */
+  unverified_refs: ResolvedMerchantRef[];
+} {
+  const unverified = unverifiedIdentityRefs(resolved);
   for (const ref of allowlist) {
-    if (!merchantRefMatches(ref, resolved)) continue;
+    const matchedRef = findMatchingRef(ref, resolved);
+    if (!matchedRef) continue;
     const verified =
-      resolved.trust === MerchantTrust.VERIFIED && isIdentityScheme(ref.scheme);
-    return { matched: true, verified, via: ref };
+      isIdentityScheme(ref.scheme) &&
+      matchedRef.trust === MerchantTrust.VERIFIED &&
+      unverified.length === 0;
+    return {
+      matched: true,
+      verified,
+      via: ref,
+      matched_ref: matchedRef,
+      unverified_refs: unverified,
+    };
   }
-  return { matched: false, verified: false };
+  return { matched: false, verified: false, unverified_refs: unverified };
 }
 
 /** A denylist match needs no verification — a mere claim of a blocked merchant is disqualifying. */
@@ -282,15 +431,32 @@ export function matchesDenylist(
  *   5. Domain present but unknown -> ASSERTED
  *   6. Name only -> ASSERTED, with no identity ref at all
  *   7. Nothing usable -> UNKNOWN
+ *
+ * D-69 applies that table **per identifier** rather than once per assertion,
+ * and `ResolvedMerchant.trust` becomes the low-water mark over the identity
+ * refs rather than the high-water mark. The per-scheme rules themselves are
+ * unchanged from D-34/D-40 with one addition: a `domain` a *rail* attested is
+ * VERIFIED even without a directory hit, by exactly the reasoning that makes a
+ * rail-attested `psp_account` VERIFIED -- on x402 that host comes from a
+ * resource URL Waysafe fetched itself, not from anything the agent typed.
  */
 export function resolveMerchant(
   assertion: MerchantAssertion,
   directory: MerchantDirectory,
   source: MerchantAttestationSource,
+  now: Date = new Date(),
 ): ResolvedMerchant {
-  const refs: MerchantRef[] = [];
-  let trust: MerchantTrust = MerchantTrust.UNKNOWN;
-  let resolutionSource: ResolvedMerchant["resolution_source"] = "none";
+  const refs: ResolvedMerchantRef[] = [];
+  /**
+   * The strongest corroboration anything in this assertion got, with the same
+   * precedence D-34/D-40 already used (psp > network > onchain > directory).
+   * Deliberately still a high-water mark, unlike `trust`: it is a display and
+   * evidence field describing *how* resolution happened, and "this request's
+   * domain did hit the directory" stays worth recording even when a sibling
+   * identifier was never attested. The per-identifier truth now lives on each
+   * ref, so this field no longer has to carry a decision.
+   */
+  let verifiedSource: ResolvedMerchant["resolution_source"] | null = null;
   let mcc = assertion.mcc;
   let mccSource: ResolvedMerchant["mcc_source"] = mcc ? "assertion" : undefined;
 
@@ -299,106 +465,103 @@ export function resolveMerchant(
   // POST /v1/authorizations is exactly as untrustworthy as it asserting a
   // bare name, since it can type any string into any of these fields.
   const attestedByRail = source === MerchantAttestationSource.RAIL;
+  const verifiedAt = now.toISOString();
+
+  /** A new identifier starts unverified; `verified` is why it wouldn't. */
+  const push = (scheme: MerchantScheme, value: string, verified: boolean) => {
+    refs.push({
+      scheme,
+      value,
+      trust: verified ? MerchantTrust.VERIFIED : MerchantTrust.ASSERTED,
+      source,
+      verified_at: verified ? verifiedAt : null,
+    });
+  };
 
   if (assertion.psp_account) {
-    refs.push({
-      scheme: MerchantScheme.PSP_ACCOUNT,
-      value: assertion.psp_account,
-    });
-    if (attestedByRail) {
-      trust = MerchantTrust.VERIFIED;
-      resolutionSource = "psp";
-    } else if (trust === MerchantTrust.UNKNOWN) {
-      trust = MerchantTrust.ASSERTED;
-      resolutionSource = "assertion";
-    }
+    push(MerchantScheme.PSP_ACCOUNT, assertion.psp_account, attestedByRail);
+    if (attestedByRail) verifiedSource ??= "psp";
   }
 
   if (assertion.network_mid) {
-    refs.push({
-      scheme: MerchantScheme.NETWORK_MID,
-      value: assertion.network_mid,
-    });
+    // D-33: a network_mid is assigned by the card network/acquirer, not typed
+    // by the agent -- the same corroboration class as psp_account, per D-3's
+    // table ("network_mid — yes, acquirer-assigned", no directory caveat the
+    // way domain has one). But that reasoning only holds when the rail itself
+    // is the one asserting it (D-34) -- an agent typing the same string
+    // proves nothing.
+    push(MerchantScheme.NETWORK_MID, assertion.network_mid, attestedByRail);
     if (attestedByRail) {
-      // D-33: a network_mid is assigned by the card network/acquirer, not
-      // typed by the agent -- the same corroboration class as psp_account,
-      // per D-3's table ("network_mid — yes, acquirer-assigned", no directory
-      // caveat the way domain has one). But that reasoning only holds when
-      // the rail itself is the one asserting it (D-34) -- an agent typing
-      // the same string proves nothing.
-      if (trust !== MerchantTrust.VERIFIED) {
-        trust = MerchantTrust.VERIFIED;
-        resolutionSource = "network";
-      }
-      if (mcc && mccSource === "assertion") {
-        mccSource = "network";
-      }
-    } else if (trust === MerchantTrust.UNKNOWN) {
-      trust = MerchantTrust.ASSERTED;
-      resolutionSource = "assertion";
+      verifiedSource ??= "network";
+      if (mcc && mccSource === "assertion") mccSource = "network";
     }
   }
 
   if (assertion.onchain_address) {
-    refs.push({
-      scheme: MerchantScheme.ONCHAIN_ADDRESS,
-      value: assertion.onchain_address,
-    });
-    if (attestedByRail) {
-      // D-40: the same corroboration class as psp_account/network_mid --
-      // the payee address a rail's own callback reports is where the money
-      // actually settles, not something the party requesting the payment
-      // could fabricate. Only holds when the rail itself is the source
-      // (D-34); an agent typing the same address proves nothing.
-      if (trust !== MerchantTrust.VERIFIED) {
-        trust = MerchantTrust.VERIFIED;
-        resolutionSource = "onchain";
-      }
-    } else if (trust === MerchantTrust.UNKNOWN) {
-      trust = MerchantTrust.ASSERTED;
-      resolutionSource = "assertion";
-    }
+    // D-40: the same corroboration class as psp_account/network_mid -- the
+    // payee address a rail's own callback reports is where the money actually
+    // settles, not something the party requesting the payment could
+    // fabricate. Only holds when the rail itself is the source (D-34); an
+    // agent typing the same address proves nothing.
+    push(MerchantScheme.ONCHAIN_ADDRESS, assertion.onchain_address, attestedByRail);
+    if (attestedByRail) verifiedSource ??= "onchain";
   }
 
   const domain = assertion.domain ? normalizeDomain(assertion.domain) : null;
   if (domain) {
-    refs.push({ scheme: MerchantScheme.DOMAIN, value: domain });
     const entry = directory.lookupDomain(domain);
+    // A directory hit is unaffected by attestation source: the corroboration
+    // is Waysafe's own directory recognizing this domain, not a claim about
+    // who supplied the string. A rail-attested host verifies for the D-34
+    // reason instead -- the rail, not the agent, is where the value came from.
+    push(MerchantScheme.DOMAIN, domain, entry !== undefined || attestedByRail);
     if (entry) {
-      // Unaffected by attestation source: the corroboration is Waysafe's own
-      // directory recognizing this domain, not a claim about who supplied it.
-      if (trust !== MerchantTrust.VERIFIED) {
-        trust = MerchantTrust.VERIFIED;
-        resolutionSource = "directory";
-      }
+      verifiedSource ??= "directory";
       if (!mcc && entry.mcc) {
         mcc = entry.mcc;
         mccSource = "directory";
       }
-    } else if (trust === MerchantTrust.UNKNOWN) {
-      trust = MerchantTrust.ASSERTED;
-      resolutionSource = "assertion";
     }
   }
 
   if (assertion.name) {
-    refs.push({ scheme: MerchantScheme.NAME, value: assertion.name });
-    if (trust === MerchantTrust.UNKNOWN) {
-      trust = MerchantTrust.ASSERTED;
-      resolutionSource = "assertion";
-    }
+    // Never an identity scheme, so never verified and never allowlistable --
+    // non-negotiable #3's original case.
+    push(MerchantScheme.NAME, assertion.name, false);
   }
 
-  if (mcc) refs.push({ scheme: MerchantScheme.MCC, value: mcc });
+  if (mcc) push(MerchantScheme.MCC, mcc, false);
 
   return {
-    trust,
+    trust: summarizeTrust(refs),
     refs,
     mcc,
     mcc_source: mccSource,
     display_name: assertion.name ?? domain ?? undefined,
-    resolution_source: resolutionSource,
+    resolution_source: verifiedSource ?? (refs.length > 0 ? "assertion" : "none"),
   };
+}
+
+/**
+ * The low-water mark over identity refs -- D-69.
+ *
+ * VERIFIED only when every identity ref is verified, so no sibling's
+ * verification can speak for an identifier of its own. The UNKNOWN cases are
+ * preserved exactly as they were before D-69: nothing usable at all, or an
+ * MCC and nothing else (an MCC is a category, never an identity), both still
+ * reach `DENY_MERCHANT_UNRESOLVED`. A bare `name` still resolves to ASSERTED
+ * with no identity ref, and still caps at STEP_UP rather than denying.
+ */
+function summarizeTrust(refs: ResolvedMerchantRef[]): MerchantTrust {
+  const identifying = refs.filter((ref) => ref.scheme !== MerchantScheme.MCC);
+  if (identifying.length === 0) return MerchantTrust.UNKNOWN;
+
+  const identity = identifying.filter((ref) => isIdentityScheme(ref.scheme));
+  if (identity.length === 0) return MerchantTrust.ASSERTED;
+
+  return identity.every((ref) => ref.trust === MerchantTrust.VERIFIED)
+    ? MerchantTrust.VERIFIED
+    : MerchantTrust.ASSERTED;
 }
 
 // --- Directory --------------------------------------------------------------

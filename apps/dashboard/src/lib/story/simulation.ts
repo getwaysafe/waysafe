@@ -22,6 +22,7 @@ import {
   evaluate,
   MerchantAttestationSource,
   resolveMerchant,
+  verifiedMerchantKeys,
   type MerchantAssertion,
   type Policy,
   type ProposedAction,
@@ -274,7 +275,8 @@ function toProposedAction(attempt: Attempt): ProposedAction {
 function applySpend(spend: SpendSnapshot, action: ProposedAction, merchant: ResolvedMerchant): SpendSnapshot {
   const bump = (w: SpendSnapshot["day"]) => ({ amount: w.amount + action.amount, count: w.count + 1 });
   const seenMerchants = new Set(spend.seenMerchants);
-  for (const ref of merchant.refs) seenMerchants.add(`${ref.scheme}:${ref.value.toLowerCase()}`);
+  // D-69: verified identifiers only, same rule as the real repositories.
+  for (const key of verifiedMerchantKeys(merchant)) seenMerchants.add(key);
   return {
     day: bump(spend.day),
     week: bump(spend.week),

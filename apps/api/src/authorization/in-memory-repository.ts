@@ -15,7 +15,7 @@
 import {
   ID_PREFIX,
   generateId,
-  merchantRefKey,
+  verifiedMerchantKeys,
   windowKeys,
   type Accounting,
   type AgentStatus,
@@ -750,8 +750,11 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     for (const auth of this.authorizations.values()) {
       if (auth.mandate_id !== mandateId) continue;
       if (!settled.includes(auth.status)) continue;
-      if (auth.merchant.trust !== "VERIFIED") continue;
-      for (const ref of auth.merchant.refs) seen.add(merchantRefKey(ref));
+      // D-69: only identifiers that themselves verified. See
+      // `verifiedMerchantKeys` -- keying on every ref let an unverified
+      // identifier ride in on a verified sibling and suppress a later
+      // `step_up_on_first_use`.
+      for (const key of verifiedMerchantKeys(auth.merchant)) seen.add(key);
     }
     return seen;
   }

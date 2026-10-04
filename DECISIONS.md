@@ -6973,6 +6973,177 @@ is kept as a thin wrapper for the bypass test and demo route: both are
 about the *Safe's* signature logic rather than asset resolution and
 legitimately pin one known token.
 
+## D-69 — Merchant trust belongs to the identifier, not the merchant (review finding 4)
+
+**Decision:** verification status, attestation source and verification
+timestamp live on each resolved identifier, not once per merchant. A
+transaction is evaluated against the trust of the identifier it actually
+arrived with, never a sibling's. A new identifier starts unverified.
+
+Finding 4 of the adversarial review of `387958a`. D-34 had already fixed
+*which field* can confer trust; it left *one* `trust` value covering every
+identifier in a single assertion, and that value was a high-water mark. So
+trust bled sideways:
+
+```
+POST /v1/authorizations
+  merchant: { domain: "staples.com", psp_account: "acct_attacker" }
+```
+
+The directory corroborates `staples.com`, which set the merchant's single
+`trust` to VERIFIED. `satisfiesAllowlist` then read *that* value — not the
+trust of the identifier that matched — so an allowlist naming only
+`psp_account: acct_attacker` was satisfied **verified**, and the request
+ALLOWed. The agent typed the account id itself. This is exactly the attack
+non-negotiable #3 exists to stop and exactly the attack D-34 thought it had
+closed, moved one more step: not to a different field, but to a different
+identifier in the same field set.
+
+**What changed.**
+
+`ResolvedMerchantRef` is a new type — a `MerchantRef` plus `trust`, `source`
+and `verified_at`. `ResolvedMerchant.refs` is now `ResolvedMerchantRef[]`.
+`MerchantRef` itself is untouched, deliberately: a `MerchantRef` is what a
+*policy* names, so leaving its shape alone means no policy's hash changes
+(non-negotiable #5).
+
+`ResolvedMerchant.trust` survives but inverts: it is now the **low-water
+mark** over identity refs — VERIFIED only when every identity ref the
+request arrived with is itself verified. The dangerous reading of that field
+no longer exists, which matters more than deprecating it would: any future
+caller that reaches for `.trust` gets the conservative answer by
+construction. Its UNKNOWN cases are preserved exactly (nothing usable at
+all, or an MCC and nothing else), so `DENY_MERCHANT_UNRESOLVED` fires where
+it always did, and a bare `name` still resolves ASSERTED rather than
+denying.
+
+`satisfiesAllowlist` now requires **two** conditions, because each closes a
+different attack and neither closes the other:
+
+1. *The matched identifier is itself verified.* Closes the case above, and
+   its `network_mid` and `onchain_address` variants.
+2. *No identity ref is unverified.* Condition 1 alone still loses when the
+   allowlist names the **domain**: the domain genuinely verifies, and the
+   money goes to a `psp_account` or `onchain_address` nothing corroborated.
+   An unverified identifier anywhere in an assertion is an unresolved claim
+   about where funds land, so the ceiling is STEP_UP.
+
+`resolution_source` stays a high-water mark on purpose. It is a description
+of *how resolution happened* for the evidence record, not a decision input,
+and "this request's domain did hit the directory" is worth recording even
+when a sibling was never attested. The per-identifier truth now lives on the
+refs, so that field no longer has to carry a decision.
+
+One per-scheme rule was added rather than changed: a `domain` a **rail**
+attested is VERIFIED without a directory hit, by the same D-34 reasoning
+that verifies a rail-attested `psp_account`. Without it, per-identifier
+trust would have broken the real x402 path, whose `domain` is the host of a
+resource URL Waysafe fetched itself — see the rail analysis below.
+
+**No new reason code.** `STEP_UP_MERCHANT_UNVERIFIED` already *is* this
+condition, and the review's own acceptance criterion for the attack is that
+it yields that code instead of ALLOW. A second code for the same condition
+would split a public surface (#7) for nothing. The proposed
+`DENY_MERCHANT_IDENTIFIER_UNVERIFIED` was not added.
+
+**The receipt names which identifier failed.** "The merchant could not be
+verified" is true both of a wholly unknown counterparty and of a real
+merchant whose domain checks out while the account the money would reach
+does not — and a human resolving the step-up has to tell those apart. The
+reason now carries `detail.identifiers` (every identity ref with its own
+trust, source and timestamp), `detail.unverified_identifiers`, and
+`detail.summary`:
+
+```
+psp_account acct_attacker_controlled UNVERIFIED; domain staples.com VERIFIED
+```
+
+The same string is interpolated into the human-readable `message`, not only
+the structured detail. A wholly unknown merchant produces
+`psp_account acct_x UNVERIFIED` with no VERIFIED clause at all, so the two
+cases are visibly different on the receipt.
+
+**First-use detection was poisoned too (case g3), fixed in the same
+commit.** `step_up_on_first_use` asked whether *any* ref had been seen
+before, and the seen set was built from *every* ref of every settled
+authorization. So an agent could ride an unverified identifier of its own
+along on a legitimate payment, register it as a merchant this mandate had
+transacted with, and have the first-use step-up suppressed on its next
+appearance — defeating a rule the principal explicitly asked for. The set is
+now built by `verifiedMerchantKeys`: verified identity refs only. Both
+repositories and `/story`'s simulation share that one implementation rather
+than each filtering for themselves.
+
+A verified `domain` counts toward the seen set, not only the account that
+literally received the funds: `step_up_on_first_use` means "the first time
+with this merchant", and a directory-corroborated domain is that merchant's
+identity. The security property — nothing unverified enters the set — holds
+either way. Authorization rows written before D-69 have refs with no `trust`
+field, so they contribute nothing and a first-use step-up may fire once more
+per merchant than it strictly needed to. That is the conservative direction
+and not worth a backfill.
+
+**What binds a merchant's domain to the identifier that actually receives
+the funds, per rail.**
+
+*Card (Stripe Issuing):* the question does not arise, because there is no
+domain. `merchantAssertionFromStripe` supplies `network_mid` and `mcc` and
+nothing else; the single identity is the acquirer-assigned MID, read from
+Stripe's own authorization payload. One rail-attested identifier, nothing to
+bind it to.
+
+*x402:* **nothing but the merchant's own 402 response.** Both identifiers
+come from Waysafe's independent fetch — D-40 already refuses payment
+requirements from a caller and accepts only a `resourceUrl` to fetch — so
+the *agent* did not forge either one. But the host serving the resource is
+what declares its own `payTo`, and nothing outside that host corroborates
+that the address belongs to whoever owns the domain. Saying this plainly, as
+the review asked: on x402, VERIFIED means "Waysafe fetched this resource and
+this host asked for this payment," not "this host is who it claims to be."
+The agent also chooses the `resourceUrl`, so an agent can point Waysafe at a
+host it controls and have both identifiers verify — consistently, as the
+attacker's own domain and the attacker's own address. That is not an
+allowlist bypass (the allowlist still has to name them, and it won't), but
+it does mean a mandate leaning on `unlisted: ALLOW` plus merchant
+verification gets materially less than it looks like. Recorded as OQ-13.
+
+**Tests.** `packages/core/src/merchant.adversarial.test.ts`, 18 cases,
+written as the attack first and passing against `37749c6` before the fix —
+per non-negotiable #3's clause that any change to merchant matching ships
+with a test proving the attack fails. Cases (a)/(b)/(b2) are the laundering
+in each identity scheme, (c) is the domain-allowlist direction that
+motivated condition 2, (d) proves an identifier now resolves identically
+with and without a verified sibling present, (d2) the rail-attested
+direction, (e) order-independence, (f)/(f2)/(f3) normalization pins that a
+fix must not break, (g1)/(g2) that `name` and `mcc` were already safe,
+(g3) the seen set, plus two end-to-end `evaluate()` cases for the receipt
+detail and the first-use proof, and two controls.
+
+Verified by negative control, per D-64's lesson: reverting the three pieces
+of the fix (the per-ref check, the sibling check, the seen-set filter) fails
+10 of the 18, and the 8 that stay green are exactly the invariance pins and
+controls. The tests detect the bug rather than agreeing with the
+implementation.
+
+**Which existing expectations encoded the bleed: none — and that is the
+uncomfortable part.** D-67 had 14 tests to correct. Here there are zero.
+Every `resolveMerchant` call in `merchant.test.ts` and
+`evaluate.test.ts` supplies exactly **one** identity scheme, so no existing
+test ever constructed the two-identifier assertion the bug required. The
+suite did not disagree with the fix because the suite had never described the
+situation. A bug that needs two fields set at once was invisible to 683
+passing tests, and `satisfiesAllowlist`'s own unit tests — which do cover
+the verified/unverified matrix carefully — covered it one identifier at a
+time. Checked mechanically rather than inferred from a green run: no
+assertion in either file mentions two identity schemes within three lines of
+a merchant literal.
+
+**Change cost if wrong:** the two conditions are three lines in one
+function, and the per-ref data is additive on a type nothing persists as a
+contract. The real cost sits in the added rule — rail-attested `domain`
+verifying without a directory hit. If that is ever wrong, the x402 domain
+allowlist path is what breaks, loudly, at STEP_UP rather than at ALLOW.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -7320,3 +7491,42 @@ but it changes what the principal signs, which is D-20's own territory and
 not a call to make inside a security-fix commit.
 
 Flagged in SECURITY.md's review section rather than left only here.
+
+## OQ-13 — On x402, "VERIFIED" means the host asked, not that the host is who it says
+
+Found while answering D-69's own question: what binds a merchant's domain to
+the identifier that actually receives the funds?
+
+On the card rail, nothing needs to — Stripe Issuing presents one
+acquirer-assigned MID and no domain at all.
+
+On x402, the answer is **nothing but the merchant's own 402 response**. The
+payee address is `requirement.payTo` and the domain is the host of the
+resource URL. Both reach Waysafe through its own independent fetch, so D-40's
+protection holds and the *agent* cannot forge either value. But the host
+serving the resource is what declares its own `payTo`, and nothing outside
+that host corroborates that the address belongs to whoever owns the domain.
+The agent also chooses which `resourceUrl` Waysafe fetches, so an agent can
+point Waysafe at a host it controls and watch both identifiers verify — as
+the attacker's own domain and the attacker's own address, consistently.
+
+This is not an allowlist bypass. The identifiers verify *as what they are*,
+and a mandate that names real merchants will not match them. D-69 closed the
+laundering attack, where an attacker's identifier borrowed a real merchant's
+verification. What remains is narrower and semantic: a mandate relying on
+`unlisted: ALLOW` plus "the merchant was verified" gets materially less
+assurance than that phrasing suggests, because on this rail verification
+attests that a payment was genuinely requested by the host Waysafe fetched,
+not that the host is the merchant the principal had in mind.
+
+**What would close it:** binding the `payTo` to the domain out of band — a
+signed `.well-known` record the domain publishes naming its payee addresses,
+or a directory that maps a domain to its known addresses the way the current
+one maps a domain to a display name. Both are real work and both need a
+source of truth this codebase does not have. Flagged here rather than
+half-built.
+
+**Needs a human answer:** should `/docs` and the threat model say outright
+that x402 merchant verification is weaker than card merchant verification?
+The honest answer is yes, and the shape of that disclosure is a product call
+rather than a code one.

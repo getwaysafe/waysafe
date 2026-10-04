@@ -43,6 +43,10 @@ export {
   satisfiesAllowlist,
   merchantRefKey,
   isIdentityScheme,
+  findMatchingRef,
+  unverifiedIdentityRefs,
+  describeMerchantIdentifiers,
+  verifiedMerchantKeys,
   createStaticDirectory,
   EMPTY_DIRECTORY,
   MerchantScheme,
@@ -53,6 +57,7 @@ export {
   type MerchantDirectory,
   type MerchantDirectoryEntry,
   type ResolvedMerchant,
+  type ResolvedMerchantRef,
 } from "./merchant.js";
 
 export { formatMoney, type Currency, type MinorUnits } from "./money.js";

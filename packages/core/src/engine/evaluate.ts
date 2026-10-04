@@ -21,12 +21,15 @@
  */
 
 import {
+  describeMerchantIdentifiers,
   isIdentityScheme,
   matchesDenylist,
-  merchantRefKey,
   satisfiesAllowlist,
+  unverifiedIdentityRefs,
+  verifiedMerchantKeys,
   MerchantTrust,
   type ResolvedMerchant,
+  type ResolvedMerchantRef,
 } from "../merchant.js";
 import { formatMoney, type Currency } from "../money.js";
 import {
@@ -227,8 +230,9 @@ function evaluateMerchant(
 
   if (allow.matched && !allow.verified) {
     // Matched an allow entry by value, but D-3: an unverified assertion can
-    // never itself produce ALLOW.
-    reasons.push(unverifiedMerchantReason());
+    // never itself produce ALLOW. D-69: "unverified" is now a statement about
+    // the identifier that matched and its siblings, not about the merchant.
+    reasons.push(unverifiedMerchantReason(merchant, allow.matched_ref));
   } else if (!allow.matched) {
     // `unlisted` is evaluated first and unconditionally -- a DENY or STEP_UP
     // it produces is never softened by anything below. See DECISIONS.md D-3
@@ -262,14 +266,18 @@ function evaluateMerchant(
     // precedence in `evaluate()` still drops it entirely from the final
     // result whenever `unlisted` already forced a DENY.
     if (merchant.trust !== MerchantTrust.VERIFIED) {
-      reasons.push(unverifiedMerchantReason());
+      reasons.push(unverifiedMerchantReason(merchant));
     }
   }
 
+  // D-69: a merchant is "seen" only under identifiers that actually verified
+  // (`verifiedMerchantKeys`). Asking whether *any* ref had been seen let an
+  // agent pre-register an unverified identifier of its own on an earlier
+  // payment and then spend against it with the first-use step-up suppressed.
   if (
     rules.step_up_on_first_use &&
     merchant.trust === MerchantTrust.VERIFIED &&
-    !merchant.refs.some((ref) => spend.seenMerchants.has(merchantRefKey(ref)))
+    !verifiedMerchantKeys(merchant).some((key) => spend.seenMerchants.has(key))
   ) {
     reasons.push({
       code: ReasonCode.STEP_UP_FIRST_TIME_MERCHANT,
@@ -281,12 +289,53 @@ function evaluateMerchant(
   return reasons;
 }
 
-function unverifiedMerchantReason(): Reason {
+/**
+ * D-69: the receipt names *which* identifier failed to verify.
+ *
+ * "The merchant identity could not be verified" is true of a wholly unknown
+ * counterparty and of a real merchant whose domain checks out while the
+ * account the money would reach does not -- and a human resolving the step-up
+ * needs to tell those apart. `identifiers` carries every identity ref with its
+ * own verdict, and `summary` is the one-line form:
+ * "domain staples.com VERIFIED; psp_account acct_x UNVERIFIED".
+ */
+function unverifiedMerchantReason(
+  merchant: ResolvedMerchant,
+  matchedRef?: ResolvedMerchantRef,
+): Reason {
+  const unverified = unverifiedIdentityRefs(merchant);
+  const summary = describeMerchantIdentifiers(merchant);
   return {
     code: ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
     message:
-      "The merchant identity was asserted but could not be verified, so human approval is required.",
+      unverified.length > 0
+        ? `The merchant identity could not be verified (${summary}), so human approval is required.`
+        : "The merchant identity was asserted but could not be verified, so human approval is required.",
     policy_path: "/merchants",
+    detail: {
+      identifiers: merchant.refs
+        .filter((ref) => isIdentityScheme(ref.scheme))
+        .map((ref) => ({
+          scheme: ref.scheme,
+          value: ref.value,
+          trust: ref.trust,
+          source: ref.source,
+          verified_at: ref.verified_at,
+        })),
+      unverified_identifiers: unverified.map(
+        (ref) => `${ref.scheme}:${ref.value}`,
+      ),
+      summary,
+      ...(matchedRef
+        ? {
+            matched_identifier: {
+              scheme: matchedRef.scheme,
+              value: matchedRef.value,
+              trust: matchedRef.trust,
+            },
+          }
+        : {}),
+    },
   };
 }
 
