@@ -210,6 +210,16 @@ interface AuthContext {
 }
 
 declare module "fastify" {
+  interface FastifyInstance {
+    /** Every route's full URL, collected at registration (D-64). Exists so
+     * `server.adversarial.test.ts` can enumerate the real route table and
+     * assert each route is either agent-accessible by name or rejects an
+     * agent credential -- a new route cannot land permissive unnoticed.
+     * `printRoutes()` is unusable for this: it emits a *tree* of relative
+     * fragments ("/compile", "/:id/keys"), not full paths, so a guard built
+     * on it probes nonsense URLs and passes vacuously. */
+    registeredRoutes: Set<string>;
+  }
   interface FastifyRequest {
     auth?: AuthContext;
     /** Populated for every request by a content-type parser override, so
@@ -239,6 +249,52 @@ const PUBLIC_ROUTES = new Set([
   "/v1/webhooks/stripe",
   "/v1/enforcement/stripe-issuing",
   "/v1/evidence/public-key",
+]);
+
+/**
+ * D-64: the routes an **agent credential** may call. Everything else
+ * requires an org-level credential (`agentId: null`).
+ *
+ * This list is deliberately an allowlist, not a denylist. The adversarial
+ * review of 387958a found `POST /v1/agents/:id/keys` open to any
+ * credential, and the remediation audit found four more routes with the
+ * same shape -- every one of them a route nobody had thought to restrict,
+ * rather than one anybody had decided to leave open. A denylist reproduces
+ * that failure by construction: the next route added is permissive until
+ * someone remembers it. Inverted, a new route is org-only until someone
+ * argues otherwise in this list, with a reason. Same rule as the policy
+ * schema's own (non-negotiable #8, and D-61's "absence never widens
+ * scope"), applied to routing.
+ *
+ * `server.adversarial.test.ts` enumerates every registered route and
+ * asserts each one is either named here or rejects an agent credential, so
+ * this cannot silently drift.
+ */
+const AGENT_ACCESSIBLE_ROUTES = new Set([
+  // The preflight itself (D-18): an agent asking whether it may act is the
+  // one thing an agent credential exists for.
+  "/v1/authorizations",
+  // Its own receipt. Org-scoped in the handler; an agent reading a decision
+  // it caused is ordinary.
+  "/v1/authorizations/:id",
+  // Executing a decision the engine already ALLOWed. `asExecutable` makes a
+  // DENIED or still-pending authorization unexecutable by construction, so
+  // this cannot widen what the policy decided.
+  "/v1/authorizations/:id/execute",
+  // D-62: a step-up is resolved by an *approver mandate*, which acts with
+  // its own ordinary agent credential. Rules 1 and 2 inside the handler are
+  // what bound this -- not the credential tier.
+  "/v1/authorizations/:id/step-up",
+  // D-40/D-42: the caller here is the agent's own runtime presenting its
+  // own credential; Waysafe independently fetches the payment requirements
+  // rather than trusting anything in the request body.
+  "/v1/enforcement/x402",
+  // An agent reading the authority it is bound to -- it needs to know its
+  // own limits. Narrowed in the handler to mandates this agent is actually
+  // bound to (D-64): before that, any credential could read any mandate in
+  // the organization, which is how the review's attack discovered its
+  // approver's agent id.
+  "/v1/mandates/:id",
 ]);
 
 function zodIssues(error: z.ZodError) {
@@ -529,19 +585,35 @@ export function buildServer(options: BuildServerOptions = {}) {
   }
 
   /**
-   * Phase 4 auth rule: every route except /health and /v1/reason-codes
-   * requires a Bearer credential -- an agent API key or an org credential
-   * (same table, same verification; D-18's agent-keys module, broadened).
-   * No credential at all is a 401 here, at the HTTP layer, before any
-   * handler runs. An authenticated credential that turns out not to be the
-   * *right* one for what it's trying to do (an agent key that doesn't match
-   * the claimed agent, an org credential presented to POST
-   * /v1/authorizations) is deliberately NOT rejected here -- it falls
-   * through to authorize()'s own key check, which turns it into a recorded
+   * Phase 4 auth rule: every route except the public ones requires a Bearer
+   * credential -- an agent API key or an org credential (same table, same
+   * verification; D-18's agent-keys module, broadened). No credential at all
+   * is a 401 here, at the HTTP layer, before any handler runs. An
+   * authenticated credential that turns out not to be the *right* one for
+   * what it's trying to do (an agent key that doesn't match the claimed
+   * agent) is deliberately NOT rejected here -- it falls through to
+   * authorize()'s own key check, which turns it into a recorded
    * DENY_AGENT_NOT_BOUND decision, per D-18. The distinction the rule draws
    * is "no credential" (401, nothing recorded) vs "a credential, just not
    * the one that authorizes this" (a decision, recorded like any other).
+   *
+   * D-64 adds the credential *tier* check: an agent credential may only
+   * call `AGENT_ACCESSIBLE_ROUTES`. Everything else -- creating agents,
+   * principals, mandates, minting or revoking keys, every dashboard read --
+   * is administrative and needs an org credential. This is a 403 rather
+   * than a recorded decision: it is not a question about an agent's
+   * authority to spend, which is what a DENY records, but about whether the
+   * caller may use this API surface at all.
    */
+  // D-64: the real route table, for the structural guard in
+  // server.adversarial.test.ts. `onRoute` fires once per registration with
+  // the full, absolute url -- unlike printRoutes(), which emits a tree.
+  const registeredRoutes = new Set<string>();
+  app.addHook("onRoute", (route) => {
+    registeredRoutes.add(route.url);
+  });
+  app.decorate("registeredRoutes", registeredRoutes);
+
   app.addHook("preHandler", async (request, reply) => {
     const routePath = request.routeOptions?.url ?? request.url.split("?")[0];
     if (PUBLIC_ROUTES.has(routePath ?? "")) return;
@@ -568,6 +640,18 @@ export function buildServer(options: BuildServerOptions = {}) {
       agentId: verification.agentId,
       apiKey: token,
     };
+
+    // D-64: default-deny by credential tier. An org credential
+    // (`agentId: null`) may call anything; an agent credential may call
+    // only what AGENT_ACCESSIBLE_ROUTES names.
+    if (verification.agentId !== null && !AGENT_ACCESSIBLE_ROUTES.has(routePath ?? "")) {
+      return reply.code(403).send({
+        error: "org_credential_required",
+        message:
+          "This route is administrative and requires an org-level credential. " +
+          "An agent credential cannot create or modify agents, principals, mandates, or API keys.",
+      });
+    }
   });
 
   app.get("/health", async () => ({
@@ -1150,10 +1234,15 @@ export function buildServer(options: BuildServerOptions = {}) {
   /** OQ-9: the route an external developer needs to complete an
    * integration -- without it there is no way to get a `principal_id`
    * that `POST /v1/mandates` will accept, other than seeding the row by
-   * hand against Postgres directly. Same auth rule as every other route
-   * here: any valid credential for this organization, agent key or org
-   * credential alike (D-18) -- creating a principal isn't an agent-scoped
-   * action, so nothing about D-18's agentId binding applies. */
+   * hand against Postgres directly.
+   *
+   * **Org credential only (D-65).** This route previously accepted any
+   * credential, on the stated grounds that "creating a principal isn't an
+   * agent-scoped action, so nothing about D-18's agentId binding applies."
+   * That reasoning is reversed: a principal is the root of all delegated
+   * authority here, which makes creating one the most administrative act in
+   * this API, not an exempt one. Enforced by the tier check in the
+   * preHandler, not here. */
   app.post("/v1/principals", async (request, reply) => {
     const body = CreatePrincipalBodySchema.safeParse(request.body);
     if (!body.success) {
@@ -1227,6 +1316,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     const { id } = request.params as { id: string };
     const mandate = await repos.authorization.getMandateDetail(id);
     if (!mandate || mandate.organizationId !== request.auth!.organizationId) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    // D-64: an agent credential reads only mandates it is actually bound
+    // to. Org-scoping alone was not enough: the review's attack read its
+    // *approver's* mandate with its own spending key to discover which
+    // agent to mint a credential for. 404, not 403 -- an agent has no
+    // business learning that a mandate it cannot use exists.
+    const callerAgentId = request.auth!.agentId;
+    if (callerAgentId !== null && !mandate.agentIds.includes(callerAgentId)) {
       return reply.code(404).send({ error: "not_found" });
     }
     return reply.send(toMandateDetailJSON(mandate));

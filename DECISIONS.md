@@ -6616,6 +6616,105 @@ minimal unblock; the durable fix (re-record, or have the fixture replay
 rebase a relative expiry onto `now`) is a product call, not one to make
 inside a signing refactor.
 
+## D-64 — Route authorization is default-deny by credential tier (adversarial review, finding 1)
+
+An independent adversarial review of `387958a` found
+`POST /v1/agents/:id/keys` accepted **any** authenticated credential and
+never checked that the target agent had anything to do with the caller.
+That is not a key-minting bug; it is a privilege-escalation chain that
+reopens D-59, which D-62 had closed:
+
+1. A spending agent gets a `STEP_UP` it may not resolve itself.
+2. It reads its own mandate -- legitimate -- and learns the id of the
+   mandate allowed to approve for it, from its own `escalation.approvers`.
+3. It reads *that* mandate and learns which agent is bound to it.
+4. It mints a fresh API key for that agent, using only its own key.
+5. It resolves its own step-up through the manufactured credential.
+
+D-62's rule 1 never fires, because the acting mandate genuinely *is* a
+different one. Nothing was stolen; a second authority was **manufactured**.
+Written as a test first (`server.adversarial.test.ts`), confirmed to pass
+end to end against `387958a` -- including the final `EXECUTED` -- before
+any fix was written.
+
+**The fix is a design inversion, not a check.** The obvious patch is "require
+an org credential on the administrative routes," which is allow-by-default:
+the next route someone adds is open until a human remembers it. That is the
+same failure mode that produced this finding, since every one of the routes
+involved was permissive by omission, not by decision. So the rule is
+inverted: `AGENT_ACCESSIBLE_ROUTES` names the routes an agent credential may
+reach -- authorize, read its own receipt, execute, resolve a step-up (D-62
+approvers act with ordinary agent credentials), x402 enforcement, and read
+its own mandate -- each with a comment saying why. Everything else is
+org-credential-only, and a route added tomorrow is org-only until someone
+argues otherwise in that list. Same rule as the policy schema's own
+(non-negotiable #8, D-61's "absence never widens scope"), applied to
+routing. The refusal is `403 org_credential_required`, not a recorded DENY:
+it is not a question about an agent's authority to spend, which is what a
+DENY records, but about whether the caller may use this surface at all.
+
+**A structural guard, and a real one.** `server.adversarial.test.ts`
+enumerates the live route table and asserts every route is either named in
+the allowlist or rejects an agent credential. The first version used
+`app.printRoutes()` and was **worthless**: that method emits a *tree* of
+relative fragments (`/compile`, `/:id/keys`), not absolute paths, so the
+guard probed URLs that do not exist and passed while proving nothing --
+caught by deliberately widening the allowlist and finding the guard still
+green. Replaced with an `onRoute` hook in `buildServer` that records each
+route's full url as it registers. Re-ran the same negative control: the
+guard now fails with `POST /v1/agents/:id/keys -> 400`, naming the route.
+
+**Also narrowed: `GET /v1/mandates/:id`.** Org-scoping alone was not enough
+-- step 3 above read the *approver's* mandate with a spending key. An agent
+credential now reads only mandates it is actually bound to; `404`, not
+`403`, since an agent has no business learning that a mandate it cannot use
+exists. An org credential still reads any mandate in its organization, so
+the dashboard is unaffected.
+
+**Change cost if wrong:** moderate, and the failure direction is safe. An
+over-restrictive allowlist breaks a legitimate agent integration loudly, at
+a `403` with a specific error code, rather than silently permitting
+something. One existing test asserted a minted key "works as a credential
+for any route" -- precisely the behavior removed here -- and was updated to
+assert the new rule in both directions (accepted on an agent route, `403`
+on an administrative one) rather than deleted.
+
+## D-65 — Four more routes with the same shape, found by the remediation audit
+
+Not from the external review: found by auditing every route that creates or
+modifies a credential, an agent, a principal, or org membership, after
+fixing D-64. The review found one route; this audit found four more, and one
+of them is worse than the finding itself.
+
+| Route | Was | Consequence |
+|---|---|---|
+| `POST /v1/mandates` | any credential | **an agent grants itself a brand-new mandate, with any limits it chooses** |
+| `POST /v1/agents` | any credential | an agent creates agents |
+| `POST /v1/principals` | any credential | an agent creates principals |
+| `DELETE /v1/agents/:id/keys/:keyId` | any credential | an agent revokes its own approver's key -- denial of service against the approval path |
+
+All four are closed by D-64's inversion; they needed no separate mechanism,
+which is the argument for inverting rather than patching. Each has its own
+passing attack test.
+
+**Mandate creation is the severe one.** An agent that can call
+`POST /v1/mandates` can write itself a policy with any ceiling it likes,
+bypassing the approver dance entirely rather than subverting it. It is not
+immediately spendable -- a mandate needs a real WebAuthn ceremony to reach
+`ACTIVE` -- but finding 2 of the same review is a passkey-enrollment bypass,
+so the two compose into self-granted, self-authenticated authority. Fixed in
+the same commit as D-64 because the mechanism is shared; recorded separately
+because the provenance is different and the record should show that.
+
+**A previously documented decision is reversed here.** `POST /v1/principals`
+carried an explicit comment arguing any credential was appropriate, on the
+grounds that "creating a principal isn't an agent-scoped action, so nothing
+about D-18's agentId binding applies." That reasoning is wrong, and was
+written before anyone had attacked the system: a principal is the root of
+all delegated authority in this model, which makes creating one the most
+administrative act in the API, not an exempt one. The comment is replaced
+rather than left standing next to contradicting behavior.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

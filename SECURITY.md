@@ -20,6 +20,38 @@ protects real funds today.
 **There is no bug bounty.** Reports are welcome and will be acknowledged and
 read, but there is no payment program behind this policy.
 
+## Findings from adversarial review, 2026-09-27
+
+An independent adversarial review of commit `387958a` found six
+vulnerabilities. Each is listed here with its status and the commit that
+fixed it. Remediation is in progress; this section is updated per finding,
+not at the end.
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | Agent credentials could mint API keys for any agent, manufacturing a second authority and reopening the step-up self-approval hole | **Fixed** — D-64 |
+| 2 | An authentication challenge could be answered with a registration response, enrolling an attacker's passkey for a victim principal | Open |
+| 3 | Merchant-supplied `decimals` controlled atomic-to-cents conversion, so a hostile merchant could have a large transfer evaluated as ~0 | Open |
+| 4 | A directory-verified domain laundered an unverified PSP account id in the same request | Open |
+| 5 | With `reserve_on_step_up: false`, an approval never consumed the original mandate's budget | Open |
+| 6 | A reservation made before a period boundary was released against the next period, driving a ledger window negative | Open |
+
+**On D-59.** An earlier version of this file said the step-up
+self-approval defect was closed by D-62. That was true when written, and
+then stopped being true: finding 1 reopened it by a different route. D-62's
+check was never bypassed — it correctly refuses a mandate approving its own
+escalation — but an agent able to mint a credential for its *approver*
+satisfies the check honestly while supplying the second authority itself.
+Closed again by D-64, which makes credential minting administrative.
+
+**Found by the remediation audit, not the review.** Auditing every route
+that creates or modifies a credential, agent, principal, or org membership
+found four more with the same shape as finding 1, all closed by D-64's
+inversion (D-65): mandate creation, agent creation, principal creation, and
+key revocation. Mandate creation is the most severe of the five —
+it let an agent write itself a fresh policy with any ceiling, bypassing the
+approver mechanism rather than subverting it.
+
 ## Known open issues
 
 These are already public, written up in detail in
@@ -38,10 +70,11 @@ discourage looking further.
   (the finding) and
   [§7](docs/THREAT-MODEL.md#7-revocation-and-incident-response) (the named,
   unbuilt remediation direction).
-- **Approver-cycle risk, bounded by design (D-62).** Resolving a step-up now
-  requires a different, named approver mandate's own credential — closing
-  the defect that used to be listed here (an agent credential resolving its
-  own step-up). Two mandates naming each other as approver are rejected at
+- **Approver-cycle risk, bounded by design (D-62).** Resolving a step-up
+  requires a different, named approver mandate's own credential. That
+  closure was briefly incomplete: it assumed an agent could not *obtain* an
+  approver's credential, which finding 1 above disproved and D-64 fixed.
+  Two mandates naming each other as approver are rejected at
   creation, but a longer cycle (three or more) is not caught there; it's
   accepted as bounded by every approval permanently costing real budget on
   the approving mandate's own cumulative cap, not by validation. See

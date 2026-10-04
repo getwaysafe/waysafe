@@ -235,13 +235,27 @@ describe("agent and key lifecycle", () => {
     const apiKey = keyResponse.json().api_key;
     expect(apiKey).toMatch(/^wsf_live_/);
 
-    // The freshly minted key works as a credential for any route.
-    const useResponse = await app.inject({
+    // The freshly minted key authenticates -- but only on the routes an
+    // agent credential is allowed to reach (D-64). It used to work "for any
+    // route", which is exactly the permissiveness the adversarial review
+    // turned into a privilege-escalation chain.
+    const agentRoute = await app.inject({
+      method: "GET",
+      url: "/v1/authorizations/auth_does_not_exist",
+      headers: { authorization: `Bearer ${apiKey}` },
+    });
+    // 404, not 401/403: the credential was accepted and the route is
+    // agent-accessible; there is simply no such authorization.
+    expect(agentRoute.statusCode).toBe(404);
+
+    // An administrative read is refused for the same key.
+    const adminRoute = await app.inject({
       method: "GET",
       url: "/v1/evidence",
       headers: { authorization: `Bearer ${apiKey}` },
     });
-    expect(useResponse.statusCode).toBe(200);
+    expect(adminRoute.statusCode).toBe(403);
+    expect(adminRoute.json().error).toBe("org_credential_required");
   });
 
   it("THE ATTACK: a revoked key stops authenticating", async () => {

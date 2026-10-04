@@ -9,3 +9,8 @@ coverage/
 next-env.d.ts
 out/
 copy-review.md
+
+# Auto-generated duplicate of CLAUDE.md by a Next.js agent-rules pass.
+# next.config.ts sets agentRules:false precisely to avoid it; ignored here
+# as a backstop so a build can never commit a second source of truth.
+AGENTS.md
