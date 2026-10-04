@@ -71,6 +71,12 @@ export interface CompleteRegistrationInput {
   principalId: string;
   response: RegistrationResponseJSON;
   claimedChallenge: string;
+  /** D-66: required to enroll an ADDITIONAL passkey on a principal that
+   * already has one. Minted only by `completeReenrollmentAuthentication`,
+   * i.e. only by proving control of a credential this principal already
+   * has. Omitted for a first enrollment, where there is no existing
+   * credential to prove control of. */
+  reenrollmentGrant?: string;
 }
 
 export async function completeRegistration(
@@ -79,11 +85,60 @@ export async function completeRegistration(
   input: CompleteRegistrationInput,
   now: Date,
 ): Promise<CompleteRegistrationResult> {
+  // D-66 (fix 2), checked BEFORE the challenge is consumed so a failed
+  // re-enrollment attempt doesn't burn the challenge: enrolling an
+  // additional passkey is privileged. A principal with zero credentials is
+  // a first enrollment and needs no grant -- there is nothing to prove
+  // control of yet.
+  const alreadyHasCredential = await repos.webauthn.hasCredentialForPrincipal(input.principalId);
+  if (alreadyHasCredential) {
+    if (!input.reenrollmentGrant) {
+      const reason =
+        "this principal already has a passkey; enrolling another requires a re-enrollment grant " +
+        "from POST /v1/principals/:id/passkeys/verify";
+      await recordEvidence(
+        repos,
+        input.organizationId,
+        "passkey.registration_rejected",
+        "principal",
+        input.principalId,
+        { reason },
+        now,
+      );
+      return { kind: "rejected", reason };
+    }
+    const grant = await repos.webauthn.consumeChallenge(input.principalId, input.reenrollmentGrant, now);
+    if (!grant || grant.purpose !== "REENROLLMENT_GRANT") {
+      const reason = "re-enrollment grant not found, already used, expired, or not a grant";
+      await recordEvidence(
+        repos,
+        input.organizationId,
+        "passkey.registration_rejected",
+        "principal",
+        input.principalId,
+        { reason },
+        now,
+      );
+      return { kind: "rejected", reason };
+    }
+  }
+
   const consumed = await repos.webauthn.consumeChallenge(input.principalId, input.claimedChallenge, now);
 
   let result: CompleteRegistrationResult;
   if (!consumed) {
     result = { kind: "rejected", reason: "challenge not found, already used, or expired" };
+  } else if (consumed.purpose !== "REGISTRATION") {
+    // D-66 (fix 1), THE finding-2 fix. The purpose was always recorded at
+    // issuance and then ignored, so an AUTHENTICATION challenge could be
+    // answered with a registration response and enroll an attacker's key.
+    // The STORED purpose decides; the caller's own `mode` never does
+    // (non-negotiable #9 -- a control may not depend on the client telling
+    // the truth about what it is doing).
+    result = {
+      kind: "rejected",
+      reason: `challenge was issued for ${consumed.purpose}, not REGISTRATION`,
+    };
   } else {
     const verification = await verifyRegistration(config, input.response, consumed.challenge);
     if (!verification.ok) {
@@ -179,6 +234,16 @@ export async function completeMandateAuthentication(
 
   if (!consumed) {
     result = { kind: "rejected", reason: "challenge not found, already used, or expired" };
+  } else if (consumed.purpose !== "AUTHENTICATION") {
+    // D-66 (fix 1), the mirror of the registration check. Previously the
+    // only thing stopping a REGISTRATION challenge being answered with an
+    // authentication response was that a random registration challenge
+    // cannot equal `policyHashToChallenge(policyHash)` -- an accidental
+    // defense, now a deliberate one.
+    result = {
+      kind: "rejected",
+      reason: `challenge was issued for ${consumed.purpose}, not AUTHENTICATION`,
+    };
   } else {
     const credential = await repos.webauthn.getCredentialByCredentialId(input.response.id);
     if (!credential || credential.principalId !== input.principalId) {
@@ -211,6 +276,118 @@ export async function completeMandateAuthentication(
     "mandate_version",
     input.mandateVersionId,
     result.kind === "activated" ? { credential_id: credentialId } : { reason: result.reason },
+    now,
+  );
+
+  return result;
+}
+
+// --- Re-enrollment (D-66) -----------------------------------------------------
+
+/**
+ * Enrolling an ADDITIONAL passkey on a principal is a privileged act, not a
+ * convenience: whoever can do it can thereafter authenticate any mandate as
+ * that principal, which is the root of all delegated authority
+ * (docs/THREAT-MODEL.md §2.5). The adversarial review of 387958a showed an
+ * org credential alone was enough, by answering an authentication challenge
+ * with a registration response.
+ *
+ * So re-enrollment is a two-step ceremony. First, prove control of a
+ * credential this principal already has (`beginReenrollmentAuthentication`
+ * + `completeReenrollmentAuthentication`); that mints a single-use,
+ * short-lived grant. Second, present the grant alongside an ordinary
+ * registration (`completeRegistration`). An org credential by itself cannot
+ * complete step one, which is the whole point.
+ *
+ * The grant is bound to the principal by the row it lives in, and to the
+ * authenticating credential by being embedded in the token itself -- so a
+ * grant minted on principal X is unusable on principal Y, and the record
+ * shows which existing key authorized the new one.
+ */
+const REENROLLMENT_GRANT_TTL_MS = 5 * 60 * 1000;
+
+export async function beginReenrollmentAuthentication(
+  repos: WebauthnServiceRepos,
+  principalId: string,
+  now: Date,
+): Promise<{ challenge: string }> {
+  // A random challenge, deliberately NOT policyHashToChallenge: this
+  // ceremony authenticates the *principal*, not a specific policy, so there
+  // is no policy hash to bind to and nothing here may activate a mandate.
+  const challenge = randomChallenge();
+  await repos.webauthn.createChallenge(
+    {
+      principalId,
+      challenge,
+      // AUTHENTICATION purpose, so `completeRegistration` refuses it as a
+      // registration challenge (fix 1) -- and `completeMandateAuthentication`
+      // cannot consume it either, since that path only ever looks up
+      // policyHashToChallenge(policyHash), never a random value.
+      purpose: "AUTHENTICATION",
+      expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
+    },
+    now,
+  );
+  return { challenge };
+}
+
+export type CompleteReenrollmentAuthenticationResult =
+  | { kind: "granted"; grant: string; expiresAt: string }
+  | { kind: "rejected"; reason: string };
+
+export async function completeReenrollmentAuthentication(
+  repos: WebauthnServiceRepos,
+  config: WebauthnConfig,
+  input: {
+    organizationId: string;
+    principalId: string;
+    claimedChallenge: string;
+    response: AuthenticationResponseJSON;
+  },
+  now: Date,
+): Promise<CompleteReenrollmentAuthenticationResult> {
+  const consumed = await repos.webauthn.consumeChallenge(input.principalId, input.claimedChallenge, now);
+
+  let result: CompleteReenrollmentAuthenticationResult;
+  if (!consumed) {
+    result = { kind: "rejected", reason: "challenge not found, already used, or expired" };
+  } else if (consumed.purpose !== "AUTHENTICATION") {
+    result = { kind: "rejected", reason: `challenge was issued for ${consumed.purpose}, not AUTHENTICATION` };
+  } else {
+    const credential = await repos.webauthn.getCredentialByCredentialId(input.response.id);
+    if (!credential || credential.principalId !== input.principalId) {
+      result = { kind: "rejected", reason: "no matching passkey credential for this principal" };
+    } else {
+      const verification = await verifyAuthentication(config, input.response, consumed.challenge, {
+        id: credential.credentialId,
+        publicKey: Uint8Array.from(credential.publicKey),
+        counter: credential.counter,
+      });
+      if (!verification.ok) {
+        result = { kind: "rejected", reason: verification.reason };
+      } else {
+        await repos.webauthn.updateCredentialCounter(credential.credentialId, verification.value.newCounter, now);
+        // The credential that authorized this enrollment is embedded in the
+        // token, so the grant is bound to (principal, credential) without
+        // needing a column for it.
+        const grant = `${randomChallenge()}.${credential.credentialId}`;
+        const expiresAt = new Date(now.getTime() + REENROLLMENT_GRANT_TTL_MS);
+        await repos.webauthn.createChallenge(
+          { principalId: input.principalId, challenge: grant, purpose: "REENROLLMENT_GRANT", expiresAt },
+          now,
+        );
+        result = { kind: "granted", grant, expiresAt: expiresAt.toISOString() };
+      }
+    }
+  }
+
+  await recordEvidence(
+    repos,
+    input.organizationId,
+    result.kind === "granted" ? "passkey.reenrollment_granted" : "passkey.reenrollment_rejected",
+    "principal",
+    input.principalId,
+    result.kind === "granted" ? { credential_id: input.response.id } : { reason: result.reason },
     now,
   );
 

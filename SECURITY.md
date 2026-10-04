@@ -30,7 +30,7 @@ not at the end.
 | # | Finding | Status |
 |---|---|---|
 | 1 | Agent credentials could mint API keys for any agent, manufacturing a second authority and reopening the step-up self-approval hole | **Fixed** — D-64 |
-| 2 | An authentication challenge could be answered with a registration response, enrolling an attacker's passkey for a victim principal | Open |
+| 2 | An authentication challenge could be answered with a registration response, enrolling an attacker's passkey for a victim principal | **Fixed** — D-66 |
 | 3 | Merchant-supplied `decimals` controlled atomic-to-cents conversion, so a hostile merchant could have a large transfer evaluated as ~0 | Open |
 | 4 | A directory-verified domain laundered an unverified PSP account id in the same request | Open |
 | 5 | With `reserve_on_step_up: false`, an approval never consumed the original mandate's budget | Open |
@@ -43,6 +43,15 @@ check was never bypassed — it correctly refuses a mandate approving its own
 escalation — but an agent able to mint a credential for its *approver*
 satisfies the check honestly while supplying the second authority itself.
 Closed again by D-64, which makes credential minting administrative.
+
+**Open question raised by finding 2 (OQ-12).** The mandate-authentication
+challenge is derived from the public `policy_hash`, so it is predictable
+rather than secret. Finding 2's fix does not depend on the challenge being
+unguessable, so this is not a live hole — but replay of a captured assertion
+onto another mandate sharing that hash is currently prevented by WebAuthn's
+signature counter, which is an authenticator-reported value that some real
+platform authenticators always report as zero. See `DECISIONS.md` OQ-12 for
+the scenario and three candidate fixes, none built.
 
 **Found by the remediation audit, not the review.** Auditing every route
 that creates or modifies a credential, agent, principal, or org membership

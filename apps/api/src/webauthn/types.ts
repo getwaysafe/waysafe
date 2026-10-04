@@ -9,7 +9,7 @@
  * challenge can't both succeed.
  */
 
-export type ChallengePurpose = "REGISTRATION" | "AUTHENTICATION";
+export type ChallengePurpose = "REGISTRATION" | "AUTHENTICATION" | "REENROLLMENT_GRANT";
 
 export interface NewChallenge {
   principalId: string;
@@ -60,6 +60,14 @@ export interface WebauthnRepository {
    * about *why* a challenge failed should be observable beyond that).
    */
   consumeChallenge(principalId: string, challenge: string, now: Date): Promise<StoredChallenge | null>;
+
+  /** Reads a live challenge WITHOUT consuming it (D-66), so the route layer
+   * can tell a client its `mode` disagrees with the challenge's stored
+   * purpose and return a specific 400 -- rather than burning the challenge
+   * on a request that was never going to succeed. Never used to authorize
+   * anything: the authoritative purpose check happens inside the service,
+   * against the challenge it actually consumes. */
+  peekChallenge(principalId: string, challenge: string, now: Date): Promise<StoredChallenge | null>;
 
   saveCredential(input: NewPasskeyCredential, now: Date): Promise<StoredPasskeyCredential>;
 

@@ -65,6 +65,13 @@ model Principal {
 enum WebauthnChallengePurpose {
   REGISTRATION
   AUTHENTICATION
+  /// D-66: a single-use, short-lived grant minted only by a successful
+  /// authentication with a credential this principal already has. Required
+  /// to enroll an ADDITIONAL passkey. Stored here rather than in its own
+  /// table because the challenge store already provides exactly what a
+  /// grant needs: principal binding, a TTL, and an atomic single-use
+  /// consume.
+  REENROLLMENT_GRANT
 }
 
 /// Short-lived, single-use. For AUTHENTICATION, `challenge` is exactly

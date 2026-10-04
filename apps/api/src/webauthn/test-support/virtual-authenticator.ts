@@ -148,6 +148,19 @@ export interface AuthenticationCeremonyOptions extends CeremonyContext {
 export function buildAuthenticationResponse(opts: AuthenticationCeremonyOptions): AuthenticationResponseJSON {
   const { authenticator, rpId, origin, challenge } = opts;
   const counter = opts.signedCounter ?? authenticator.counter + 1;
+  // Advance the authenticator's own counter, which this function's doc
+  // comment has always claimed ("a real authenticator always advances") but
+  // did not actually do -- it read `counter + 1` and never wrote back. The
+  // gap was invisible while every test authenticated at most once per
+  // authenticator; the moment one authenticates twice (D-66's re-enrollment
+  // ceremony, which authenticates and then enrolls), the second assertion
+  // re-signs the same counter and the server correctly rejects it as
+  // non-increasing -- making a harness bug look like a product bug.
+  // `signedCounter` callers are untouched: those deliberately construct a
+  // cloned-authenticator response and must not advance anything.
+  if (opts.signedCounter === undefined) {
+    authenticator.counter = counter;
+  }
 
   const authData = freshBytes(
     isoUint8Array.concat([

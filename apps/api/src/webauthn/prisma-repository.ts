@@ -57,6 +57,13 @@ export class PrismaWebauthnRepository implements WebauthnRepository {
     return row ? toStoredChallenge(row) : null;
   }
 
+  async peekChallenge(principalId: string, challenge: string, now: Date): Promise<StoredChallenge | null> {
+    const row = await this.prisma.webauthnChallenge.findFirst({
+      where: { principalId, challenge, consumedAt: null, expiresAt: { gt: now } },
+    });
+    return row ? toStoredChallenge(row) : null;
+  }
+
   async saveCredential(input: NewPasskeyCredential, now: Date): Promise<StoredPasskeyCredential> {
     const id = generateId(ID_PREFIX.passkey_credential);
     const created = await this.prisma.passkeyCredential.create({

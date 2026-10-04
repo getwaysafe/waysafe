@@ -51,6 +51,20 @@ export class InMemoryWebauthnRepository implements WebauthnRepository {
     return null;
   }
 
+  async peekChallenge(principalId: string, challenge: string, now: Date) {
+    for (const row of this.challenges.values()) {
+      if (
+        row.principalId === principalId &&
+        row.challenge === challenge &&
+        row.consumedAt === null &&
+        row.expiresAt.getTime() > now.getTime()
+      ) {
+        return { id: row.id, principalId: row.principalId, challenge: row.challenge, purpose: row.purpose, expiresAt: row.expiresAt };
+      }
+    }
+    return null;
+  }
+
   async saveCredential(input: NewPasskeyCredential, now: Date): Promise<StoredPasskeyCredential> {
     const id = generateId(ID_PREFIX.passkey_credential);
     const row: StoredPasskeyCredential = {

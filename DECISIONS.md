@@ -6715,6 +6715,104 @@ all delegated authority in this model, which makes creating one the most
 administrative act in the API, not an exempt one. The comment is replaced
 rather than left standing next to contradicting behavior.
 
+## D-66 — The challenge's stored purpose is authoritative; a second passkey needs a grant (review finding 2)
+
+Adversarial review of `387958a`, finding 2, rated critical and correctly so:
+`/authenticate/verify` trusted the caller's own `mode` field.
+`beginRegistration`/`beginMandateAuthentication` both recorded a `purpose`
+on the challenge at issuance -- `"REGISTRATION"` or `"AUTHENTICATION"` --
+and `consumeChallenge` returned it, and then **neither completion function
+ever read it.** The server already had the fact it needed and discarded it.
+
+So: request an authentication challenge for an established principal, answer
+it with a *registration* response for a key you control, and you hold a
+passkey for that principal. From there you authenticate any mandate as them
+-- including one you wrote yourself with any limit you like. That defeats
+§2.5's whole claim, which is that the principal's passkey is the root of all
+delegated authority and the one thing an API caller cannot obtain. Premise
+is an org credential, which the dashboard holds exactly one of (§2.3).
+
+Written as tests first. All eight attack variants passed against the
+reviewed code before any fix: the enrollment itself, the attacker's key then
+activating a `$999,999` mandate, second-passkey enrollment with no
+authentication anywhere, and two variants the review had not listed (below).
+
+**Fix 1 -- the stored purpose decides.** `completeRegistration` requires
+`consumed.purpose === "REGISTRATION"`; `completeMandateAuthentication`
+requires `"AUTHENTICATION"`. Per non-negotiable #9 a control may not rest on
+the client describing its own request honestly, so `mode` is *not* what
+decides -- but it is also not silently ignored, which would leave a client
+sending the wrong mode with a baffling 401. The route peeks the challenge's
+stored purpose (without consuming it) and returns a specific
+`400 challenge_purpose_mismatch` naming both the expected and actual purpose
+when they disagree. Two layers, and the inner one is the one that matters:
+the service rejects a mismatch on its own even if the route check is
+bypassed or removed.
+
+**Fix 2 -- enrolling an additional passkey is privileged.** A principal with
+zero credentials is a first enrollment and needs nothing extra; there is no
+existing key to prove control of. Once a principal has any credential,
+enrolling another requires a **re-enrollment grant**, minted only by
+authenticating with a credential that principal already has. New ceremony,
+documented in the API:
+
+    POST /v1/principals/:id/passkeys/options  -> random challenge
+    POST /v1/principals/:id/passkeys/verify   -> sign with an EXISTING key
+                                              -> { grant, expires_at }
+    POST /v1/mandates/:id/authenticate/verify -> mode "register", a real
+                                                 REGISTRATION challenge,
+                                                 and reenrollment_grant
+
+An org credential alone cannot complete step two. The grant is single-use,
+5-minute TTL, bound to the principal by the row it lives in and to the
+authorizing credential by being embedded in the token, so the evidence shows
+which existing key authorized the new one. Each property has its own test:
+cross-principal use rejected, second use rejected, expired grant rejected,
+first enrollment still works with no grant, and a grant cannot be minted
+without the principal's real passkey.
+
+**No new table.** The grant is a `WebauthnChallenge` row with a third purpose
+(`REENROLLMENT_GRANT`), because the challenge store already provides exactly
+what a grant needs: principal binding, a TTL, and an atomic single-use
+consume that `consumeChallenge` had already got right. Adding a parallel
+table would have duplicated all three and given a second chance to get the
+atomicity wrong.
+
+**Two variants the review had not listed, found while writing the tests.**
+First, the authentication challenge is `base64url(policy_hash)` and
+`policy_hash` is public, so it is predictable, not secret -- an attacker need
+never read `/options`' response. The purpose check closes the enrollment
+regardless of how the value was learned, so this is not fixed here; it is
+recorded as **OQ-12**, with the finding that replay is currently prevented by
+WebAuthn's signature counter rather than by the challenge, and that the
+counter is an authenticator-reported value some real platform authenticators
+always report as zero. Second, the reverse direction (registration challenge
+answered with an authentication response) was already refused -- but only
+*accidentally*, because a random challenge cannot equal
+`policyHashToChallenge(hash)`. It is now refused by name, and the test
+asserts the explicit mismatch rather than a bare 401, so the accidental
+defense became a deliberate one.
+
+**A harness bug this surfaced, fixed here.**
+`buildAuthenticationResponse`'s doc comment has always claimed "a real
+authenticator always advances" its counter; the code read `counter + 1` and
+never wrote back. Invisible while every test authenticated at most once per
+authenticator. The moment one authenticates twice -- which the re-enrollment
+ceremony does by construction -- the second assertion re-signs the same
+counter and the server correctly rejects it as non-increasing, making a
+harness bug present as a product bug. It cost real time to diagnose, which
+is why it is written down. `signedCounter` callers are untouched: those
+deliberately construct a cloned-authenticator response and must not advance.
+
+**Change cost if wrong:** the re-enrollment ceremony is new API surface and
+the riskiest part. It fails closed -- a principal who loses their only
+passkey cannot self-serve a replacement, and needs an operator path that
+does not exist yet, which is a real product gap this commit creates rather
+than solves. That is the correct direction for a security fix (nobody gets
+in) but it is a gap, not a non-issue, and it belongs on the roadmap. The
+purpose check itself is close to free: it compares a value the system was
+already storing.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -7011,3 +7109,54 @@ which position wins -- nothing about it is card- or chain-specific. But
 architecturally, not demonstrated. Until this is answered, no demo,
 doc, or page may show a bank lane as enforced -- see D-43's amendment,
 which removed `/story`'s simulated bank lane for exactly this reason.
+
+## OQ-12 — The mandate-authentication challenge is predictable, not secret
+
+Surfaced while writing finding 2's attack tests (D-66), and deliberately
+**not** fixed there.
+
+D-20 derives the authentication challenge as
+`base64url(policy_hash)` rather than a random nonce, so that a verified
+signature proves the principal signed *that specific mandate version*, not
+merely "authenticated recently." That is a real property and worth keeping.
+The consequence is that the challenge is a pure function of a **public**
+value: `policy_hash` appears on the mandate detail route and on every
+authorization receipt. Anyone who can read either can compute the challenge
+for that mandate, and `/authenticate/options` returns the identical value on
+every call rather than a fresh one.
+
+A test asserts this directly (`(e1)` in `server.adversarial.test.ts`): the
+server's issued challenge equals a value the test computes independently
+from the published hash.
+
+**What saves it today, and what that does not cover.** Two mandates with
+byte-identical policy share a `policy_hash` and therefore a challenge, which
+makes replaying a captured assertion from one onto the other conceivable.
+That specific replay *is* blocked, by WebAuthn's signature counter:
+`verifyAuthenticationResponse` throws on a non-increasing `signCount`, and
+`updateCredentialCounter` persists the advance, so the same assertion bytes
+cannot be used twice. Proven by a real test (`D-66 (e1)`) that builds two
+mandates with an identical policy hash, confirms they share a challenge,
+authenticates the first, and replays the exact assertion at the second --
+rejected, second mandate still `PENDING_AUTHENTICATION`.
+
+So the counter, not the challenge's unpredictability, is what prevents
+replay. **The open question is whether that is the right thing to depend
+on.** The counter is an authenticator-reported value; the WebAuthn spec
+permits authenticators to always report zero, and several real platform
+authenticators (notably Apple's synced passkeys) do exactly that. Against
+such an authenticator `signCount` is always 0, never increases, and this
+defense evaporates -- at which point a captured assertion is replayable onto
+any other mandate sharing the policy hash. Nothing in this codebase detects
+or refuses a zero-counter authenticator today.
+
+Three options, none built: bind the challenge to the mandate *version* id as
+well as the policy hash (keeps D-20's property, makes two mandates'
+challenges distinct); keep a server-side single-use marker per
+(credential, challenge) rather than relying on the counter; or refuse
+authenticators that report a non-advancing counter, which would exclude a
+large share of real passkeys. The first looks cheapest and gives up nothing,
+but it changes what the principal signs, which is D-20's own territory and
+not a call to make inside a security-fix commit.
+
+Flagged in SECURITY.md's review section rather than left only here.

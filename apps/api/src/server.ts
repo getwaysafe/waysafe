@@ -74,6 +74,8 @@ import type { WebauthnRepository } from "./webauthn/types.js";
 import {
   beginMandateAuthentication,
   beginRegistration,
+  beginReenrollmentAuthentication,
+  completeReenrollmentAuthentication,
   completeMandateAuthentication,
   completeRegistration,
   type WebauthnServiceRepos,
@@ -100,7 +102,21 @@ const CreateMandateBodySchema = z.object({
 });
 
 const AuthenticateVerifyBodySchema = z.object({
+  /** D-66: kept for a clear client contract, and validated against the
+   * challenge's STORED purpose -- a mismatch is a 400, never silently
+   * ignored. It is not what decides the ceremony: non-negotiable #9 means a
+   * control may not rest on the caller describing its own request honestly. */
   mode: z.enum(["register", "authenticate"]),
+  challenge: z.string().min(1),
+  response: z.record(z.unknown()),
+  /** D-66: required to enroll an ADDITIONAL passkey. Obtained from
+   * POST /v1/principals/:id/passkeys/verify, which requires authenticating
+   * with a passkey the principal already has. */
+  reenrollment_grant: z.string().min(1).optional(),
+});
+
+/** D-66: the re-enrollment ceremony's own verify body. */
+const ReenrollmentVerifyBodySchema = z.object({
   challenge: z.string().min(1),
   response: z.record(z.unknown()),
 });
@@ -844,6 +860,27 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     const now = new Date();
 
+    // D-66: the caller's `mode` must agree with the purpose the challenge
+    // was actually issued for. The stored purpose is authoritative either
+    // way (the service layer rejects a mismatch on its own, which is what
+    // actually closes the hole); this check exists so a client that sends
+    // the wrong mode gets a specific 400 instead of a confusing 401, rather
+    // than having its claim quietly discarded.
+    const claimed = await repos.webauthn.peekChallenge(summary.principalId, body.data.challenge, now);
+    if (claimed) {
+      const expected = body.data.mode === "register" ? "REGISTRATION" : "AUTHENTICATION";
+      if (claimed.purpose !== expected) {
+        return reply.code(400).send({
+          error: "challenge_purpose_mismatch",
+          message:
+            `mode "${body.data.mode}" expects a ${expected} challenge, but this challenge was ` +
+            `issued for ${claimed.purpose}. The stored purpose is authoritative; the mode field is not.`,
+          expected_purpose: expected,
+          actual_purpose: claimed.purpose,
+        });
+      }
+    }
+
     if (body.data.mode === "register") {
       const result = await completeRegistration(
         webauthnRepos,
@@ -853,6 +890,7 @@ export function buildServer(options: BuildServerOptions = {}) {
           principalId: summary.principalId,
           response: body.data.response as unknown as RegistrationResponseJSON,
           claimedChallenge: body.data.challenge,
+          reenrollmentGrant: body.data.reenrollment_grant,
         },
         now,
       );
@@ -1259,6 +1297,74 @@ export function buildServer(options: BuildServerOptions = {}) {
       new Date(),
     );
     return reply.code(201).send(toPrincipalJSON(created));
+  });
+
+  /**
+   * D-66: the re-enrollment ceremony. Enrolling an ADDITIONAL passkey on a
+   * principal is privileged -- whoever can do it can thereafter
+   * authenticate any mandate as that principal. So it takes two steps:
+   *
+   *   1. POST /v1/principals/:id/passkeys/options  -> a random challenge
+   *   2. POST /v1/principals/:id/passkeys/verify   -> sign it with a passkey
+   *      the principal ALREADY has; returns { grant, expires_at }
+   *   3. POST /v1/mandates/:id/authenticate/verify with mode "register",
+   *      a REGISTRATION challenge, and `reenrollment_grant`
+   *
+   * An org credential alone cannot complete step 2, which is exactly what
+   * the adversarial review of 387958a exploited. First enrollment, on a
+   * principal with no credential yet, needs none of this.
+   */
+  app.post("/v1/principals/:id/passkeys/options", async (request, reply) => {
+    const { id: principalId } = request.params as { id: string };
+    const principal = await repos.principals.getPrincipal(principalId, request.auth!.organizationId);
+    if (!principal) return reply.code(404).send({ error: "not_found" });
+
+    if (!(await repos.webauthn.hasCredentialForPrincipal(principalId))) {
+      return reply.code(409).send({
+        error: "no_existing_passkey",
+        message:
+          "This principal has no passkey yet, so there is nothing to re-enroll against. " +
+          "Use the first-enrollment flow: POST /v1/mandates/:id/authenticate/options.",
+      });
+    }
+
+    const { challenge } = await beginReenrollmentAuthentication(webauthnRepos, principalId, new Date());
+    return reply.send({
+      challenge,
+      rp_id: webauthnConfig.rpId,
+      origin: webauthnConfig.origin,
+      principal_id: principalId,
+    });
+  });
+
+  app.post("/v1/principals/:id/passkeys/verify", async (request, reply) => {
+    const { id: principalId } = request.params as { id: string };
+    const body = ReenrollmentVerifyBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return reply.code(400).send({ error: "invalid_request", issues: zodIssues(body.error) });
+    }
+    const principal = await repos.principals.getPrincipal(principalId, request.auth!.organizationId);
+    if (!principal) return reply.code(404).send({ error: "not_found" });
+
+    const result = await completeReenrollmentAuthentication(
+      webauthnRepos,
+      webauthnConfig,
+      {
+        organizationId: request.auth!.organizationId,
+        principalId,
+        claimedChallenge: body.data.challenge,
+        response: body.data.response as unknown as AuthenticationResponseJSON,
+      },
+      new Date(),
+    );
+    // snake_case on the wire, like every other route here.
+    return reply
+      .code(result.kind === "granted" ? 200 : 401)
+      .send(
+        result.kind === "granted"
+          ? { kind: result.kind, grant: result.grant, expires_at: result.expiresAt }
+          : result,
+      );
   });
 
   app.get("/v1/principals/:id", async (request, reply) => {
