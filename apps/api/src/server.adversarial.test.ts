@@ -1239,36 +1239,185 @@ describe("D-66: the re-enrollment grant (binding, single-use, expiry)", () => {
 // ===================================================================
 
 describe("D-66: an attacker-enrolled passkey cannot approve a step-up as that principal", () => {
-  it("THE ATTACK, now blocked: enroll a passkey off an auth challenge, then approve a step-up with it", async () => {
-    // Build a real approver relationship.
+  it("THE ATTACK, carried through to the actual approval attempt: step-up stays pending", async () => {
+    // An established approver principal -- it already holds a real passkey,
+    // which is what makes D-66's grant requirement apply to it.
     const approverKey = createVirtualAuthenticator();
     const approver = await setUpMandateWith("d66-approver", approverKey);
-    const spender = await setUpMandateWith("d66-spender", createVirtualAuthenticator());
 
-    // The spender's mandate names the approver. (A new version, created the
-    // only way policy changes are made.)
-    const linked = await createMandateFor(spender.principalId, "d66-linked", {
+    // A spender whose policy names that approver mandate, and which is
+    // itself authenticated so it can actually spend.
+    const spenderKey = createVirtualAuthenticator();
+    const spenderPrincipalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "d66 spender principal" },
+      })
+    ).json().principal_id as string;
+    const spender = await createMandateFor(spenderPrincipalId, "d66-spender", {
       step_up: { above_amount: toMinorUnits(10, "USD"), ttl_seconds: 900 },
       escalation: { approvers: [approver.mandateId] },
     });
+    // Authenticate it (first enrollment for this principal, so no grant).
+    const sOpts = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${spender.mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const { challenge: sReg, rp_id: rpId, origin } = sOpts.json();
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${spender.mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "register",
+        challenge: sReg,
+        response: buildRegistrationResponse({ authenticator: spenderKey, rpId, origin, challenge: sReg }),
+      },
+    });
+    const sAuth = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${spender.mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    const sAuthChallenge = sAuth.json().challenge as string;
+    await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${spender.mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: {
+        mode: "authenticate",
+        challenge: sAuthChallenge,
+        response: buildAuthenticationResponse({ authenticator: spenderKey, rpId, origin, challenge: sAuthChallenge }),
+      },
+    });
 
-    // Step 1 BLOCKED: the attacker tries to enroll its own passkey on the
-    // APPROVER's principal by answering an authentication challenge with a
-    // registration response -- finding 2's attack, aimed at D-62's second
-    // authority this time.
+    const spenderAgentKey = (
+      await app.inject({
+        method: "POST",
+        url: `/v1/agents/${spender.agentId}/keys`,
+        headers: authed(),
+        payload: { name: "d66 spender key" },
+      })
+    ).json().api_key as string;
+
+    // A real STEP_UP the spender may not resolve itself.
+    const stepUp = await app.inject({
+      method: "POST",
+      url: "/v1/authorizations",
+      headers: asAgent(spenderAgentKey),
+      payload: {
+        agent_id: spender.agentId,
+        principal_id: spenderPrincipalId,
+        mandate_id: spender.mandateId,
+        action: {
+          amount: toMinorUnits(50, "USD"),
+          currency: "USD",
+          merchant: { domain: "staples.com" },
+          attestations: {},
+        },
+        context: {},
+      },
+    });
+    expect(stepUp.json().decision).toBe(Decision.STEP_UP);
+    const stepUpId = stepUp.json().id as string;
+
+    // Step 1 BLOCKED (D-66): the attacker tries to put its own passkey on
+    // the approver's principal by answering an authentication challenge
+    // with a registration response.
     const bridge = await createMandateFor(approver.principalId, "d66-bridge");
-    const opts = await app.inject({
+    const bOpts = await app.inject({
       method: "POST",
       url: `/v1/mandates/${bridge.mandateId}/authenticate/options`,
       headers: authed(),
     });
-    expect(opts.json().mode).toBe("authenticate");
-    const { challenge, rp_id: rpId, origin } = opts.json();
-
+    expect(bOpts.json().mode).toBe("authenticate");
+    const bChallenge = bOpts.json().challenge as string;
     const attacker = createVirtualAuthenticator();
+    const attackerResponse = buildRegistrationResponse({
+      authenticator: attacker,
+      rpId,
+      origin,
+      challenge: bChallenge,
+    });
     const enrolled = await app.inject({
       method: "POST",
       url: `/v1/mandates/${bridge.mandateId}/authenticate/verify`,
+      headers: authed(),
+      payload: { mode: "register", challenge: bChallenge, response: attackerResponse },
+    });
+    expect(enrolled.statusCode).toBe(400);
+    expect(enrolled.json().error).toBe("challenge_purpose_mismatch");
+    expect(await repos.webauthn.getCredentialByCredentialId(attackerResponse.id)).toBeNull();
+
+    // Step 2, CARRIED THROUGH -- the part the earlier version of this test
+    // asserted nothing about. Even having failed to enroll, the attacker
+    // still tries to resolve the step-up as the approver, both ways it
+    // could: with its org credential, and with the approver's own agent id.
+    const viaOrg = await app.inject({
+      method: "POST",
+      url: `/v1/authorizations/${stepUpId}/step-up`,
+      headers: authed(),
+      payload: {
+        agent_id: approver.agentId,
+        principal_id: approver.principalId,
+        mandate_id: approver.mandateId,
+      },
+    });
+    // An org credential has no agent identity (D-18), so it cannot act as
+    // the approver's agent whatever it claims in the body.
+    expect(viaOrg.statusCode).toBe(403);
+
+    // And it cannot mint the approver's agent key to try again (D-64).
+    const mint = await app.inject({
+      method: "POST",
+      url: `/v1/agents/${approver.agentId}/keys`,
+      headers: asAgent(spenderAgentKey),
+      payload: { name: "d66 forged approver key" },
+    });
+    expect(mint.statusCode).toBe(403);
+
+    // The step-up is untouched: still pending, still needing the real
+    // approver's own credential.
+    const receipt = await app.inject({
+      method: "GET",
+      url: `/v1/authorizations/${stepUpId}`,
+      headers: authed(),
+    });
+    expect(receipt.json().status).toBe("PENDING_STEP_UP");
+  });
+
+  it("RESIDUAL RISK, documented not fixed: an org credential can still enroll a FIRST passkey on a principal that has none", async () => {
+    // D-66 gates *additional* enrollments, because a principal with no
+    // credential has nothing to prove control of. So an org credential can
+    // still bootstrap a brand-new principal's first passkey and authenticate
+    // mandates for it. That is the intended boundary, not an oversight --
+    // but it means a compromised org credential can create a principal,
+    // enroll a key, write a mandate, and activate it, all by itself.
+    // Pinned here so the boundary is explicit rather than implied.
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "d66 residual risk principal" },
+      })
+    ).json().principal_id as string;
+
+    const m = await createMandateFor(principalId, "d66-residual");
+    const opts = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${m.mandateId}/authenticate/options`,
+      headers: authed(),
+    });
+    expect(opts.json().mode).toBe("register");
+    const { challenge, rp_id: rpId, origin } = opts.json();
+    const attacker = createVirtualAuthenticator();
+    const enrolled = await app.inject({
+      method: "POST",
+      url: `/v1/mandates/${m.mandateId}/authenticate/verify`,
       headers: authed(),
       payload: {
         mode: "register",
@@ -1276,19 +1425,8 @@ describe("D-66: an attacker-enrolled passkey cannot approve a step-up as that pr
         response: buildRegistrationResponse({ authenticator: attacker, rpId, origin, challenge }),
       },
     });
-    // Rejected at the mode/purpose check, before anything is consumed.
-    expect(enrolled.statusCode).toBe(400);
-    expect(enrolled.json().error).toBe("challenge_purpose_mismatch");
-    expect(enrolled.json().actual_purpose).toBe("AUTHENTICATION");
-
-    // And the attacker's key is not on the approver's principal, so it
-    // cannot authenticate anything -- the step-up's second authority is
-    // still the real approver's.
-    const creds = await repos.webauthn.getCredentialByCredentialId(
-      buildRegistrationResponse({ authenticator: attacker, rpId, origin, challenge }).id,
-    );
-    expect(creds).toBeNull();
-    expect(linked.mandateId).toBeTruthy();
+    expect(enrolled.statusCode).toBe(200);
+    expect(enrolled.json().kind).toBe("registered");
   });
 });
 
