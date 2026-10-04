@@ -50,6 +50,30 @@ export const ReasonCode = {
    */
   DENY_MERCHANT_UNRESOLVED: "DENY_MERCHANT_UNRESOLVED",
 
+  // --- DENY: asset identity (D-68) ---------------------------------------
+  /**
+   * The `(chain, contract address)` pair is not in the asset registry, so
+   * Waysafe cannot say what this token is or what its decimal scale is.
+   * Non-negotiable #3 applied to assets: an identifier Waysafe cannot
+   * independently resolve never produces ALLOW. Matching is by address,
+   * never by symbol -- a hostile merchant can type "USDC".
+   */
+  DENY_ASSET_NOT_IN_REGISTRY: "DENY_ASSET_NOT_IN_REGISTRY",
+  /**
+   * The counterparty supplied a decimal scale that disagrees with the
+   * registry's. A loud refusal, never a silent correction -- the same
+   * pattern D-66 applies to the WebAuthn `mode` field: the claim is never
+   * consulted for the decision, and disagreement is an error rather than
+   * something to quietly discard.
+   */
+  DENY_ASSET_DECIMALS_MISMATCH: "DENY_ASSET_DECIMALS_MISMATCH",
+  /**
+   * The payment requirement named no asset or no network, so there is
+   * nothing to resolve. Previously reached `DENY_MERCHANT_UNRESOLVED`,
+   * which describes the merchant rather than the asset (D-68).
+   */
+  DENY_ASSET_UNSPECIFIED: "DENY_ASSET_UNSPECIFIED",
+
   // --- DENY: approver-mandate step-up resolution (D-62) ------------------
   /**
    * The credential resolving a step-up belongs to the same mandate that
@@ -134,6 +158,12 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "A required constraint of the mandate is not satisfied by this action.",
   DENY_MERCHANT_UNRESOLVED:
     "The merchant could not be resolved to a verifiable identity.",
+  DENY_ASSET_NOT_IN_REGISTRY:
+    "The payment's asset is not a token this deployment recognizes, so its value cannot be determined.",
+  DENY_ASSET_DECIMALS_MISMATCH:
+    "The payment requirement's declared decimals disagree with the registered asset's.",
+  DENY_ASSET_UNSPECIFIED:
+    "The payment requirement did not name an asset and network that could be resolved.",
   DENY_STEP_UP_SELF_APPROVAL:
     "A mandate cannot resolve its own step-up; the resolving credential must belong to a different, authorized approver mandate.",
   DENY_MANDATE_NOT_AN_APPROVER:

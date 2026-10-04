@@ -51,7 +51,7 @@
 
 import { generateKeyPairSync } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
-import { generateEvidenceSigningKeyPair, toMinorUnits, Decision } from "@waysafe/core";
+import { AMOY_USDC, generateEvidenceSigningKeyPair, toMinorUnits, Decision } from "@waysafe/core";
 import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
 import { createStaticDirectory, parsePolicy, POLICY_SCHEMA_VERSION, type Policy } from "@waysafe/core";
 import { erc20Abi, type Address, type Hex } from "viem";
@@ -120,13 +120,17 @@ function policyFrom(): Policy {
 function requirement(): X402PaymentRequirement {
   return {
     scheme: "exact",
-    network: "base-sepolia",
+    // D-68: a registry-resolvable asset. The old "usdc-test" /
+    // "base-sepolia" placeholders named no real token, so they now DENY on
+    // asset identity before this file's actual subject -- the Safe's own
+    // signature logic -- is ever reached.
+    network: AMOY_USDC.networkNames[0]!,
     maxAmountRequired: String(60 * 1_000_000),
     resource: RESOURCE_URL,
     description: "Totally Legit API",
     payTo: PAY_TO,
     maxTimeoutSeconds: 60,
-    asset: "usdc-test",
+    asset: AMOY_USDC.address,
     extra: { decimals: 6 },
   };
 }

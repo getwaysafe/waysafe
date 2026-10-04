@@ -1234,7 +1234,18 @@ export function buildServer(options: BuildServerOptions = {}) {
 
     let settlement: { tx_hash: string } | { error: string } | null = null;
     const coSignature = decision.response.co_signature;
-    if (decision.response.decision === Decision.ALLOW && coSignature && body.data.session_signature) {
+    // D-68: `settlementAsset` is the asset `evaluate()` actually ran
+    // against. Settlement takes the token contract from it and nowhere
+    // else -- not from `co_signature.asset`, not from the merchant's
+    // requirement, not from a constant. A decline leaves it null, so there
+    // is nothing to settle with.
+    const settlementAsset = decision.settlementAsset;
+    if (
+      decision.response.decision === Decision.ALLOW &&
+      coSignature &&
+      settlementAsset &&
+      body.data.session_signature
+    ) {
       if (!x402RpcUrl || !safeCosignerSigner) {
         settlement = { error: "x402 settlement is not configured on this server (POLYGON_AMOY_RPC_URL / WAYSAFE_SAFE_COSIGNER_KEY)." };
       } else {
@@ -1243,6 +1254,7 @@ export function buildServer(options: BuildServerOptions = {}) {
             rpcUrl: x402RpcUrl,
             safeAddress: instrument.external_ref as Address,
             cosigner: safeCosignerSigner,
+            token: settlementAsset.address as Address,
             payTo: coSignature.pay_to as Address,
             amountAtomic: BigInt(coSignature.amount_atomic),
             nonce: body.data.session_signature.nonce,

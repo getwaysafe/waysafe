@@ -18,6 +18,7 @@ import {
   Decision,
   POLICY_SCHEMA_VERSION,
   ReasonCode,
+  AMOY_USDC,
   type Policy,
 } from "@waysafe/core";
 import { FakeEd25519Signer } from "@waysafe/core/test-support/fake-signer.js";
@@ -76,20 +77,26 @@ function policyFrom(overrides: Record<string, unknown> = {}): Policy {
 }
 
 /** A recorded 402 requirement, trimmed to the fields this codebase reads.
- * `extra.decimals: 6` mirrors a real 6-decimal USDC -- see assetAtomicToCents. */
+ *
+ * D-68: the asset/network must resolve in the registry, or every test here
+ * DENYs on asset identity before reaching the behavior it is actually
+ * about. Uses the real Amoy USDC address and network rather than the old
+ * `"usdc-test"` / `"base-sepolia"` placeholders, which named no real token
+ * and resolved to nothing. `extra.decimals: 6` now agrees with the
+ * registry; a disagreement is its own DENY (see x402.adversarial.test.ts). */
 function buildRequirement(
   overrides: Partial<X402PaymentRequirement> & { amountUsd?: number } = {},
 ): X402PaymentRequirement {
   const amountUsd = overrides.amountUsd ?? 60;
   return {
     scheme: "exact",
-    network: "base-sepolia",
+    network: AMOY_USDC.networkNames[0]!,
     maxAmountRequired: overrides.maxAmountRequired ?? String(Math.round(amountUsd * 1_000_000)),
     resource: RESOURCE_URL,
     description: "Totally Legit API",
     payTo: overrides.payTo ?? PAY_TO,
     maxTimeoutSeconds: 60,
-    asset: overrides.asset ?? "usdc-test",
+    asset: overrides.asset ?? AMOY_USDC.address,
     extra: overrides.extra === undefined ? { decimals: 6 } : overrides.extra,
   };
 }
@@ -164,13 +171,22 @@ describe("X402Adapter.parseRequest", () => {
     expect(parsed).toBeNull();
   });
 
-  it("returns null when the requirement states no asset decimals -- never guesses", () => {
+  it("D-68: a requirement stating no decimals now parses -- the registry supplies them, so there is nothing to guess", () => {
+    // This test previously asserted the opposite (`toBeNull`), on the
+    // grounds that Waysafe must never guess an asset's scale. That premise
+    // is now satisfied more strongly: the scale is looked up by
+    // (chain, address) rather than taken from the counterparty, so an
+    // omitted `extra.decimals` is simply irrelevant. Omitting it is the
+    // honest case; a *disagreeing* value is refused outright, which
+    // x402.adversarial.test.ts covers.
     const parsed = adapter.parseRequest({
       instrumentRef: "inst_x",
       resourceUrl: RESOURCE_URL,
       requirement: buildRequirement({ extra: {} }),
     });
-    expect(parsed).toBeNull();
+    expect(parsed).not.toBeNull();
+    // 60 USDC at the registry's 6 decimals = 6000 cents.
+    expect(parsed!.action.amount).toBe(toMinorUnits(60, "USD"));
   });
 
   it("never parses maxAmountRequired as a float -- a non-digit string is unparseable, not truncated", () => {

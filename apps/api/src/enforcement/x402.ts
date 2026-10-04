@@ -29,7 +29,8 @@
  */
 
 import { createHash, type KeyObject } from "node:crypto";
-import type { Signer } from "@waysafe/core";
+import type { RegisteredAsset, Signer } from "@waysafe/core";
+import { assetAtomicToCents, isSettleableAsset, resolveAsset } from "@waysafe/core";
 import {
   Decision,
   ID_PREFIX,
@@ -246,15 +247,63 @@ export function verifyCoSignature(publicKey: KeyObject, coSignature: X402CoSigna
  * on an amount, and this is exactly that rule applied to a second decimal
  * scale (asset decimals) instead of just currency minor units.
  */
-function assetAtomicToCents(atomicAmount: string, assetDecimals: number): number | null {
-  if (!/^\d+$/.test(atomicAmount)) return null;
-  if (!Number.isInteger(assetDecimals) || assetDecimals < 2) return null;
+/**
+ * D-68: resolves a payment requirement's asset through the registry, and
+ * says exactly why when it cannot. The single resolver both the evaluation
+ * path (`parseRequest`) and the settlement path
+ * (`handleX402PaymentRequest` -> `settleTwoOfTwoTransfer`) go through, so
+ * the two can never disagree about which token or which scale is in play.
+ */
+export type X402AssetResolution =
+  | { ok: true; asset: RegisteredAsset }
+  | { ok: false; code: ReasonCode; message: string };
 
-  const scale = 10n ** BigInt(assetDecimals - 2); // asset's smallest unit -> USD cents
-  const atomic = BigInt(atomicAmount);
-  const cents = (atomic + scale / 2n) / scale; // round-half-up, no floats
-  if (cents > BigInt(Number.MAX_SAFE_INTEGER)) return null;
-  return Number(cents);
+export function resolveX402Asset(requirement: X402PaymentRequirement): X402AssetResolution {
+  if (!requirement.asset || !requirement.network) {
+    return {
+      ok: false,
+      code: ReasonCode.DENY_ASSET_UNSPECIFIED,
+      message: "The payment requirement did not name both an asset and a network.",
+    };
+  }
+
+  const asset = resolveAsset(requirement.network, requirement.asset);
+  if (!asset) {
+    return {
+      ok: false,
+      code: ReasonCode.DENY_ASSET_NOT_IN_REGISTRY,
+      message:
+        `No registered asset matches network "${requirement.network}" and address ` +
+        `"${requirement.asset}". An asset Waysafe cannot identify never produces ALLOW.`,
+    };
+  }
+
+  // The merchant's own `decimals`, if offered, is compared -- never used.
+  // Disagreement is a refusal, not a correction (same pattern as D-66's
+  // `mode`): a counterparty that misstates the scale is either confused or
+  // hostile, and both are reasons to stop rather than to proceed quietly.
+  const claimed = requirement.extra?.["decimals"];
+  if (claimed !== undefined && claimed !== asset.decimals) {
+    return {
+      ok: false,
+      code: ReasonCode.DENY_ASSET_DECIMALS_MISMATCH,
+      message:
+        `The requirement declares ${String(claimed)} decimals for ${asset.symbol}, but the ` +
+        `registered asset has ${asset.decimals}. Waysafe uses the registry; the mismatch is refused.`,
+    };
+  }
+
+  if (!isSettleableAsset(asset)) {
+    return {
+      ok: false,
+      code: ReasonCode.DENY_ASSET_NOT_IN_REGISTRY,
+      message:
+        `${asset.symbol} on chain ${asset.chainId} is registered but this deployment cannot ` +
+        "settle on that chain, so the payment is refused before a decision is made.",
+    };
+  }
+
+  return { ok: true, asset };
 }
 
 function hostFromResourceUrl(resourceUrl: string): string | undefined {
@@ -292,11 +341,15 @@ export class X402Adapter implements EnforcementAdapter<X402Callback, X402Enforce
     if (!callback.instrumentRef) return null;
     if (!callback.requirement.payTo) return null;
 
-    const decimalsRaw = callback.requirement.extra?.["decimals"];
-    const decimals = typeof decimalsRaw === "number" ? decimalsRaw : null;
-    if (decimals === null) return null;
+    // D-68: the asset's decimal scale comes from the registry, keyed by
+    // (chain, address). `extra.decimals` is the merchant's claim and is
+    // never what the conversion uses. `resolveX402Asset` returns the
+    // specific reason on failure so the caller can emit a real code
+    // instead of a generic one.
+    const resolution = resolveX402Asset(callback.requirement);
+    if (!resolution.ok) return null;
 
-    const amount = assetAtomicToCents(callback.requirement.maxAmountRequired, decimals);
+    const amount = assetAtomicToCents(callback.requirement.maxAmountRequired, resolution.asset);
     if (amount === null) return null;
 
     return {
@@ -495,6 +548,14 @@ function gateMandateStatus(detail: MandateDetail | null): Reason[] | null {
 export interface X402Decision {
   response: X402EnforcementResponse;
   mandateId: string | null;
+  /**
+   * D-68: the asset evaluation actually resolved, for settlement to use.
+   * Present only on a genuine ALLOW -- which is the point: settlement
+   * cannot re-derive the token or the chain from anything the merchant
+   * said, because the only value it is given is the one `evaluate()` was
+   * run against. Null on any decline.
+   */
+  settlementAsset: RegisteredAsset | null;
 }
 
 /**
@@ -545,6 +606,7 @@ export async function handleX402PaymentRequest(
     return {
       response: await adapter.toResponse(result, { instrumentRef: params.instrumentRef, resourceUrl: params.resourceUrl, requirement }),
       mandateId: null,
+      settlementAsset: null,
     };
   }
 
@@ -570,12 +632,23 @@ export async function handleX402PaymentRequest(
 
   const mandateId = instrument.mandate_id;
   const detail = await repos.authorization.getMandateDetail(mandateId);
-  const gateReasons = parsed ? gateMandateStatus(detail) : [
-    {
-      code: ReasonCode.DENY_MERCHANT_UNRESOLVED,
-      message: "The resource's 402 response could not be parsed into a supported payment request.",
-    },
-  ];
+
+  // D-68: when the request is unparseable, say WHY. An unresolvable asset
+  // now reports DENY_ASSET_NOT_IN_REGISTRY / _DECIMALS_MISMATCH /
+  // _UNSPECIFIED rather than DENY_MERCHANT_UNRESOLVED, which describes the
+  // merchant and was simply the nearest available code before these
+  // existed. DENY_MERCHANT_UNRESOLVED is unchanged and still the code for
+  // an unresolvable *merchant*; this is a re-route, not a replacement.
+  const assetResolution = resolveX402Asset(requirement);
+  const unparseableReasons: Reason[] = !assetResolution.ok
+    ? [{ code: assetResolution.code, message: assetResolution.message }]
+    : [
+        {
+          code: ReasonCode.DENY_MERCHANT_UNRESOLVED,
+          message: "The resource's 402 response could not be parsed into a supported payment request.",
+        },
+      ];
+  const gateReasons = parsed ? gateMandateStatus(detail) : unparseableReasons;
 
   // D-40: the one rail-attested resolveMerchant() call in this file --
   // `requirement` came from Waysafe's own fetch (`fetcher`), never from
@@ -664,5 +737,12 @@ export async function handleX402PaymentRequest(
     response.co_signature.authorization_id = stored.authorization.id;
   }
 
-  return { response, mandateId };
+  return {
+    response,
+    mandateId,
+    // Only on a real ALLOW: a decline has nothing to settle, and handing
+    // back an asset for a refused payment would invite a caller to use it.
+    settlementAsset:
+      stored.result.decision === Decision.ALLOW && assetResolution.ok ? assetResolution.asset : null,
+  };
 }

@@ -31,7 +31,7 @@ not at the end.
 |---|---|---|
 | 1 | Agent credentials could mint API keys for any agent, manufacturing a second authority and reopening the step-up self-approval hole | **Fixed** — D-64 |
 | 2 | An authentication challenge could be answered with a registration response, enrolling an attacker's passkey for a victim principal | **Fixed** — D-66 |
-| 3 | Merchant-supplied `decimals` controlled atomic-to-cents conversion, so a hostile merchant could have a large transfer evaluated as ~0 | Open |
+| 3 | Merchant-supplied `decimals` controlled atomic-to-cents conversion, so a hostile merchant could have a large transfer evaluated as ~0 — and the signed evidence chain recorded $0.00 while real value moved | **Fixed** — D-68 |
 | 4 | A directory-verified domain laundered an unverified PSP account id in the same request | Open |
 | 5 | With `reserve_on_step_up: false`, an approval never consumed the original mandate's budget | Open |
 | 6 | A reservation made before a period boundary was released against the next period, driving a ledger window negative | Open |

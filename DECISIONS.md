@@ -6653,7 +6653,13 @@ routing. The refusal is `403 org_credential_required`, not a recorded DENY:
 it is not a question about an agent's authority to spend, which is what a
 DENY records, but about whether the caller may use this surface at all.
 
-**A structural guard, and a real one.** `server.adversarial.test.ts`
+**A structural guard, and a real one.** (Second instance of the same lesson,
+added when D-68 hit it again: `expect(x).not.toBeNull()` on a field the type
+does not even have passes **vacuously** -- `undefined` satisfies it. D-68's
+first draft asserted `result.authorizationId` was not null on an
+`X402Decision`, which has no such field, and the test passed while checking
+nothing. Assert the positive shape on a field that exists: `toMatch`,
+`toBe`, `toBeDefined`.) `server.adversarial.test.ts`
 enumerates the live route table and asserts every route is either named in
 the allowlist or rejects an agent credential. The first version used
 `app.printRoutes()` and was **worthless**: that method emits a *tree* of
@@ -6865,6 +6871,107 @@ before is the clearest evidence the gap was never a deliberate allowance.
 **Change cost if wrong:** low and loud. A caller that passes an id from the
 wrong tenant now gets a 422 naming the problem, where before it silently
 created a cross-tenant mandate.
+
+## D-68 — The counterparty never supplies the units (review finding 3)
+
+Adversarial review of `387958a`, finding 3, rated critical. `x402.ts` took
+an asset's decimal scale from `requirement.extra.decimals` -- a field the
+**merchant** writes -- and `x402-safe.ts` settled the raw atomic amount
+against a hardcoded `AMOY_USDC_ADDRESS`, ignoring the requirement's own
+`asset` and `network` entirely. The amount `evaluate()` saw and the amount
+the chain moved came from two different places, and only one of them was
+under Waysafe's control.
+
+A merchant declaring `decimals: 18` on real 6-decimal USDC, with
+`maxAmountRequired: "5000000000"`, had a **5,000 USDC** transfer evaluated
+as **$0.00**, ALLOWed under a **$50** per-transaction ceiling, and settled
+for real. Breaks non-negotiable #6: money is integer minor units -- of
+*what* scale?
+
+**The headline is not the overspend.** It is that the signed evidence chain
+recorded a $0.00 payment while real value moved. The persisted
+authorization's `action.amount` was `0`, the ledger was charged `0`, and the
+receipt a dispute would be settled from showed nothing wrong. An overspend
+is a loss; a self-concealing overspend is a loss plus a false record, and
+the false record is the part that makes it worse than a plain limit bypass.
+Two further variants followed from the same cause: ten consecutive
+5,000-USDC transfers all ALLOWed against a $500/month cumulative cap,
+because the ledger believed nothing had been spent.
+
+All ten attack variants were written first and confirmed passing against
+`2586636` before any fix.
+
+**The registry** (`packages/core/src/assets.ts`): `resolveAsset(network,
+address)` returns `{symbol, decimals, address, chainId}` or `null`, keyed on
+`(chainId, lowercased address)` and **nothing else**. Never by symbol:
+"USDC" is a string a hostile merchant types, and two contracts can both
+claim it. Amoy test USDC is the sole entry, which is honest rather than
+embarrassing -- it is the only asset this codebase has ever settled.
+`ASSET_REGISTRY` is exported and a test asserts its exact contents, so a
+future "helpful" addition is a reviewed diff rather than a silent widening
+of what real money can move in.
+
+This is non-negotiable #3 applied to assets instead of merchants, for the
+same reason D-34 applied it to identifier provenance: an identifier Waysafe
+cannot independently resolve never produces ALLOW. A merchant asserting
+`decimals` is exactly as untrustworthy as an agent asserting a
+`psp_account`.
+
+**Three reason codes, added and re-routed -- not replacing anything.**
+`DENY_ASSET_NOT_IN_REGISTRY`, `DENY_ASSET_DECIMALS_MISMATCH`,
+`DENY_ASSET_UNSPECIFIED`. `DENY_MERCHANT_UNRESOLVED` stays in the enum
+unchanged and is still the code for an unresolvable *merchant*; what changed
+is that an unresolvable *asset* no longer borrows it. Before these existed
+it was simply the nearest available code, which made every asset problem
+report as a merchant problem.
+
+**Decimals are compared, never consulted.** If the requirement supplies
+`decimals` and it disagrees with the registry, that is
+`DENY_ASSET_DECIMALS_MISMATCH` -- a loud refusal, not a silent correction.
+Same pattern as D-66's WebAuthn `mode`: the counterparty's claim never
+decides, and disagreement is an error rather than something to discard
+quietly. A merchant that misstates the scale is confused or hostile, and
+both are reasons to stop. Omitting `decimals` entirely is now the *honest*
+shape and proceeds on the registry's numbers -- which inverted an existing
+test that asserted the opposite; its premise ("never guess the scale") is
+satisfied more strongly now, by looking it up instead of asking.
+
+**One resolver, both paths, threaded not re-derived.**
+`resolveX402Asset(requirement)` is the single implementation.
+`X402Decision` gained `settlementAsset`, populated only on a genuine ALLOW,
+and `settleTwoOfTwoTransfer` takes the token contract from it.
+`buildUsdcTransfer`'s hardcoded address is gone: `buildErc20Transfer(token,
+to, amount)` requires the address, and the only value settlement is ever
+given is the one `evaluate()` actually ran against. The two cannot diverge
+by construction rather than by discipline. A registered asset on a chain
+this deployment cannot settle is a DENY *at evaluation*, not an error
+discovered after a decision was already made.
+
+**The positive assertions are the point.** It is not enough that the attacks
+are refused; the honest path must be provably coherent. `(f2)` asserts that
+for a legitimate 5,000,000-atomic-unit USDC payment the persisted
+authorization's `action.amount` is 500 cents, the ledger entry is 500 cents,
+and the settled calldata moves $5 -- and that the three equal each other.
+`(f3)` asserts the cumulative cap now actually binds: five $100 ALLOWs then
+a DENY against a $500 monthly limit, with the ledger holding the real total.
+
+**Three test fixtures named assets that did not exist.** `x402.test.ts`,
+`x402.bypass.test.ts` and the demo all used `asset: "usdc-test"` /
+`network: "base-sepolia"` -- placeholders naming no real token. Post-fix
+they DENY on asset identity before reaching what they are actually about
+(merchant allowlisting, limits, the Safe's signature logic), so each now
+uses the registry's real address and network. Worth noting plainly: those
+fixtures had been asserting behavior for an asset that could never have
+settled, which is part of why this gap survived as long as it did.
+
+**Change cost if wrong:** the registry is now a gate on all x402 spend, so
+an asset missing from it blocks a legitimate payment -- loudly, with a
+specific code, which is the right failure direction. Adding an asset is a
+one-line change plus a test diff. The riskiest edit is
+`buildErc20Transfer`'s signature change, which is why `buildUsdcTransfer`
+is kept as a thin wrapper for the bypass test and demo route: both are
+about the *Safe's* signature logic rather than asset resolution and
+legitimately pin one known token.
 
 # Open questions
 

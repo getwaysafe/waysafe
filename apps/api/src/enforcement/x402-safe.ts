@@ -392,6 +392,9 @@ export async function settleTwoOfTwoTransfer(params: {
   rpcUrl: string;
   safeAddress: Address;
   cosigner: EvmSigner;
+  /** D-68: the token contract, from the asset `evaluate()` resolved. Never
+   * re-derived here, and never defaulted. */
+  token: Address;
   payTo: Address;
   amountAtomic: bigint;
   nonce: number;
@@ -399,7 +402,7 @@ export async function settleTwoOfTwoTransfer(params: {
 }): Promise<Hex> {
   await assertAmoyChainId(params.rpcUrl);
 
-  const transfer = buildUsdcTransfer(params.payTo, params.amountAtomic);
+  const transfer = buildErc20Transfer(params.token, params.payTo, params.amountAtomic);
   const cosignerAccount = await viemAccountFor(params.cosigner);
   const kit = await Safe.init({
     provider: eip1193ProviderFor(params.rpcUrl, cosignerAccount),
@@ -428,12 +431,32 @@ export async function settleTwoOfTwoTransfer(params: {
  * Safe transaction rather than sent directly (a Safe has no private key of
  * its own to send anything directly -- every one of its actions is an
  * `execTransaction` call). */
-export function buildUsdcTransfer(to: Address, amountAtomic: bigint): MetaTransactionData {
+/**
+ * D-68: the token contract is now a REQUIRED argument rather than a
+ * hardcoded constant. It used to default to `AMOY_USDC_ADDRESS` regardless
+ * of what asset the payment requirement named, which is how a merchant
+ * could have a transfer evaluated as one asset and settled as another.
+ * `settleTwoOfTwoTransfer` only ever gets this value from the asset
+ * `evaluate()` actually ran against, so the two cannot diverge.
+ */
+export function buildErc20Transfer(
+  token: Address,
+  to: Address,
+  amountAtomic: bigint,
+): MetaTransactionData {
   return {
-    to: AMOY_USDC_ADDRESS,
+    to: token,
     value: "0",
     data: encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [to, amountAtomic] }),
   };
+}
+
+/** Amoy test USDC specifically, for the bypass test and the demo route --
+ * both of which are about the *Safe's* signature logic, not about asset
+ * resolution, and legitimately pin one known token. Production settlement
+ * goes through `buildErc20Transfer` with a registry-resolved address. */
+export function buildUsdcTransfer(to: Address, amountAtomic: bigint): MetaTransactionData {
+  return buildErc20Transfer(AMOY_USDC_ADDRESS, to, amountAtomic);
 }
 
 /**
