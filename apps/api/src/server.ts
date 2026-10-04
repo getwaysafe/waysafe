@@ -764,6 +764,26 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.code(422).send({ error: "invalid_policy", issues: parsed.issues });
     }
 
+    // D-67: the principal must exist AND belong to the caller's
+    // organization. `getPrincipal` is org-scoped, so it returns null for
+    // both "no such principal" and "belongs to another tenant" -- and that
+    // is deliberately not distinguished here: telling the two apart would
+    // require an unscoped lookup, which would turn this route into an
+    // existence oracle for other tenants' principal ids. One code, one
+    // message. See D-67.
+    const principal = await repos.principals.getPrincipal(
+      body.data.principal_id,
+      request.auth!.organizationId,
+    );
+    if (!principal) {
+      return reply.code(422).send({
+        error: "unknown_principal",
+        message:
+          "principal_id does not name a principal in this organization. Create one with " +
+          "POST /v1/principals first.",
+      });
+    }
+
     let created;
     try {
       created = await repos.authorization.createMandate(

@@ -44,6 +44,12 @@ escalation — but an agent able to mint a credential for its *approver*
 satisfies the check honestly while supplying the second authority itself.
 Closed again by D-64, which makes credential minting administrative.
 
+**Tenancy sub-finding of finding 2 — fixed, D-67.** Mandate creation did not
+check that the named principal belonged to the caller's organization, nor
+that it existed at all. Both are now rejected, with a single
+indistinguishable error so the route cannot be used as a cross-tenant
+existence oracle.
+
 **Open question raised by finding 2 (OQ-12).** The mandate-authentication
 challenge is derived from the public `policy_hash`, so it is predictable
 rather than secret. Finding 2's fix does not depend on the challenge being

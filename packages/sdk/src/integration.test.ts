@@ -225,7 +225,10 @@ describe("the full journey through the SDK against a real server", () => {
     // other mandate is (D-62: nothing special about creating one) --
     // generous enough bounds that it can actually approve the $203 below.
     const approverAgent = await orgClient.createAgent({ name: "sdk step-up approver bot" });
-    const approverPrincipalId = `prin_sdk_stepup_approver_${Date.now()}`;
+    // D-67: a real principal, created through the SDK.
+    const approverPrincipalId = (
+      await orgClient.createPrincipal({ display_name: "sdk step-up approver principal" })
+    ).principal_id;
     const approverPolicy = {
       schema_version: POLICY_SCHEMA_VERSION,
       summary: "Approver: may authorize up to $2,000/month on office supplies at Staples.",
@@ -281,7 +284,7 @@ describe("the full journey through the SDK against a real server", () => {
     const compiled = await orgClient.compileMandate({ instruction });
     if (compiled.status !== "compiled") throw new Error("expected the fixture instruction to compile");
 
-    const principalId = `prin_sdk_stepup_${Date.now()}`;
+    const principalId = (await orgClient.createPrincipal({ display_name: "sdk step-up principal" })).principal_id;
     const mandate = await orgClient.createMandate({
       principal_id: principalId,
       agent_ids: [agent.agent_id],

@@ -6813,6 +6813,59 @@ in) but it is a gap, not a non-issue, and it belongs on the roadmap. The
 purpose check itself is close to free: it compares a value the system was
 already storing.
 
+## D-67 — Mandate creation validates the principal's tenancy (review finding 2, sub-finding)
+
+Reported alongside finding 2 but independent of WebAuthn, so it gets its own
+entry: `POST /v1/mandates` never checked that `principal_id` had anything to
+do with the caller's organization. Org A could create a mandate naming org
+B's principal, and the mandate really was org A's, bound to another tenant's
+principal. A second variant found while writing the test: a principal id
+that exists **nowhere at all** was also accepted, so the route would happily
+persist a mandate pointing at a principal row that does not exist. Both
+passed as attacks against `bb53c5d` before the fix.
+
+Fixed by resolving the principal through the org-scoped
+`principals.getPrincipal(principalId, organizationId)` and rejecting with
+`422 unknown_principal` when it returns null. That single call covers both
+halves of the requirement -- existence and ownership -- because the lookup
+is org-scoped by construction.
+
+**One reason code, not two, and the reason matters.** The instruction was to
+use distinct codes for not-found versus wrong-org *only* if that does not
+leak existence across tenants. It does: distinguishing them requires an
+unscoped lookup, which turns this route into an existence oracle for other
+tenants' principal ids -- feed it candidate ids and read the error to learn
+which ones are real somewhere. So both cases return the identical status,
+code, and message. A test asserts the two responses are byte-identical
+(`expect(foreign.json()).toEqual(nonexistent.json())`), so a future change
+that splits them for "better errors" fails loudly rather than silently
+opening the oracle.
+
+**Where the check lives, stated plainly.** At the route, not in
+`AuthorizationRepository.createMandate` -- the repository has no access to
+the principals store, and the review's own pointer
+(`prisma-repository.ts:489`) is where the gap showed rather than where it
+can be closed. There is exactly one server-side caller of `createMandate`
+(`server.ts`), and every other path -- the SDK, the demo routes, the
+examples -- reaches it through that route, so coverage is complete today.
+It is **not** structural: a second caller added later could skip it. The
+structural version would thread an already-resolved principal record through
+`NewMandate` instead of a bare id string, making the unchecked call
+impossible to write; that is a larger refactor of both repository
+implementations and is not done here.
+
+**Fourteen existing tests failed on this fix, and all fourteen were wrong.**
+They fabricated principal ids (`prin_demo`, `prin_exec_${Date.now()}`,
+`prin_sdk_stepup_...`) and created mandates against them -- encoding exactly
+the behavior this entry removes. Updated to create real principals through
+`POST /v1/principals` / `createPrincipal`, which is what a real integration
+has always had to do and what OQ-9 added that route for. That they passed
+before is the clearest evidence the gap was never a deliberate allowance.
+
+**Change cost if wrong:** low and loud. A caller that passes an id from the
+wrong tenant now gets a 422 naming the problem, where before it silently
+created a cross-tenant mandate.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

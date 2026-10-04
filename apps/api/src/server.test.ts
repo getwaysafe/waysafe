@@ -425,7 +425,16 @@ describe("the full PRD demo, over HTTP, no internal function calls", () => {
     const agentId = agentResponse.json().agent_id;
 
     // 3. Create the mandate from the compiled policy.
-    const principalId = "prin_demo";
+    // D-67: a real principal, not a fabricated id -- mandate creation now
+    // requires the principal to exist in the caller's organization.
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "PRD demo principal" },
+      })
+    ).json().principal_id;
     const mandateResponse = await app.inject({
       method: "POST",
       url: "/v1/mandates",
@@ -612,7 +621,15 @@ describe("payment execution and step-up completion (Week 4)", () => {
       payload: { name: "execution test bot" },
     });
     const agentId = agentResponse.json().agent_id;
-    const principalId = `prin_exec_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    // D-67: a real principal row, required by mandate creation.
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "exec test principal" },
+      })
+    ).json().principal_id;
 
     const mandateResponse = await app.inject({
       method: "POST",
@@ -956,7 +973,15 @@ describe("POST /v1/webhooks/stripe", () => {
       payload: { name: "webhook test bot" },
     });
     const agentId = agentResponse.json().agent_id;
-    const principalId = `prin_webhook_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    // D-67: a real principal row, required by mandate creation.
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "webhook test principal" },
+      })
+    ).json().principal_id;
 
     const mandateResponse = await app.inject({
       method: "POST",
@@ -1133,7 +1158,15 @@ describe("dashboard reads (Week 5)", () => {
       payload: { name: "dashboard test bot" },
     });
     const agentId = agentResponse.json().agent_id;
-    const principalId = `prin_dash_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    // D-67: a real principal row, required by mandate creation.
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: authed(),
+        payload: { display_name: "dashboard test principal" },
+      })
+    ).json().principal_id;
 
     const mandateResponse = await app.inject({
       method: "POST",

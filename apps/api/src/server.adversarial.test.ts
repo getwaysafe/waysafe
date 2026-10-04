@@ -907,16 +907,106 @@ describe("FINDING 2 sub-finding: mandate creation ignores the principal's organi
       },
     });
 
-    expect(created.statusCode).toBe(201);
+    // D-67: rejected. The principal exists, but not in this organization.
+    expect(created.statusCode).toBe(422);
+    expect(created.json().error).toBe("unknown_principal");
+  });
 
-    // And it really is org A's mandate, bound to org B's principal.
-    const detail = await app.inject({
-      method: "GET",
-      url: `/v1/mandates/${created.json().mandate_id}`,
-      headers: authed(),
+  it("D-67: org B can still create a mandate for its OWN principal -- the control case", async () => {
+    const orgB = await repos.agentKeys.createKey(
+      { organizationId: "org_control_tenant", name: "org B control admin" },
+      new Date(),
+    );
+    const orgBAuth = { authorization: `Bearer ${orgB.fullKey}` };
+    const principalId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: orgBAuth,
+        payload: { display_name: "org B's own principal" },
+      })
+    ).json().principal_id as string;
+    const agentId = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/agents",
+        headers: orgBAuth,
+        payload: { name: "org B agent" },
+      })
+    ).json().agent_id as string;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: orgBAuth,
+      payload: {
+        principal_id: principalId,
+        agent_ids: [agentId],
+        policy: {
+          schema_version: "waysafe.policy/v1",
+          summary: "org B's own mandate",
+          currency: "USD",
+          merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+          categories: { allow: [], deny: [], deny_mcc: [], unlisted: "ALLOW" },
+          cumulative_limits: [],
+          step_up: { ttl_seconds: 900 },
+          accounting: {},
+          expires_at: "2099-01-01T00:00:00.000Z",
+        },
+        intent_text: "org B's own mandate",
+        compiler_name: "manual",
+      },
     });
-    expect(detail.statusCode).toBe(200);
-    expect(detail.json().principal_id).toBe(orgBPrincipalId);
+    expect(created.statusCode).toBe(201);
+  });
+
+  it("D-67: the rejection does not distinguish wrong-org from non-existent -- no cross-tenant existence oracle", async () => {
+    const orgB = await repos.agentKeys.createKey(
+      { organizationId: "org_oracle_tenant", name: "org B oracle admin" },
+      new Date(),
+    );
+    const realButForeign = (
+      await app.inject({
+        method: "POST",
+        url: "/v1/principals",
+        headers: { authorization: `Bearer ${orgB.fullKey}` },
+        payload: { display_name: "a real principal in another org" },
+      })
+    ).json().principal_id as string;
+
+    const agentId = (
+      await app.inject({ method: "POST", url: "/v1/agents", headers: authed(), payload: { name: "oracle probe" } })
+    ).json().agent_id as string;
+
+    const policy = {
+      schema_version: "waysafe.policy/v1",
+      summary: "oracle probe",
+      currency: "USD",
+      merchants: { allow: [], deny: [], unlisted: "ALLOW" },
+      categories: { allow: [], deny: [], deny_mcc: [], unlisted: "ALLOW" },
+      cumulative_limits: [],
+      step_up: { ttl_seconds: 900 },
+      accounting: {},
+      expires_at: "2099-01-01T00:00:00.000Z",
+    };
+
+    const foreign = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: authed(),
+      payload: { principal_id: realButForeign, agent_ids: [agentId], policy, intent_text: "x", compiler_name: "manual" },
+    });
+    const nonexistent = await app.inject({
+      method: "POST",
+      url: "/v1/mandates",
+      headers: authed(),
+      payload: { principal_id: "prin_does_not_exist_anywhere", agent_ids: [agentId], policy, intent_text: "x", compiler_name: "manual" },
+    });
+
+    // Byte-identical responses: an attacker cannot use this route to learn
+    // whether a principal id exists in some other tenant.
+    expect(foreign.statusCode).toBe(nonexistent.statusCode);
+    expect(foreign.json()).toEqual(nonexistent.json());
   });
 
   it("a principal that does not exist at all is also accepted", async () => {
@@ -951,7 +1041,9 @@ describe("FINDING 2 sub-finding: mandate creation ignores the principal's organi
         compiler_name: "manual",
       },
     });
-    expect(created.statusCode).toBe(201);
+    // D-67: a principal that exists nowhere is rejected the same way.
+    expect(created.statusCode).toBe(422);
+    expect(created.json().error).toBe("unknown_principal");
   });
 });
 
