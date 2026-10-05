@@ -31,6 +31,20 @@ export const ReasonCode = {
    * attempt refused because the window to resolve it had closed.
    */
   DENY_STEP_UP_EXPIRED: "DENY_STEP_UP_EXPIRED",
+  /**
+   * D-75: the caller supplied a resource URL that Waysafe's fetch policy
+   * refuses -- a non-permitted scheme, a hostname resolving to a private,
+   * loopback, link-local or otherwise non-public address, too many
+   * redirects, an oversized response, or a timeout.
+   *
+   * Distinct from every existing code on purpose. DENY_MERCHANT_UNRESOLVED
+   * means a merchant was fetched and could not be identified;
+   * DENY_ASSET_NOT_IN_REGISTRY means a requirement was fetched and named an
+   * unknown token. This one means **nothing was fetched at all**, because
+   * Waysafe declined to make the request. Reusing either would report a
+   * fact about a response that does not exist.
+   */
+  DENY_RESOURCE_URL_NOT_PERMITTED: "DENY_RESOURCE_URL_NOT_PERMITTED",
   DENY_MANDATE_SUPERSEDED: "DENY_MANDATE_SUPERSEDED",
   DENY_MANDATE_NOT_AUTHENTICATED: "DENY_MANDATE_NOT_AUTHENTICATED",
 
@@ -141,6 +155,8 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
   DENY_MANDATE_REVOKED: "The mandate was revoked by the principal.",
   DENY_STEP_UP_EXPIRED:
     "The step-up's time limit had already passed, so it can no longer be approved.",
+  DENY_RESOURCE_URL_NOT_PERMITTED:
+    "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read.",
   DENY_MANDATE_SUPERSEDED:
     "The mandate version referenced has been replaced by a newer version.",
   DENY_MANDATE_NOT_AUTHENTICATED:

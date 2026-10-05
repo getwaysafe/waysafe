@@ -75,7 +75,7 @@ Postgres-gated case does not exist. The new adversarial tests for findings 5
 and 6 are therefore Postgres-gated and skip cleanly without a database.
 
 **Found by the remediation, not the review.** The review found six things;
-closing them turned up five more, each with its own decision-log entry:
+closing them turned up six more, each with its own decision-log entry:
 
 - **Four more routes with finding 1's shape (D-65).** Auditing every route
   that creates or modifies a credential, agent, principal, or org membership
@@ -107,6 +107,20 @@ closing them turned up five more, each with its own decision-log entry:
   duplicate hold had no event that would ever clear it. $120 was held for one
   $60 card authorization, and the cardholder's next genuine $60 payment was
   declined against their own cap by a phantom.
+- **Server-side request forgery through `resource_url` (D-75).** `POST
+  /v1/enforcement/x402` takes a URL from the caller and Waysafe's own server
+  fetches it — the mechanism D-40 relies on to stop an agent asserting its
+  own payment requirements. Nothing validated where that request went, and
+  the route is reachable with an ordinary agent key, so a leaked credential
+  could make the API process GET cloud instance metadata, a loopback admin
+  port, or any private-range host. A second half made it worse: no
+  `setErrorHandler` existed, so Fastify's default echoed the error message —
+  which contains the URL and the upstream status — turning blind SSRF into a
+  status-code oracle. Now an explicit fetch policy (HTTPS, public addresses
+  only, one DNS resolution with the connection pinned to the classified
+  address, redirects re-validated, time and size capped) and a generic 5xx
+  body for every route. Found during the threat-model diagram pass, not by
+  the review.
 - **The `/film` demo route had the same bug, and `/proof` recorded it.** It
   minted one Stripe authorization id per merchant rather than per
   authorization, and `/proof`'s scenario list deliberately uses one merchant

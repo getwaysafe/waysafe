@@ -29,6 +29,11 @@
  */
 
 import { createHash, type KeyObject } from "node:crypto";
+import {
+  ResourceUrlNotPermittedError,
+  fetchResourceUnderPolicy,
+  type ResourceFetchPolicy,
+} from "./resource-fetch.js";
 import type { RegisteredAsset, Signer } from "@waysafe/core";
 import { assetAtomicToCents, isSettleableAsset, resolveAsset } from "@waysafe/core";
 import {
@@ -100,21 +105,37 @@ export interface X402Fetcher {
   fetchPaymentRequirements(resourceUrl: string): Promise<X402PaymentRequiredResponse>;
 }
 
-/** The real fetcher: an actual HTTP GET, expecting 402 with a JSON body
- * shaped like `X402PaymentRequiredResponse`. Never used in the offline
- * test suite (see X402Fetcher's doc comment) -- exercised only by whatever
- * process ends up calling `handleX402PaymentRequest` for real. */
-export function createHttpX402Fetcher(fetchImpl: typeof fetch = fetch): X402Fetcher {
+/**
+ * The real fetcher: an HTTP GET under an explicit fetch policy (D-75),
+ * expecting 402 with a JSON body shaped like
+ * `X402PaymentRequiredResponse`.
+ *
+ * The policy is a required argument, not a default. Before D-75 this was a
+ * bare `fetch(resourceUrl)`, which let any holder of an agent API key point
+ * the server at cloud metadata, loopback, or any private-range host. See
+ * `resource-fetch.ts` for what the policy checks and why pinning the
+ * resolved address -- not checking the hostname -- is the control.
+ *
+ * Tests pass `LOCAL_RESOURCE_FETCH_POLICY` so they can use a loopback
+ * server; the deployed API passes `PRODUCTION_RESOURCE_FETCH_POLICY`. The
+ * code path is identical either way.
+ */
+export function createHttpX402Fetcher(policy: ResourceFetchPolicy): X402Fetcher {
   return {
     async fetchPaymentRequirements(resourceUrl: string): Promise<X402PaymentRequiredResponse> {
-      const response = await fetchImpl(resourceUrl);
+      const response = await fetchResourceUnderPolicy(resourceUrl, policy);
       if (response.status !== 402) {
         throw new Error(
           `expected 402 Payment Required fetching ${resourceUrl}, got ${response.status} -- Waysafe ` +
             "will not pay for a resource that didn't itself ask for payment.",
         );
       }
-      const body = (await response.json()) as X402PaymentRequiredResponse;
+      let body: X402PaymentRequiredResponse;
+      try {
+        body = JSON.parse(response.body) as X402PaymentRequiredResponse;
+      } catch {
+        throw new Error(`malformed 402 response from ${resourceUrl}: body is not JSON`);
+      }
       if (!Array.isArray(body.accepts)) {
         throw new Error(`malformed 402 response from ${resourceUrl}: no "accepts" array`);
       }
@@ -610,7 +631,23 @@ export async function handleX402PaymentRequest(
     };
   }
 
-  const requirements = await fetcher.fetchPaymentRequirements(params.resourceUrl);
+  // D-75: a URL the fetch policy refuses is a real DENY decision with its
+  // own reason code, persisted and evidenced like any other -- not a 500.
+  // A blocked fetch is still a decision the principal is entitled to see.
+  let requirements: X402PaymentRequiredResponse | null = null;
+  let fetchRejection: Reason | null = null;
+  try {
+    requirements = await fetcher.fetchPaymentRequirements(params.resourceUrl);
+  } catch (err) {
+    if (err instanceof ResourceUrlNotPermittedError) {
+      fetchRejection = {
+        code: ReasonCode.DENY_RESOURCE_URL_NOT_PERMITTED,
+        message: `Waysafe refused to fetch the resource URL: ${err.detail}`,
+      };
+    } else {
+      throw err;
+    }
+  }
 
   // Unlike the missing-instrument case above, the mandate is already known
   // here -- so an empty `accepts` array flows through the normal pipeline
@@ -618,7 +655,7 @@ export async function handleX402PaymentRequest(
   // `extra.decimals`, same as any other unparseable requirement) rather
   // than short-circuiting: the principal still gets a real, evidenced
   // DENY receipt instead of a silently dropped request.
-  const requirement: X402PaymentRequirement = requirements.accepts[0] ?? {
+  const requirement: X402PaymentRequirement = requirements?.accepts[0] ?? {
     scheme: "exact",
     network: "unknown",
     maxAmountRequired: "0",
@@ -648,7 +685,13 @@ export async function handleX402PaymentRequest(
           message: "The resource's 402 response could not be parsed into a supported payment request.",
         },
       ];
-  const gateReasons = parsed ? gateMandateStatus(detail) : unparseableReasons;
+  // D-75: the refusal takes precedence over everything downstream of it --
+  // nothing was fetched, so there is no merchant or asset to report on.
+  const gateReasons = fetchRejection
+    ? [fetchRejection]
+    : parsed
+      ? gateMandateStatus(detail)
+      : unparseableReasons;
 
   // D-40: the one rail-attested resolveMerchant() call in this file --
   // `requirement` came from Waysafe's own fetch (`fetcher`), never from

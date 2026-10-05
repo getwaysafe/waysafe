@@ -7719,6 +7719,146 @@ reason answers the question regardless. `/proof`'s card lane therefore
 remains a replay of hand-authored payloads through the real
 `StripeIssuingAdapter`, and says so.
 
+## D-75 — Server-side request forgery through `resource_url` (seventh finding, self-found)
+
+**Decision:** the x402 fetcher takes an explicit fetch policy. Production
+permits HTTPS to public unicast addresses only, resolves each hostname once,
+pins the connection to the address it classified, re-validates every
+redirect, and caps time and response size. A refused URL is a real DENY
+decision carrying `DENY_RESOURCE_URL_NOT_PERMITTED`. Separately, no 5xx
+response body ever echoes an error message again.
+
+**Not from the Codex review.** Found during the threat-model diagram pass,
+drawing the x402 decision path, by asking what validates a URL the *agent*
+chose. The review's six findings and the five the remediation turned up are
+all policy-engine or ledger defects; this is the first one that is a
+conventional web vulnerability, and it was invisible to every existing test
+because the offline x402 suite injects a fake fetcher and never exercises
+`createHttpX402Fetcher` at all.
+
+**The first half: an unvalidated server-side fetch.** `POST
+/v1/enforcement/x402` accepts `resource_url` and Waysafe's own server
+fetches it. That fetch is load-bearing by design — D-40 made it the reason
+an agent cannot assert its own payment requirements, and `merchant.ts`
+treats the result as `RAIL`-attested *because Waysafe placed the call*. The
+protection against a lying agent was therefore built on an outbound request
+nothing constrained:
+
+- `X402EnforcementBodySchema` typed the field `z.string().min(1)`. Not
+  `.url()`.
+- `createHttpX402Fetcher` was `await fetchImpl(resourceUrl)` and two
+  response-shape checks. No scheme, host, address, DNS, redirect, timeout or
+  size control of any kind.
+- The route is on `AGENT_ACCESSIBLE_ROUTES` (D-64), so an ordinary agent API
+  key reaches it. This is not an administrative surface.
+
+So any holder of a leaked agent key could make the API process issue a GET
+from inside its own network: `169.254.169.254` instance metadata, a loopback
+admin port, any RFC1918 host.
+
+**The second half: a status-code oracle.** `buildServer` installed no
+`setErrorHandler`, so Fastify's default placed `err.message` in the 500 body
+— and the fetcher's own message contains both the URL and the observed HTTP
+status (`expected 402 ... got 403`). A caller could therefore distinguish an
+open internal port from a closed one, and a 200 from a 403, by reading the
+error body. Blind SSRF plus a read channel.
+
+**Why pinning is the control and a hostname check is not.** A hostname check
+happens before the connection; DNS can answer differently the second time.
+A name that resolves public at check time and `169.254.169.254` at connect
+time defeats any amount of hostname validation — "DNS rebinding". The fix
+resolves the name **once**, classifies **every** returned answer (not just
+the first, so a mixed public/private answer cannot let the OS pick the
+outcome), and then pins the socket to the address that was actually checked,
+through Node's `lookup` hook. The socket never resolves the name again. TLS
+still validates against the hostname, so pinning costs no certificate
+checking. `node:http`/`node:https` are used rather than `fetch` for exactly
+this reason: `lookup` is the seam, and `fetch` offers no way to reach it
+without an agent implementation and a new dependency.
+
+Redirects are the matching case. A host that passes the policy can answer
+`302 Location: http://169.254.169.254/`, which is why an allowlist on the
+*submitted* URL would not be enough. Redirects are never followed by the
+HTTP module; each hop goes back through the same validation, up to three.
+
+**Address classification covers the cases a denylist usually misses.**
+Loopback, link-local (including `169.254.0.0/16` and `fe80::/10`), RFC1918,
+CGNAT `100.64/10`, `::1`, unique-local `fc00::/7`, multicast, unspecified,
+broadcast, and reserved space. IPv4-mapped IPv6 is unwrapped and classified
+as the IPv4 address it carries, in both the dotted (`::ffff:169.254.169.254`)
+and hex (`::ffff:a9fe:a9fe`) notations — treating those as "some IPv6
+address" is what makes a v4-only denylist useless. Boundaries are pinned in
+both directions: `172.32.0.1` and `100.128.0.1` are public.
+
+**One new reason code, additive: `DENY_RESOURCE_URL_NOT_PERMITTED`.** No
+existing code names this condition. `DENY_MERCHANT_UNRESOLVED` means a
+merchant *was* fetched and could not be identified;
+`DENY_ASSET_NOT_IN_REGISTRY` means a requirement *was* fetched and named an
+unknown token. This one means nothing was fetched at all, because Waysafe
+declined to make the request — reusing either would report a fact about a
+response that does not exist. A refusal flows through the same persistence
+and evidence path as any other DENY, so the principal gets a real receipt
+naming which rule fired, rather than a 500.
+
+**The policy is an argument, never a module default, and the test policy is
+the only thing that differs.** `PRODUCTION_RESOURCE_FETCH_POLICY` permits
+`https:` and `["public"]`. `LOCAL_RESOURCE_FETCH_POLICY` adds `http:` and
+`loopback` — and **nothing else**: link-local, RFC1918, CGNAT, unique-local
+and multicast stay refused even in development. The first draft of this had
+`allowPrivateAddresses: boolean`, which the demo would have had to set, and
+which would have permitted `169.254.169.254` alongside loopback. Caught by
+the redirect test hanging on a real connection attempt to that address.
+Replacing the boolean with an explicit class list is the actual fix for
+that; it is recorded here because the boolean version would have shipped a
+hole inside the hole it closed. `maxRedirects`, `timeoutMs` and
+`maxResponseBytes` are identical in both policies, asserted in the test, so
+the parts that must not vary between test and production cannot.
+
+**Why the demo still works, and what production permits.** The local policy
+is selected by `WAYSAFE_ENABLE_DEMO_ROUTES=1`, deliberately rather than by a
+new variable. `/demo`, `/film` and `/proof` pay a real x402 merchant on
+`127.0.0.1:4402` (`examples/demo-merchant.ts`), and `CLAUDE.md` already
+requires that flag to run the API for those pages — so the demo needs no new
+configuration. Tying the fetch policy to the flag that already means
+"development" keeps "this process serves demo routes" and "this process will
+fetch loopback" from drifting apart, and no deployed environment sets it.
+The committed `/proof` capture's `127.0.0.1` domain is unaffected: it is a
+record of a past run, not a fetch performed now.
+
+**Did any existing test rely on fetching loopback under the production
+policy? No.** Checked rather than assumed: `createHttpX402Fetcher` had
+exactly one production call site (`server.ts`) and no test call sites at all
+— the offline x402 suite injects a fake fetcher, which is why this was never
+exercised. The only tests that fetch loopback are D-75's own, and they pass
+`LOCAL_RESOURCE_FETCH_POLICY` explicitly.
+
+**Tests.** `apps/api/src/enforcement/x402-ssrf.adversarial.test.ts`, 13
+cases, written attack-first and passing against `a7daba5` before the fix.
+(a) the schema still accepts everything, recorded deliberately — tightening
+it to `.url()` would reject `file://` and nothing else that matters, since
+`https://169.254.169.254/` is a perfectly valid URL. (b) all 20 hostile
+targets refused. (b2) the classifier, 21 addresses including both
+IPv4-mapped notations and both boundary cases. (c) loopback refused in
+production and reachable under the test policy, proving the policy is the
+only difference. (d) a redirect re-validated and followed; (d2) a redirect
+loop stopped after exactly three hops. (e) the fetcher's own 402-mismatch
+error is not a policy refusal and so never becomes a reason code. (f) a
+closed port refused before the socket opens, so there is nothing left to
+time. (g) pinning, with the mixed-answer case. (h) a 302 from a permitted
+host to `169.254.169.254` refused at the hop, with only the first hop
+reaching the wire. (i) **control** — a real HTTPS fetch to a real public
+host passes, without which every case above would pass against a policy
+that refused everything. (j) a 5xx body carries no URL, no upstream status,
+and a request id, asserted through a real authenticated `buildServer`
+request. (k) production config and the env selector.
+
+**Change cost if wrong:** a legitimate merchant behind a hostname that
+resolves to a private address, or on plain HTTP, now gets a DENY with a
+specific code rather than a payment. That is the correct failure direction
+and is visible on the receipt. The riskiest piece is the `lookup` hook: if
+it were ever wrong the connection would fail outright rather than go
+somewhere unintended, since the pinned address is the only one offered.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

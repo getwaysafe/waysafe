@@ -55,6 +55,7 @@ import { InMemoryProviderEventRepository } from "./webhooks/in-memory-repository
 import type { ProviderEventRepository } from "./webhooks/types.js";
 import { handleStripeWebhook } from "./webhooks/service.js";
 import { StripeIssuingAdapter, handleIssuingAuthorizationRequest } from "./enforcement/stripe-issuing.js";
+import { resourceFetchPolicyFromEnv } from "./enforcement/resource-fetch.js";
 import {
   X402Adapter as X402EnforcementAdapter,
   createHttpX402Fetcher,
@@ -468,6 +469,34 @@ export function buildServer(options: BuildServerOptions = {}) {
     } catch (err) {
       done(err as Error, undefined);
     }
+  });
+
+  /**
+   * D-75: a 5xx never echoes the error message back to the caller.
+   *
+   * Fastify's default puts `err.message` in the response body. The x402
+   * fetcher's own error text contains the URL it fetched and the HTTP status
+   * it saw, which turned a blind SSRF into a status-code oracle: a caller
+   * could tell an open internal port from a closed one, and a 200 from a
+   * 403, by reading the 500 body. This closes that for every route at once
+   * rather than sanitizing one message.
+   *
+   * 4xx is unaffected -- those bodies are deliberate, machine-readable
+   * contract (`{error, issues}`) and carry nothing about upstream hosts.
+   * The full error, including the message and stack, still goes to the log.
+   */
+  app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
+    const status = error.statusCode ?? 500;
+    if (status < 500) {
+      reply.code(status).send(error);
+      return;
+    }
+    request.log.error({ err: error, reqId: request.id }, "unhandled error");
+    reply.code(500).send({
+      error: "internal_error",
+      message: "The request could not be completed.",
+      request_id: request.id,
+    });
   });
 
   const compiler = options.compiler ?? createCompilerFromEnv(loadCompilerFixtures());
@@ -1227,7 +1256,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     const decision = await handleX402PaymentRequest(
       { authorization: repos.authorization, evidence: repos.evidence, instruments: repos.instruments },
       x402Adapter,
-      createHttpX402Fetcher(),
+      // D-75: an explicit policy, chosen from the environment. Production
+      // gets HTTPS-only + public-addresses-only; a process running the
+      // demo routes gets loopback too, because the demo merchant is on
+      // 127.0.0.1:4402. See resource-fetch.ts.
+      createHttpX402Fetcher(resourceFetchPolicyFromEnv()),
       { instrumentRef: body.data.instrument_id, resourceUrl: body.data.resource_url },
       new Date(),
     );

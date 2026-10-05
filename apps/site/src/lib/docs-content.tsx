@@ -290,6 +290,12 @@ export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP
       "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction (D-68).",
   },
   {
+    code: "DENY_RESOURCE_URL_NOT_PERMITTED",
+    decision: "DENY",
+    description:
+      "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read. Production permits HTTPS to public addresses only, with the connection pinned to the address it validated and every redirect re-checked (D-75).",
+  },
+  {
     code: "DENY_ASSET_UNSPECIFIED",
     decision: "DENY",
     description:
