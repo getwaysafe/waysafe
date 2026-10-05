@@ -580,7 +580,7 @@ describe("FINDING 1 structural guard: every route is org-only unless explicitly 
 
 // ===================================================================
 // FINDING 2 -- an authentication challenge enrolls an attacker's passkey.
-// Breaks docs/THREAT-MODEL.md §2.5: the principal's passkey is supposed to
+// Breaks docs/THREAT-MODEL.md §2: the principal's passkey is supposed to
 // be the root of all delegated authority and the one thing an API caller
 // cannot obtain.
 //

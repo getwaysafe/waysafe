@@ -23,7 +23,7 @@
  *    everything else to the real HTTP transport.
  *
  * That combination is what lets the Safe cosigner key stay inside its
- * `Signer` -- the key THREAT-MODEL.md §7 names as the one with no kill
+ * `Signer` -- the key THREAT-MODEL.md §8 names as the one with no kill
  * switch, so the one where "who can reach this key" matters most.
  */
 

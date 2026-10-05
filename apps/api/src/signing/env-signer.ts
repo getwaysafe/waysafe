@@ -12,7 +12,7 @@
  * be read as claiming one.** The key is still a plaintext value in an
  * environment variable, decoded into ordinary process memory, for the
  * lifetime of the process. An attacker with code execution in this process
- * (docs/THREAT-MODEL.md §2.1) reaches it exactly as easily as before --
+ * (docs/THREAT-MODEL.md §3) reaches it exactly as easily as before --
  * `#private` is a TypeScript/JS language boundary, not a memory boundary,
  * and a heap dump does not respect it. What changed is where the boundary
  * *is in the code*, not how strong it is at runtime. §5 of the threat model

@@ -145,13 +145,13 @@ just unit-tested:**
 - **A KMS- or HSM-backed signer.** Every private key in this codebase today
   is loaded from an environment variable into plain process memory
   ("EnvSigner") — no hardware or service boundary between a process
-  compromise and a key compromise. See `docs/THREAT-MODEL.md` §5.
+  compromise and a key compromise. See `docs/THREAT-MODEL.md` §8.
 - **External anchoring on the evidence chain.** Verifying a chain proves
   Waysafe signed the record and nothing was altered after the fact. It does
   not prove completeness — that nothing happened outside what you were
   shown. Closing that gap needs an anchor outside Waysafe's own database (a
   public ledger, a certificate-transparency-style log); none exists. See
-  `docs/THREAT-MODEL.md` §3.
+  `docs/THREAT-MODEL.md` §7.
 - **A `Signer` interface.** Nothing in this codebase defines or calls
   through an abstraction over "produce a signature" — every signing call
   takes a raw key object directly. A prerequisite for the KMS item above,

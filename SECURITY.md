@@ -75,7 +75,7 @@ Postgres-gated case does not exist. The new adversarial tests for findings 5
 and 6 are therefore Postgres-gated and skip cleanly without a database.
 
 **Found by the remediation, not the review.** The review found six things;
-closing them turned up six more, each with its own decision-log entry:
+closing them turned up eight more, each with its own decision-log entry:
 
 - **Four more routes with finding 1's shape (D-65).** Auditing every route
   that creates or modifies a credential, agent, principal, or org membership
@@ -121,6 +121,14 @@ closing them turned up six more, each with its own decision-log entry:
   address, redirects re-validated, time and size capped) and a generic 5xx
   body for every route. Found during the threat-model diagram pass, not by
   the review.
+- **A decision and its evidence event were two transactions (D-76).** The
+  authorization row and its ledger hold committed in one transaction; the
+  evidence event was a second one immediately afterwards. A failure between
+  them left a committed hold with no record of why, and a 500 that relied on
+  Stripe's own decline-on-timeout setting to fail closed. All three now commit
+  or roll back together, on both rails, and a decision that cannot be recorded
+  is answered with an explicit decline. Found while drawing the card decision
+  path for the threat model.
 - **The `/film` demo route had the same bug, and `/proof` recorded it.** It
   minted one Stripe authorization id per merchant rather than per
   authorization, and `/proof`'s scenario list deliberately uses one merchant
@@ -175,9 +183,22 @@ regression rather than agreeing with the implementation:
 | `packages/core/src/merchant.adversarial.test.ts` | 4, and D-70's directory suffix-match |
 | `apps/api/src/authorization/budget.adversarial.test.ts` | 5, 6, and D-73/D-74 — Postgres-gated |
 
-The full suite is **707 passing, 1 skipped**, with one standing failure that
+| `apps/api/src/enforcement/x402-ssrf.adversarial.test.ts` | the seventh finding, D-75 — SSRF through `resource_url` |
+| `apps/api/src/enforcement/decision-atomicity.test.ts` | D-76 — decision, hold and evidence event in one transaction (Postgres-gated) |
+
+The full suite is **731 passing, 1 skipped**, with one standing failure that
 is a testnet funding gap rather than a code regression (documented in
 `DECISIONS.md` D-42).
+
+**Gated suites now announce themselves (D-77).** Nine suites depend on an
+external resource and skip when it is absent. Seven of those need a real
+Postgres, including the two that carry the row-lock and ledger-window proofs,
+and they used to vanish in silence — so a green run could mean the money-path
+proofs passed or that they never ran. Every run now prints one line per
+skipped suite naming the variable that would enable it, and those seven run in
+their own serial pass because running them concurrently against one database
+made the ledger suite fail 3 of 9 runs. See
+[`docs/THREAT-MODEL.md` Appendix C](docs/THREAT-MODEL.md#appendix-c-gated-suites).
 
 ## Known open issues
 
@@ -209,9 +230,9 @@ discourage looking further.
   holds the cosigner key, since every genuine payment request already
   carries a session-signed payload the cosigner key is sufficient to
   complete — demonstrated live, not hypothetically. See
-  [`docs/THREAT-MODEL.md` §2.1](docs/THREAT-MODEL.md#21-remote-code-execution-on-the-api-process)
+  [`docs/THREAT-MODEL.md` §3](docs/THREAT-MODEL.md#3-code-execution-on-the-api-process)
   (the finding) and
-  [§7](docs/THREAT-MODEL.md#7-revocation-and-incident-response) (the named,
+  [§10](docs/THREAT-MODEL.md#10-what-we-dont-know) (the named,
   unbuilt remediation direction).
 - **Approver-cycle risk, bounded by design (D-62).** Resolving a step-up
   requires a different, named approver mandate's own credential. That
@@ -221,14 +242,14 @@ discourage looking further.
   creation, but a longer cycle (three or more) is not caught there; it's
   accepted as bounded by every approval permanently costing real budget on
   the approving mandate's own cumulative cap, not by validation. See
-  [`docs/THREAT-MODEL.md` §1.3](docs/THREAT-MODEL.md#13-agent-api-keys-and-org-credentials)
+  [`docs/THREAT-MODEL.md` §1](docs/THREAT-MODEL.md#1-a-leaked-agent-key)
   for the closure, the residual risk of a leaked key paired with a leaked
   approver key, and the cycle reasoning in full.
 - **The evidence chain has no external anchor.** Verifying a chain proves
   Waysafe signed the record and nothing was altered after the fact. It does
   not prove completeness — that nothing happened outside what you were
   shown. See
-  [`docs/THREAT-MODEL.md` §3](docs/THREAT-MODEL.md#3-what-the-evidence-chain-proves-and-what-it-does-not).
+  [`docs/THREAT-MODEL.md` §7](docs/THREAT-MODEL.md#7-the-evidence-chain).
 
 ## Key custody, plainly
 
@@ -243,7 +264,7 @@ improvement: the key is still a plaintext env var decoded into ordinary
 process memory, and an attacker with code execution in the process reaches
 it exactly as before. What it buys is that a KMS-backed signer becomes a new
 class plus config rather than a rewrite of every signing call site. See
-[`docs/THREAT-MODEL.md` §5](docs/THREAT-MODEL.md#5-where-the-private-keys-actually-live-envsigner)
+[`docs/THREAT-MODEL.md` §8](docs/THREAT-MODEL.md#8-key-custody-rotation-and-revocation)
 for exactly what that does and doesn't mean for each key in the system. All
 three keys — including the on-chain Safe cosigner — now sign through the
 interface; `@waysafe/core` no longer decodes a private key at all.

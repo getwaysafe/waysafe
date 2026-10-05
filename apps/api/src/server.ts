@@ -565,7 +565,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   const x402SafeCosignerKey = process.env.WAYSAFE_SAFE_COSIGNER_KEY as Hex | undefined;
 
   /**
-   * D-63: the three signers of docs/THREAT-MODEL.md §1, as three distinct
+   * D-63: the three signers of docs/THREAT-MODEL.md Appendix A, as three distinct
    * objects. `assertDistinctSigners` compares their *public keys* and
    * refuses to start if any two match -- the realistic misconfiguration
    * being two env vars accidentally set to the same key, which comparing
@@ -597,7 +597,7 @@ export function buildServer(options: BuildServerOptions = {}) {
         if (Buffer.from(evidenceKey).equals(Buffer.from(attestationKey))) {
           throw new Error(
             'signers "evidence" and "x402Attestation" are the same key -- each role must have its own key ' +
-              "(see docs/THREAT-MODEL.md §1: the three keys have different blast radii and are never interchangeable)",
+              "(see docs/THREAT-MODEL.md Appendix A: the three keys have different blast radii and are never interchangeable)",
           );
         }
       }

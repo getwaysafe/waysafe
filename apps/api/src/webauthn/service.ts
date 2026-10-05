@@ -288,7 +288,7 @@ export async function completeMandateAuthentication(
  * Enrolling an ADDITIONAL passkey on a principal is a privileged act, not a
  * convenience: whoever can do it can thereafter authenticate any mandate as
  * that principal, which is the root of all delegated authority
- * (docs/THREAT-MODEL.md §2.5). The adversarial review of 387958a showed an
+ * (docs/THREAT-MODEL.md §2). The adversarial review of 387958a showed an
  * org credential alone was enough, by answering an authentication challenge
  * with a registration response.
  *

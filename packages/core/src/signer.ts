@@ -17,7 +17,7 @@
  * exactly as before. What changed is that the key material is now reachable
  * only from inside that one class, so a KMS-backed implementation is a new
  * class plus config rather than a rewrite of every call site. See
- * docs/THREAT-MODEL.md §5, which states the same thing in the same terms.
+ * docs/THREAT-MODEL.md §8, which states the same thing in the same terms.
  *
  * The deliberate omission: there is no way to get the private key back out
  * of a `Signer`. Any future implementation that adds one has removed the
@@ -56,7 +56,7 @@ export interface Signer {
  * A `Signer` whose key is an EVM account. Kept off the base interface
  * deliberately: Safe ownership is an on-chain fact about an address, so
  * only the secp256k1 signer has one, and an Ed25519 signer must not appear
- * to. (This is the same distinction docs/THREAT-MODEL.md §1.2 draws between
+ * to. (This is the same distinction docs/THREAT-MODEL.md Appendix A draws between
  * the two x402 keys: the Ed25519 attestation key "has no EVM address at
  * all", which is precisely why it cannot move funds.)
  */
@@ -68,7 +68,7 @@ export interface Secp256k1Signer extends Signer {
 
 /**
  * The three signers a deployment needs, matching the three keys inventoried
- * in docs/THREAT-MODEL.md §1. They are never one object reused: each key has
+ * in docs/THREAT-MODEL.md Appendix A. They are never one object reused: each key has
  * a different blast radius, and collapsing any two into one would silently
  * widen it (the Ed25519 attestation key gaining the Safe key's on-chain
  * power, say). `assertDistinctSigners` enforces that at boot.
@@ -118,7 +118,7 @@ export async function assertDistinctSigners(signers: SignerSet): Promise<void> {
       if (keyA === keyB) {
         throw new Error(
           `signers "${roleA}" and "${roleB}" are the same key -- each role must have its own key ` +
-            `(see docs/THREAT-MODEL.md §1: the three keys have different blast radii and are never interchangeable)`,
+            `(see docs/THREAT-MODEL.md Appendix A: the three keys have different blast radii and are never interchangeable)`,
         );
       }
     }
