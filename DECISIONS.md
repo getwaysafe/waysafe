@@ -7517,6 +7517,107 @@ means running the original policy's engine a second time at approval, which
 is a behaviour change with its own design questions (which `now`, which
 merchant trust) and is not in this entry's scope.
 
+## D-74 — A rail's authorization reference identifies one decision
+
+**Decision:** `handleIssuingAuthorizationRequest` consults
+`findByExternalRef` first and returns the **original** decision on a replay —
+same response body, no new row, no new reservation. A unique index on
+`(mandateId, externalRef)` is the control behind that lookup.
+
+Found from Finding 6's direction rather than named in the review. Stripe
+redelivers webhook events; `Authorization.externalRef` was *indexed but not
+unique*, and nothing consulted it before deciding. So an identical
+redelivery of one `issuing_authorization.request` produced a second
+Authorization row and a second RESERVATION: **$120 held for one $60 card
+authorization**, and — the part that makes it a leak rather than noise — the
+capture webhook names one row, so the duplicate hold had no event that would
+ever clear it. The cardholder's own next $60 payment was declined against
+their own $150 cap by a phantom.
+
+**The attack, confirmed against real Postgres before the fix:**
+
+| Case | Before D-74 | After |
+|---|---|---|
+| (d) identical event delivered twice | 2 rows, 2 holds, `$120` held; next real $60 **declined** | 1 row, 1 hold, `$60`; identical response body; next $60 **approved** |
+| (d2) then captured | ledger `$80` for `$40` moved; orphan hold survives | ledger `$40`; one hold, one release, one capture |
+| (d3) two concurrent deliveries | two different authorization ids | exactly one row |
+
+**The lookup is the fast path; the index is the control.** Two concurrent
+deliveries both read "not seen" and both insert. `saveAuthorization` now
+distinguishes the two uniqueness violations that land on `P2002` — an
+idempotency-key collision is a caller that skipped its own check, an
+external-ref collision is a rail redelivering a decided event — and raises
+`ExternalRefConflictError` for the latter. The handler catches it *outside*
+the lock, because the failed insert aborts the Postgres transaction and an
+aborted transaction cannot serve the re-read; the rollback also means the
+loser reserved nothing. It then replays the winner's decision.
+
+Proven by negative control, per D-64's lesson: with the index dropped, (d3)
+asserts two different authorization ids and fails; with it present, one. The
+test would otherwise have passed on the fast path alone and proven nothing
+about the race.
+
+**Keyed `(mandateId, externalRef)`, not `externalRef` alone — a deliberate
+deviation from the instruction, recorded as such.** Two reasons. A replay
+always resolves through the same card to the same instrument to the same
+mandate, so the composite key catches every redelivery the global one would.
+And `externalRef` carries no rail qualifier — the rail lives on `Instrument`
+— so a second rail writing a colliding reference format would trip a global
+unique index for reasons that have nothing to do with idempotency. The
+practical difference on this database is 87 rows versus 3.
+
+**The index is not installed on this environment, and that is reported
+rather than worked around.** `npm run db:constraints` creates it
+conditionally and `RAISE NOTICE`s what blocks it. Three `(mandateId,
+externalRef)` pairs are already duplicated here, all from the next finding:
+
+**The `/film` demo route had the same bug, and `/proof` recorded it.** The
+route minted `iauth_demo_${scenario.networkId}` — wrong twice over. A real
+Stripe authorization id identifies one authorization, and
+`PROOF_CARD_REPLAY_SCENARIOS` deliberately uses one `networkId` for two
+different amounts ($4.50 ALLOW and $15.00 over-the-cap DENY), so two
+genuinely distinct card authorizations *in a single run* shared one id. With
+D-74's replay rule in place and the old id scheme, the $15.00 DENY would have
+been served the $4.50 ALLOW — the demo would have shown the wrong decision.
+Fixed to `iauth_demo_${instrument.id}_${index}_${networkId}`: the instrument
+is created fresh per run, so its id is the natural per-run nonce, and the
+index disambiguates the within-run pair.
+
+The committed `/proof` capture therefore contains two decisions carrying one
+`stripe_authorization_id`, and it cites both rows by id — which is why the
+legacy duplicates are not deleted here. Clearing them is a judgment call
+about demo history and about whether `/proof` is re-captured against the
+fixed route; a constraint script must not make it silently, and neither
+should this entry. **Open for a human:** re-capture `/proof` against the
+fixed route, then re-run `npm run db:constraints` to install the index.
+Until then the application-level replay check is active and proven, and the
+concurrent-delivery race is not — which is what (d3) says out loud when it
+skips, rather than passing vacuously.
+
+**The in-memory fake enforces the same uniqueness** (checked before the
+ledger rows are written, so a refused insert reserves nothing), so the replay
+contract is testable without Postgres and the two repositories cannot drift
+on it — the D-71 lesson about the fake being structurally unable to express a
+bug, applied preemptively this time.
+
+**No evidence event on a replay.** The chain records decisions, and a replay
+makes none. A redelivery is Stripe's transport retrying, not a new fact about
+the mandate, so writing a second `enforcement.stripe_issuing.decision` would
+put an event in the chain that no decision backs.
+
+**Existing expectations that encoded the bug: none.** `stripe-issuing.test.ts`
+gives every scenario its own `authorizationId`, and the D-35 concurrency
+cases use `iauth_d35_race_a`/`_b` — distinct ids, which is why a test suite
+with a *concurrency* test for this exact handler still never delivered the
+same event twice. The duplicate ids in this repository were all in the demo
+route, where nothing asserted on them.
+
+**Change cost if wrong:** a replay returns a stale decision rather than
+re-deciding. That is the intended semantics of idempotency and the direction
+Stripe's own retry model assumes, but it does mean a mandate edited between
+two deliveries of one event is not re-consulted — correct for a redelivery of
+one authorization, and worth knowing.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

@@ -1133,11 +1133,11 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     expect(monthSum(rows, KEYS_W1.month)).toBeGreaterThanOrEqual(0);
   });
 
-  it("(d) a replayed Issuing webhook reserves the mandate's budget a second time", async () => {
-    // The "replay dedupe" follow-up, reached from Finding 6's direction:
-    // handleIssuingAuthorizationRequest never consults findByExternalRef,
-    // and Authorization.externalRef is indexed but NOT unique, so the same
-    // Stripe authorization id lands twice with two RESERVATION rows.
+  it("(d) closed by D-74: a replayed Issuing webhook returns the original decision -- one row, one hold", async () => {
+    // The "replay dedupe" follow-up, reached from Finding 6's direction.
+    // handleIssuingAuthorizationRequest never consulted findByExternalRef,
+    // so the same Stripe authorization id landed twice with two RESERVATION
+    // rows. It now replays the recorded decision.
     const NETWORK_MID = "visa_network_id_finding6d";
     const { mandateId } = await seedInstrumentMandate(
       policyFrom({
@@ -1177,16 +1177,24 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
       payload,
       W1,
     );
-    expect(second.response.approved).toBe(true);
+
+    // Identical response body, not merely an identical verdict.
+    expect(second.response).toEqual(first.response);
+    expect(second.authorizationId).toBe(first.authorizationId);
 
     const rows = await ledgerFor(mandateId);
-    const reservations = rows.filter((r) => r.type === "RESERVATION");
-    expect(reservations).toHaveLength(2);
-    // $120 held for one $60 card authorization.
-    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(120, "USD"));
+    expect(rows.filter((r) => r.type === "RESERVATION")).toHaveLength(1); // was 2
+    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(60, "USD")); // was $120
 
-    // Which is not merely untidy: the phantom $60 declines the cardholder's
-    // next real $60 payment against their own $150 cap.
+    // No new row, so externalRef identifies one receipt again.
+    const sameRef = await prisma.authorization.findMany({
+      where: { externalRef: "iauth_finding6d_replay" },
+      select: { id: true },
+    });
+    expect(sameRef).toHaveLength(1); // was 2
+
+    // And the cardholder's next real $60 payment is no longer declined by a
+    // phantom hold: $60 + $60 fits the $150 cap.
     const nextRealPayment = await handleIssuingAuthorizationRequest(
       { authorization: repo, evidence, instruments },
       adapter,
@@ -1198,21 +1206,13 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
       }),
       W1,
     );
-    expect(nextRealPayment.response.approved).toBe(false);
-
-    // Two authorization rows share one Stripe id, so externalRef no longer
-    // identifies a single receipt.
-    const sameRef = await prisma.authorization.findMany({
-      where: { externalRef: "iauth_finding6d_replay" },
-      select: { id: true },
-    });
-    expect(sameRef).toHaveLength(2);
+    expect(nextRealPayment.response.approved).toBe(true); // was false
   });
 
-  it("(d2) the replayed reservation is never releasable, because the capture names only one of the two rows", async () => {
-    // Why (d) is a leak and not just noise: the duplicate hold has no event
-    // that will ever clear it. The mandate's budget is permanently short by
-    // the replayed amount until the window rolls.
+  it("(d2) and the capture now clears the whole hold, because there is only one", async () => {
+    // Why (d) was a leak and not just noise: the duplicate hold had no
+    // event that would ever clear it, so the mandate's budget stayed short
+    // by the replayed amount until the window rolled.
     const NETWORK_MID = "visa_network_id_finding6d2";
     const { mandateId } = await seedInstrumentMandate(
       policyFrom({
@@ -1261,10 +1261,84 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     );
 
     const rows = await ledgerFor(mandateId);
-    // $40 really moved. The ledger says $80 -- the orphaned hold survives.
-    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(80, "USD"));
-    expect(rows.filter((r) => r.type === "RESERVATION")).toHaveLength(2);
+    // $40 moved and the ledger says $40. It said $80 before D-74.
+    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(40, "USD"));
+    expect(rows.filter((r) => r.type === "RESERVATION")).toHaveLength(1);
     expect(rows.filter((r) => r.type === "CAPTURE")).toHaveLength(1);
+    expect(rows.filter((r) => r.type === "RELEASE")).toHaveLength(1);
+  });
+
+  it("(d3) D-74's real control: two concurrent deliveries of one event produce exactly one row", async () => {
+    // The lookup in (d) is only the fast path -- two concurrent deliveries
+    // both read "not seen" and both try to insert. The unique index is what
+    // decides, so this test asserts the index exists rather than quietly
+    // proving nothing without it.
+    const indexPresent = await prisma.$queryRawUnsafe<{ relname: string }[]>(
+      `SELECT relname FROM pg_class WHERE relname = $1`,
+      "authorizations_one_decision_per_external_ref",
+    );
+    if (indexPresent.length === 0) {
+      // Self-skipping with the real reason, the convention this codebase
+      // already uses for a control it cannot install here (D-42/D-48). This
+      // database holds pre-D-74 /film demo rows that duplicate
+      // (mandateId, externalRef), so `npm run db:constraints` reports the
+      // index as skipped. Clearing them is a judgment call about demo
+      // history -- /proof's committed capture cites two of them by id -- so
+      // it is not done silently by a constraint script or by this test.
+      // eslint-disable-next-line no-console
+      console.log(
+        "SKIPPED (d3): authorizations_one_decision_per_external_ref is not installed on this " +
+          "database -- pre-D-74 demo rows duplicate (mandateId, externalRef). " +
+          "The application-level replay check in (d) is still proven above; " +
+          "the concurrent-delivery race is not.",
+      );
+      return;
+    }
+
+    const NETWORK_MID = "visa_network_id_finding6d3";
+    const { mandateId } = await seedInstrumentMandate(
+      policyFrom({
+        cumulative_limits: [{ window: "month", max_amount: toMinorUnits(150, "USD") }],
+        merchants: {
+          allow: [{ scheme: "network_mid", value: NETWORK_MID }],
+          deny: [],
+          unlisted: "DENY",
+        },
+      }),
+    );
+    const instrumentRow = await prisma.instrument.findFirstOrThrow({ where: { mandateId } });
+    const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+    const instruments = new PrismaInstrumentRepository(prisma);
+    const adapter = new StripeIssuingAdapter();
+    const payload = issuingAuthorization({
+      instrumentId: instrumentRow.id,
+      amount: toMinorUnits(60, "USD"),
+      networkId: NETWORK_MID,
+      authorizationId: "iauth_finding6d3_race",
+    });
+
+    const deliver = () =>
+      handleIssuingAuthorizationRequest(
+        { authorization: repo, evidence, instruments },
+        adapter,
+        payload,
+        W1,
+      );
+    const [a, b] = await Promise.all([deliver(), deliver()]);
+
+    // Both callers get an answer, and it is the same answer.
+    expect(a.response).toEqual(b.response);
+    expect(a.authorizationId).toBe(b.authorizationId);
+
+    const sameRef = await prisma.authorization.findMany({
+      where: { externalRef: "iauth_finding6d3_race" },
+      select: { id: true },
+    });
+    expect(sameRef).toHaveLength(1);
+
+    const rows = await ledgerFor(mandateId);
+    expect(rows.filter((r) => r.type === "RESERVATION")).toHaveLength(1);
+    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(60, "USD"));
   });
 
   it("CONTROL: a reservation made and released inside ONE window nets to zero, and must stay so", async () => {

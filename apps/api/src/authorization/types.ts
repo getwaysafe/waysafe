@@ -227,6 +227,22 @@ export interface AgentListItem {
   createdAt: string;
 }
 
+/**
+ * D-74: a rail's own authorization reference is already recorded for this
+ * mandate, so this delivery is a replay of an event already decided.
+ *
+ * Thrown by `saveAuthorization` when the database's uniqueness constraint
+ * refuses the insert -- which is the real control, since the handler's own
+ * "have I seen this?" lookup cannot be trusted under a race. The caller
+ * re-reads via `findByExternalRef` and returns the original decision.
+ */
+export class ExternalRefConflictError extends Error {
+  constructor(readonly externalRef: string) {
+    super(`an authorization is already recorded for external ref ${externalRef}`);
+    this.name = "ExternalRefConflictError";
+  }
+}
+
 export interface RecordExecutionInput {
   authorizationId: string;
   /**

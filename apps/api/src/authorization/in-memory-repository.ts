@@ -28,6 +28,7 @@ import {
   type SpendSnapshot,
 } from "@waysafe/core";
 import {
+  ExternalRefConflictError,
   MandateCreationError,
   type AgentListItem,
   type AuthorizationRepository,
@@ -388,6 +389,20 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       // Claimed synchronously, before any await below, so no concurrent
       // saveAuthorization call for the same org+key can race this check.
       this.idempotencyIndex.set(`${input.organizationId}:${input.idempotencyKey}`, input.id);
+    }
+
+    // D-74: the fake enforces the same uniqueness the real index does, so
+    // the replay contract is testable without Postgres. Before the ledger
+    // rows are written, so a refused insert reserves nothing.
+    if (input.externalRef) {
+      for (const existing of this.authorizations.values()) {
+        if (
+          existing.external_ref === input.externalRef &&
+          existing.mandate_id === input.mandateId
+        ) {
+          throw new ExternalRefConflictError(input.externalRef);
+        }
+      }
     }
 
     const mandate = this.mandates.get(input.mandateId);

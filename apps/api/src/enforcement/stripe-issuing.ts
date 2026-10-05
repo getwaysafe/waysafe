@@ -45,7 +45,13 @@ import {
   type MerchantAssertion,
   type Reason,
 } from "@waysafe/core";
-import type { AuthorizationRepository, MandateDetail, NewLedgerEntry } from "../authorization/types.js";
+import {
+  ExternalRefConflictError,
+  type AuthorizationRepository,
+  type MandateDetail,
+  type NewLedgerEntry,
+  type StoredAuthorization,
+} from "../authorization/types.js";
 // D-73: moved out of this file so the step-up approval path reads the same
 // status table instead of a second copy of it.
 import { gateMandateStatus } from "../authorization/mandate-gate.js";
@@ -481,6 +487,35 @@ export async function handleIssuingAuthorizationRequest(
   }
 
   const mandateId = instrument.mandate_id;
+
+  /**
+   * D-74: the decision already recorded for this rail reference, rebuilt
+   * into the same response body it produced the first time.
+   *
+   * `decision` and `reasons` are persisted on the row precisely so a
+   * receipt can show the real outcome, so a replay needs nothing the row
+   * does not already hold -- no second evaluate(), and no second evidence
+   * event, because no second decision was made.
+   */
+  const replayOf = async (original: StoredAuthorization): Promise<IssuingDecision> => ({
+    response: await adapter.toResponse(
+      { decision: original.decision, reasons: original.reasons },
+      authorization,
+    ),
+    mandateId: original.mandate_id,
+    authorizationId: original.id,
+  });
+
+  // D-74, the fast path. Stripe redelivers events, and before this an
+  // identical redelivery produced a second Authorization row and a second
+  // RESERVATION -- $120 held for one $60 card authorization, with no event
+  // that would ever release the duplicate. The lookup is only the fast
+  // path; the uniqueness constraint below is the control.
+  const alreadyDecided = await repos.authorization.findByExternalRef(authorization.id);
+  if (alreadyDecided && alreadyDecided.mandate_id === mandateId) {
+    return replayOf(alreadyDecided);
+  }
+
   const detail = await repos.authorization.getMandateDetail(mandateId);
   const gateReasons = gateMandateStatus(detail);
 
@@ -497,7 +532,8 @@ export async function handleIssuingAuthorizationRequest(
     "rail",
   );
 
-  const stored = await repos.authorization.withMandateLock(mandateId, async () => {
+  const decideUnderLock = () =>
+    repos.authorization.withMandateLock(mandateId, async () => {
     let result: EngineResult;
     const ledgerEntries: NewLedgerEntry[] = [];
 
@@ -543,8 +579,23 @@ export async function handleIssuingAuthorizationRequest(
       ledgerEntries,
     });
 
-    return { result, authorization: authorization_ };
-  });
+      return { result, authorization: authorization_ };
+    });
+
+  let stored: { result: EngineResult; authorization: StoredAuthorization };
+  try {
+    stored = await decideUnderLock();
+  } catch (err) {
+    // D-74: a concurrent delivery of the same event won the race. Its
+    // transaction rolled back, so it reserved nothing; re-read outside the
+    // aborted transaction (which cannot serve a query) and replay the
+    // winner's decision.
+    if (err instanceof ExternalRefConflictError) {
+      const winner = await repos.authorization.findByExternalRef(authorization.id);
+      if (winner) return replayOf(winner);
+    }
+    throw err;
+  }
 
   await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
     repos.evidence.appendEvent({

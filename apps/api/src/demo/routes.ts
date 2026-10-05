@@ -306,9 +306,19 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
 
     const scenarios = body.data.variant === "proof" ? PROOF_CARD_REPLAY_SCENARIOS : CARD_REPLAY_SCENARIOS;
     const attempts = [];
-    for (const scenario of scenarios) {
+    for (const [index, scenario] of scenarios.entries()) {
       const authorization = {
-        id: `iauth_demo_${scenario.networkId}`,
+        // D-74: unique per run AND per scenario. This was
+        // `iauth_demo_${scenario.networkId}`, which is wrong twice over: a
+        // real Stripe authorization id identifies one authorization, and
+        // PROOF_CARD_REPLAY_SCENARIOS deliberately uses one networkId for
+        // two different amounts ($4.50 and $15.00), so two genuinely
+        // distinct card authorizations in a single run shared one id. With
+        // D-74's replay rule in place the second would have been served the
+        // first's decision -- the demo's own $15.00 over-the-cap DENY would
+        // have come back as the $4.50 ALLOW. The instrument is created
+        // fresh per run, so its id is the natural per-run nonce.
+        id: `iauth_demo_${instrument.id}_${index}_${scenario.networkId}`,
         amount: scenario.amountCents,
         currency: "usd",
         merchant_data: { network_id: scenario.networkId, category_code: "5999", name: scenario.merchantName },

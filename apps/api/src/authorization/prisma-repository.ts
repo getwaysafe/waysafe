@@ -36,6 +36,7 @@ import {
   type SpendSnapshot,
 } from "@waysafe/core";
 import {
+  ExternalRefConflictError,
   MandateCreationError,
   type AgentListItem,
   type AuthorizationRepository,
@@ -343,6 +344,15 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       return toStoredAuthorization(created);
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+        // D-74: two different uniqueness constraints land here, and the
+        // caller has to tell them apart -- an idempotency-key collision is
+        // a caller that skipped its own check, while an external-ref
+        // collision is a rail redelivering an event already decided, which
+        // is normal and must replay rather than error.
+        const target = JSON.stringify(err.meta?.target ?? "");
+        if (input.externalRef && target.includes("externalRef")) {
+          throw new ExternalRefConflictError(input.externalRef);
+        }
         throw new Error(
           `idempotency key already claimed; caller must check findByIdempotencyKey first`,
         );
