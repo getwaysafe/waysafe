@@ -579,6 +579,32 @@ export async function handleIssuingAuthorizationRequest(
       ledgerEntries,
     });
 
+      // D-76: the evidence event is appended INSIDE this transaction,
+      // before any answer reaches Stripe. The decision, its ledger hold and
+      // its evidence event now commit or roll back together -- there is no
+      // longer a window in which a committed hold exists with no record of
+      // why. `withOrganizationLock` joins this transaction rather than
+      // opening a competing one (see db/transaction-context.ts).
+      await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
+        repos.evidence.appendEvent({
+          organizationId: instrument.organization_id,
+          type: "enforcement.stripe_issuing.decision",
+          subjectType: "authorization",
+          subjectId: authorization_.id,
+          payload: {
+            decision: result.decision,
+            reason_codes: result.reasons.map((r) => r.code),
+            amount: parsed.action.amount,
+            currency: parsed.action.currency,
+            merchant: parsed.action.merchant,
+            stripe_authorization_id: authorization.id,
+            card_id: authorization.card.id,
+            instrument_id: instrument.id,
+          },
+          now,
+        }),
+      );
+
       return { result, authorization: authorization_ };
     });
 
@@ -594,28 +620,35 @@ export async function handleIssuingAuthorizationRequest(
       const winner = await repos.authorization.findByExternalRef(authorization.id);
       if (winner) return replayOf(winner);
     }
-    throw err;
+    // D-76: anything else -- including a failure to append the evidence
+    // event -- rolled the whole transaction back, so no authorization row
+    // and no ledger hold survive. Answer Stripe with an explicit decline
+    // rather than letting the exception become a 500 and relying on
+    // Stripe's own decline-on-timeout setting to fail closed for us.
+    // Never an approval without a record.
+    const unrecorded: EngineResult = {
+      decision: Decision.DENY,
+      reasons: [
+        {
+          code: ReasonCode.DENY_DECISION_NOT_RECORDED,
+          message:
+            "The decision could not be durably recorded, so it was not authorized.",
+        },
+      ],
+    };
+    // Same precedent as sweepExpiredStepUps: this handler has no logger of
+    // its own, and losing the cause of a decline would be worse than a
+    // console write.
+    console.error(
+      `issuing decision for ${authorization.id} could not be recorded; declined:`,
+      err,
+    );
+    return {
+      response: await adapter.toResponse(unrecorded, authorization),
+      mandateId,
+      authorizationId: null,
+    };
   }
-
-  await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
-    repos.evidence.appendEvent({
-      organizationId: instrument.organization_id,
-      type: "enforcement.stripe_issuing.decision",
-      subjectType: "authorization",
-      subjectId: stored.authorization.id,
-      payload: {
-        decision: stored.result.decision,
-        reason_codes: stored.result.reasons.map((r) => r.code),
-        amount: parsed.action.amount,
-        currency: parsed.action.currency,
-        merchant: parsed.action.merchant,
-        stripe_authorization_id: authorization.id,
-        card_id: authorization.card.id,
-        instrument_id: instrument.id,
-      },
-      now,
-    }),
-  );
 
   return { response: await adapter.toResponse(stored.result, authorization), mandateId, authorizationId: stored.authorization.id };
 }

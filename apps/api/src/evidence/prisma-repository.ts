@@ -21,7 +21,6 @@
  * one for a forged row needs the key, not write access here.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   exportPublicKeyBase64,
@@ -33,10 +32,14 @@ import {
 } from "@waysafe/core";
 import type { EvidenceSigner } from "../signing/types.js";
 import type { EvidenceRepository, NewEvidenceEvent } from "./types.js";
+import { activeTransaction } from "../db/transaction-context.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-const orgLockContext = new AsyncLocalStorage<Prisma.TransactionClient>();
+/** D-76: the same store `PrismaAuthorizationRepository` uses, so an evidence
+ * write called from inside a mandate lock joins that transaction rather than
+ * opening a second one on the same pool (the `P2028` starvation D-62 hit). */
+const orgLockContext = activeTransaction;
 
 /** Same rationale as PrismaAuthorizationRepository: Neon's free tier can take
  * several seconds to wake from idle on the first query of a run. */
@@ -71,7 +74,27 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
     return orgLockContext.getStore() ?? this.prisma;
   }
 
+  /**
+   * D-76: joins an already-open transaction when there is one.
+   *
+   * Called from inside `authorization.withMandateLock`, this adds the
+   * organization's row lock to that same transaction and runs `fn` there, so
+   * the decision, its ledger rows and its evidence event commit or roll back
+   * together. Called on its own (D-62's step-up path, `verifyAgentKey`), it
+   * opens its own transaction exactly as before.
+   *
+   * Postgres allows any number of `FOR UPDATE` locks inside one transaction.
+   * Ordering is always mandate-then-organization, so there is no cycle --
+   * see `db/transaction-context.ts`.
+   */
   async withOrganizationLock<T>(organizationId: string, fn: () => Promise<T>): Promise<T> {
+    const joined = orgLockContext.getStore();
+    if (joined) {
+      if (!this.disableLockForTesting) {
+        await joined.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
+      }
+      return fn();
+    }
     return this.prisma.$transaction(async (tx) => {
       if (!this.disableLockForTesting) {
         await tx.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;

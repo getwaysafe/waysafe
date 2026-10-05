@@ -750,30 +750,33 @@ export async function handleX402PaymentRequest(
       ledgerEntries,
     });
 
+    // D-76: inside this transaction, before any co-signature is returned.
+    // Same property as the card rail: the decision, its ledger hold and its
+    // evidence event commit or roll back together.
+    await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
+      repos.evidence.appendEvent({
+        organizationId: instrument.organization_id,
+        type: "enforcement.x402.decision",
+        subjectType: "authorization",
+        subjectId: authorization_.id,
+        payload: {
+          decision: result.decision,
+          reason_codes: result.reasons.map((r) => r.code),
+          amount: parsed?.action.amount ?? null,
+          currency: "USD",
+          merchant: merchantAssertion,
+          resource_url: params.resourceUrl,
+          pay_to: requirement.payTo,
+          asset: requirement.asset,
+          network: requirement.network,
+          instrument_id: instrument.id,
+        },
+        now,
+      }),
+    );
+
     return { result, authorization: authorization_ };
   });
-
-  await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
-    repos.evidence.appendEvent({
-      organizationId: instrument.organization_id,
-      type: "enforcement.x402.decision",
-      subjectType: "authorization",
-      subjectId: stored.authorization.id,
-      payload: {
-        decision: stored.result.decision,
-        reason_codes: stored.result.reasons.map((r) => r.code),
-        amount: parsed?.action.amount ?? null,
-        currency: "USD",
-        merchant: merchantAssertion,
-        resource_url: params.resourceUrl,
-        pay_to: requirement.payTo,
-        asset: requirement.asset,
-        network: requirement.network,
-        instrument_id: instrument.id,
-      },
-      now,
-    }),
-  );
 
   const response = await adapter.toResponse(stored.result, callback);
   if (response.co_signature) {

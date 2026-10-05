@@ -290,6 +290,12 @@ export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP
       "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction (D-68).",
   },
   {
+    code: "DENY_DECISION_NOT_RECORDED",
+    decision: "DENY",
+    description:
+      "The decision could not be durably recorded, so it was not authorized. The decision, its ledger hold and its evidence event commit in one transaction; if that fails, nothing survives and the rail is answered with a decline (D-76).",
+  },
+  {
     code: "DENY_RESOURCE_URL_NOT_PERMITTED",
     decision: "DENY",
     description:

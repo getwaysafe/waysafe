@@ -7859,6 +7859,105 @@ and is visible on the receipt. The riskiest piece is the `lookup` hook: if
 it were ever wrong the connection would fail outright rather than go
 somewhere unintended, since the pinned address is the only one offered.
 
+## D-76 — A decision, its ledger hold and its evidence event are one transaction
+
+**Decision:** the evidence event for a rail decision is appended inside the
+same transaction as the authorization row and its reservation, before any
+answer reaches the rail. If that transaction fails for any reason, nothing
+survives and the rail is answered with an explicit decline carrying
+`DENY_DECISION_NOT_RECORDED`.
+
+**A correction to the brief this came from.** The work was requested as
+"prove that today the handler responds to Stripe before the evidence event
+exists". It does not, and never did. Read against `fe26584`, both rails
+appended the evidence event *before* returning a response. There was no
+window in which Stripe received `approved: true` and the evidence write then
+failed. The test that was asked for could not have been written truthfully,
+so it was not; the ordering property is instead pinned as a regression test,
+and the real defect is tested separately.
+
+**The real defect.** The decision plus its ledger rows committed in one
+transaction. The evidence event was a **second**, separate transaction
+immediately afterwards. A crash or an evidence-store failure between the two
+left a committed authorization row and a committed `RESERVATION` with no
+evidence event — and, since nothing caught the throw, a 500, so Stripe
+declined on its own timeout. Net state: the mandate's budget consumed,
+nothing bought, and no record in the chain of why. That is a completeness gap
+in the opposite direction from the tail-omission one §6 already describes:
+not an event hidden from a verifier, but a decision that was never recorded
+at all.
+
+**Why the write was outside the lock in the first place.** D-62 moved it
+there for a real reason: calling `evidence.withOrganizationLock` from inside
+`authorization.withMandateLock` opened a second, independent Prisma
+`$transaction` on the same pool, which starved the connection and blew the
+20s timeout (`P2028`, confirmed live, not theorised). Closing D-76 therefore
+had to remove that cause rather than ignore it.
+
+**What changed.** The two repositories now share one transaction store
+(`apps/api/src/db/transaction-context.ts`), replacing the private
+`AsyncLocalStorage` each one kept. `withOrganizationLock` checks for an
+already-open transaction: if there is one it adds the organization's row lock
+to *that* transaction and runs, and if there is not it opens its own exactly
+as before. So the nesting that caused `P2028` no longer happens, and D-62's
+own step-up path — which calls the evidence repository outside any mandate
+lock — is unaffected.
+
+Lock ordering is fixed at mandate-then-organization and nothing acquires them
+the other way round, so there is no cycle to deadlock on. That is recorded in
+the new module rather than left as a property someone has to rediscover.
+
+**Both rails, not just the card rail.** `handleX402PaymentRequest` had the
+identical shape and got the identical fix. Checked rather than assumed.
+
+**One new reason code, additive: `DENY_DECISION_NOT_RECORDED`.** A decline
+needs a code — non-negotiable #7 requires every decision branch to return
+one, and an empty `reason_codes` array on a decline tells a receipt nothing.
+No existing code names "the decision could not be stored". There is
+deliberately no path that turns this into an approval, and the handler
+answers the rail explicitly rather than throwing, so failing closed no longer
+depends on Stripe's own decline-on-timeout account setting being on.
+
+**Latency, measured rather than assumed.** Against the real database this
+repository uses (Neon, which adds genuine network latency and can cold-start):
+
+| | median |
+|---|---|
+| evidence append joined to the decision transaction (D-76) | **195ms** |
+| evidence append in its own transaction (the old shape) | **158ms** |
+
+So D-76 costs about **37ms**: one `SELECT ... FOR UPDATE` on the
+organizations row inside a transaction that was already open. It does not add
+a round trip to open a transaction, because it no longer opens a second one.
+
+End-to-end decision latency over five runs was 548–595ms in one measurement
+and 586–1776ms in another, against Stripe's roughly 2000ms window. **The
+dominant term is the database round trip, not this change**, and the 1776ms
+sample is worth stating plainly: against this database a cold connection can
+put a single decision within ~200ms of Stripe's limit, and the fail-closed
+answer in that case is Stripe's own timeout decline. That is a deployment
+property, not something D-76 introduced or can fix, and it is the reason the
+test asserts only an order-of-magnitude bound rather than a tight one — a
+tight bound here would be a flaky test, not a useful one.
+
+**Tests.** `apps/api/src/enforcement/decision-atomicity.test.ts`, 5 cases.
+Two offline: the ordering property pinned, and a failed append producing a
+decline with the new code plus a **control** proving the very next healthy
+request is approved (without which the decline could be a broken handler
+rather than a working one). Three Postgres-gated: the rollback itself — no
+authorization row, no ledger row, no evidence event survive a failed append —
+a control that a healthy append commits all three together, and the latency
+measurement above. The rollback case needs a real transaction, so the
+in-memory repository cannot express it; stated here rather than left for
+someone to discover, same as D-71.
+
+**Change cost if wrong:** the failure direction is a decline. The risk worth
+watching is the shared transaction store: a future caller that acquires the
+organization lock first and then the mandate lock would introduce a deadlock
+cycle that does not exist today. That ordering constraint is documented in
+`transaction-context.ts` itself, where someone adding such a call would see
+it.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

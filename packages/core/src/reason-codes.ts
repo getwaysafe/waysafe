@@ -45,6 +45,18 @@ export const ReasonCode = {
    * fact about a response that does not exist.
    */
   DENY_RESOURCE_URL_NOT_PERMITTED: "DENY_RESOURCE_URL_NOT_PERMITTED",
+  /**
+   * D-76: the decision could not be durably recorded, so it was not
+   * authorized. The decision, its ledger hold and its evidence event commit
+   * in one transaction; if that transaction fails for any reason, nothing
+   * survives and the rail is answered with this rather than an exception.
+   *
+   * Exists because non-negotiable #7 requires every decision branch to
+   * return a code, and because an empty `reason_codes` array on a decline
+   * tells a receipt nothing. There is deliberately no path that turns this
+   * into an approval.
+   */
+  DENY_DECISION_NOT_RECORDED: "DENY_DECISION_NOT_RECORDED",
   DENY_MANDATE_SUPERSEDED: "DENY_MANDATE_SUPERSEDED",
   DENY_MANDATE_NOT_AUTHENTICATED: "DENY_MANDATE_NOT_AUTHENTICATED",
 
@@ -157,6 +169,8 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "The step-up's time limit had already passed, so it can no longer be approved.",
   DENY_RESOURCE_URL_NOT_PERMITTED:
     "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read.",
+  DENY_DECISION_NOT_RECORDED:
+    "The decision could not be durably recorded, so it was not authorized.",
   DENY_MANDATE_SUPERSEDED:
     "The mandate version referenced has been replaced by a newer version.",
   DENY_MANDATE_NOT_AUTHENTICATED:

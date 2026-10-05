@@ -16,7 +16,6 @@
  * See DECISIONS.md D-15.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
   ID_PREFIX,
@@ -55,11 +54,14 @@ import {
   type StoredAuthorization,
 } from "./types.js";
 import { assertValidActor } from "./actor.js";
+import { activeTransaction } from "../db/transaction-context.js";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-/** Holds the active locked transaction for the lifetime of a `withMandateLock` callback. */
-const mandateLockContext = new AsyncLocalStorage<Prisma.TransactionClient>();
+/** D-76: the shared store, so `PrismaEvidenceRepository` can join this
+ * transaction instead of opening a competing one. Was a module-private
+ * AsyncLocalStorage here until D-76. */
+const mandateLockContext = activeTransaction;
 
 /**
  * Generous timeouts: Neon's free tier scales to zero when idle, so the first
