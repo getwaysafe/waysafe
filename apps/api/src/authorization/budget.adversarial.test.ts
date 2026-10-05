@@ -624,7 +624,7 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     ).rejects.toThrow();
   });
 
-  it("(e1) the step-up's TTL is never re-checked under the lock, so a lapsed step-up is still approvable", async () => {
+  it("(e1) closed by D-73: a step-up whose TTL has lapsed is refused under the lock, not approved", async () => {
     const { approver, spender, repo, repos } = await setUpSpenderAndApprover();
 
     const first = await authorize(repos, {
@@ -636,13 +636,12 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     if (first.kind !== "decided") throw new Error("unreachable");
     expect(first.authorization.step_up_expires_at).not.toBeNull();
 
-    // Approve well after the TTL. In the HTTP path server.ts runs
-    // expireIfNeeded first, so reaching this needs the TTL to lapse between
-    // that check and the lock -- a race, not a free pass. But
-    // resolveStepUpAsApprover re-reads the row under the lock purely to
-    // check `status === "PENDING_STEP_UP"` and never looks at
-    // `stepUpExpiresAt`, so the window is real and the service has no
-    // defence of its own.
+    // Approve well after the TTL, calling the service directly -- which is
+    // what a real race looks like: server.ts runs expireIfNeeded first,
+    // outside the lock, so before D-73 a TTL that lapsed between that
+    // check and the lock was approved, and the service itself had no
+    // defence. The check now lives under the same lock that takes the
+    // money, reading the row's own step_up_expires_at.
     const wayLater = new Date(W1.getTime() + 86_400_000);
     const outcome = await resolveStepUpAsApprover(repos, {
       organizationId: spender.organizationId,
@@ -655,14 +654,33 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     });
     expect(outcome.kind).toBe("resolved");
     if (outcome.kind !== "resolved") throw new Error("unreachable");
-    expect(outcome.authorization.status).toBe("STEP_UP_APPROVED");
+    expect(outcome.authorization.status).toBe("EXPIRED"); // was STEP_UP_APPROVED
 
     const fresh = await repo.getAuthorization(first.authorization.id);
-    expect(fresh?.status).toBe("STEP_UP_APPROVED");
-    expect(new Date(fresh!.step_up_expires_at!).getTime()).toBeLessThan(wayLater.getTime());
+    expect(fresh?.status).toBe("EXPIRED");
+
+    // And it is not executable.
+    await expect(
+      repo.recordExecution(
+        {
+          authorizationId: first.authorization.id,
+          mandateId: spender.mandateId,
+          provider: "stripe",
+          providerReference: "pi_test_finding5e1",
+          providerFee: 0,
+        },
+        wayLater,
+      ),
+    ).rejects.toThrow(/not executable/);
+
+    // The refusal is recorded with its own code, so a receipt says why.
+    const events = await evidence.listForOrganization(spender.organizationId);
+    const declined = events.filter((e) => e.type === "step_up.declined");
+    expect(declined.length).toBeGreaterThan(0);
+    expect(JSON.stringify(declined.at(-1)?.payload)).toContain("DENY_STEP_UP_EXPIRED");
   });
 
-  it("(e2) the ORIGINAL mandate's state is never re-validated, so a revoked mandate's step-up is still approvable", async () => {
+  it("(e2) closed by D-73: a revoked mandate's step-up is refused, with DENY_MANDATE_REVOKED", async () => {
     const { approver, spender, repo, repos } = await setUpSpenderAndApprover();
 
     const first = await authorize(repos, {
@@ -680,9 +698,10 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
       data: { status: "REVOKED" },
     });
 
-    // resolveMandateGate runs against the APPROVER's mandate only. Nothing
-    // re-checks that the mandate which asked for the money is still allowed
-    // to have it.
+    // resolveMandateGate validates the APPROVER's mandate, and evaluate()
+    // runs against the APPROVER's policy, so before D-73 nothing re-asked
+    // whether the mandate that wanted the money was still allowed to have
+    // it. It is now asked under the same lock that takes the money.
     const outcome = await resolveStepUpAsApprover(repos, {
       organizationId: spender.organizationId,
       stepUp: first.authorization,
@@ -694,25 +713,30 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     });
     expect(outcome.kind).toBe("resolved");
     if (outcome.kind !== "resolved") throw new Error("unreachable");
-    expect(outcome.authorization.status).toBe("STEP_UP_APPROVED");
+    expect(outcome.authorization.status).toBe("STEP_UP_DECLINED"); // was STEP_UP_APPROVED
 
-    // And it is executable: a revoked mandate's payment goes through.
-    const executed = await repo.recordExecution(
-      {
-        authorizationId: first.authorization.id,
-        mandateId: spender.mandateId,
-        provider: "stripe",
-        providerReference: "pi_test_finding5e2",
-        providerFee: 0,
-      },
-      W1,
-    );
-    expect(executed.status).toBe("EXECUTED");
+    const events = await evidence.listForOrganization(spender.organizationId);
+    expect(JSON.stringify(events.at(-1)?.payload)).toContain("DENY_MANDATE_REVOKED");
+
+    // And a revoked mandate's payment no longer goes through.
+    await expect(
+      repo.recordExecution(
+        {
+          authorizationId: first.authorization.id,
+          mandateId: spender.mandateId,
+          provider: "stripe",
+          providerReference: "pi_test_finding5e2",
+          providerFee: 0,
+        },
+        W1,
+      ),
+    ).rejects.toThrow(/not executable/);
   });
 
-  it("(e3) the mandate's own expires_at is not re-checked either -- an expired policy's step-up is approvable", async () => {
-    // Same hole, different clock: not the step-up TTL and not the mandate
-    // row's status, but the policy's own expiry date.
+  it("(e3) closed by D-73: an expired policy's step-up is refused, with DENY_MANDATE_EXPIRED", async () => {
+    // Same hole, a third clock: not the step-up TTL and not the mandate
+    // row's status, but the policy's own expiry date. A fresh authorize()
+    // always denied this; the approval path never looked.
     const approver = await seedMandate(
       policyFrom({ cumulative_limits: [{ window: "month", max_amount: toMinorUnits(100000, "USD") }] }),
     );
@@ -764,7 +788,97 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     });
     expect(outcome.kind).toBe("resolved");
     if (outcome.kind !== "resolved") throw new Error("unreachable");
+    // The step-up's own TTL (900s) lapsed long before W2 too, so the TTL
+    // check fires first and this lands EXPIRED rather than STEP_UP_DECLINED.
+    // Either way it is not approved, which is the property under test.
+    expect(outcome.authorization.status).not.toBe("STEP_UP_APPROVED");
+  });
+
+  it("(e3b) ...and with a TTL long enough to survive, the expiry check is what refuses it", async () => {
+    // (e3) alone cannot distinguish the policy-expiry check from the TTL
+    // check, since both have lapsed by W2. This isolates it: a TTL that
+    // outlives the boundary, so only the policy's expires_at can refuse.
+    const approver = await seedMandate(
+      policyFrom({ cumulative_limits: [{ window: "month", max_amount: toMinorUnits(100000, "USD") }] }),
+    );
+    const spender = await seedMandate(
+      policyFrom({
+        expires_at: "2026-08-31T00:00:00.000Z",
+        step_up: { ttl_seconds: 60 * 60 * 24 * 90, above_amount: toMinorUnits(50, "USD") },
+        accounting: { reserve_on_step_up: false },
+        escalation: { approvers: [approver.mandateId] },
+      }),
+      { organizationId: approver.organizationId },
+    );
+    const repo = new PrismaAuthorizationRepository(prisma, DIRECTORY);
+    const repos: AuthorizeRepos = { authorization: repo, agentKeys, evidence };
+
+    const first = await authorize(repos, {
+      organizationId: spender.organizationId,
+      request: request(spender.organizationId, spender.agentId, spender.principalId, 80),
+      now: W1,
+      apiKey: spender.apiKey,
+    });
+    if (first.kind !== "decided") throw new Error("unreachable");
+    expect(first.authorization.decision).toBe(Decision.STEP_UP);
+    // The TTL genuinely outlives the window boundary.
+    expect(new Date(first.authorization.step_up_expires_at!).getTime()).toBeGreaterThan(
+      W2.getTime(),
+    );
+
+    const outcome = await resolveStepUpAsApprover(repos, {
+      organizationId: spender.organizationId,
+      stepUp: first.authorization,
+      approverAgentId: approver.agentId,
+      approverPrincipalId: approver.principalId,
+      approverMandateId: approver.mandateId,
+      apiKey: approver.apiKey,
+      now: W2,
+    });
+    expect(outcome.kind).toBe("resolved");
+    if (outcome.kind !== "resolved") throw new Error("unreachable");
+    expect(outcome.authorization.status).toBe("STEP_UP_DECLINED");
+
+    const events = await evidence.listForOrganization(spender.organizationId);
+    expect(JSON.stringify(events.at(-1)?.payload)).toContain("DENY_MANDATE_EXPIRED");
+  });
+
+  it("CONTROL (D-73): an active mandate's in-TTL step-up is still approved, and must stay so", async () => {
+    const { approver, spender, repo, repos } = await setUpSpenderAndApprover();
+
+    const first = await authorize(repos, {
+      organizationId: spender.organizationId,
+      request: request(spender.organizationId, spender.agentId, spender.principalId, 80),
+      now: W1,
+      apiKey: spender.apiKey,
+    });
+    if (first.kind !== "decided") throw new Error("unreachable");
+
+    // Well inside the 900s TTL, mandate ACTIVE, policy not expired.
+    const outcome = await resolveStepUpAsApprover(repos, {
+      organizationId: spender.organizationId,
+      stepUp: first.authorization,
+      approverAgentId: approver.agentId,
+      approverPrincipalId: approver.principalId,
+      approverMandateId: approver.mandateId,
+      apiKey: approver.apiKey,
+      now: new Date(W1.getTime() + 60_000),
+    });
+    expect(outcome.kind).toBe("resolved");
+    if (outcome.kind !== "resolved") throw new Error("unreachable");
     expect(outcome.authorization.status).toBe("STEP_UP_APPROVED");
+
+    const executed = await repo.recordExecution(
+      {
+        authorizationId: first.authorization.id,
+        mandateId: spender.mandateId,
+        provider: "stripe",
+        providerReference: "pi_test_d73_control",
+        providerFee: 0,
+      },
+      W1,
+    );
+    expect(executed.status).toBe("EXECUTED");
   });
 
   // =========================================================================
@@ -773,7 +887,7 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
 
   /** A spender whose step-up DOES reserve, so there is a reservation to
    * release across a boundary. $100/month cap. */
-  async function setUpReservingSpender(options: { capUsd?: number } = {}) {
+  async function setUpReservingSpender(options: { capUsd?: number; ttlSeconds?: number } = {}) {
     const approver = await seedMandate(
       policyFrom({ cumulative_limits: [{ window: "month", max_amount: toMinorUnits(100000, "USD") }] }),
     );
@@ -782,7 +896,10 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
         cumulative_limits: [
           { window: "month", max_amount: toMinorUnits(options.capUsd ?? 100, "USD") },
         ],
-        step_up: { above_amount: toMinorUnits(50, "USD"), ttl_seconds: 900 },
+        step_up: {
+          above_amount: toMinorUnits(50, "USD"),
+          ttl_seconds: options.ttlSeconds ?? 900,
+        },
         accounting: { reserve_on_step_up: true },
         escalation: { approvers: [approver.mandateId] },
       }),
@@ -896,10 +1013,16 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
   });
 
   it("(c) the invariant the fix must hold: per-window SUM equals SUM of settled, and is never negative", async () => {
-    // A deliberately generous cap: the subject here is which window each row
-    // lands in, so a ceiling that denied the second or third hold would stop
-    // the test before it ever reached the boundary.
-    const { approver, spender, repo, repos } = await setUpReservingSpender({ capUsd: 100_000 });
+    // A deliberately generous cap AND a TTL that outlives the boundary: the
+    // subject here is which window each row lands in, so neither a ceiling
+    // that denied the second hold nor D-73's TTL check refusing a
+    // month-old step-up should stop the test before it reaches the
+    // boundary. Both of those are tested on their own elsewhere in this
+    // file -- (a)/(a2) for the cap, (e1) for the TTL.
+    const { approver, spender, repo, repos } = await setUpReservingSpender({
+      capUsd: 100_000,
+      ttlSeconds: 60 * 60 * 24 * 90,
+    });
 
     // Three reservations in W1 above the step-up threshold.
     const amounts = [60, 70, 80];

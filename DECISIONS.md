@@ -7415,6 +7415,108 @@ notice is that a payment authorized at 23:59 and captured at 00:01 now
 counts against the earlier day — which is the intended reading of a daily
 limit, and the one a receipt can defend.
 
+## D-73 — Approval re-validates the spending mandate under the lock
+
+**Decision:** before an approver's ALLOW consumes anything, the step-up's own
+TTL and the **original** mandate's authority are re-read under the same row
+lock that takes the money (#6).
+
+Split out of review finding 5, which bundled it with the ledger defect
+(D-71). The two are different failures of the same function: D-71 is
+*approval does not charge the spender's budget*, this is *approval does not
+re-ask whether the spender may still spend*. One lock, one re-read, two
+independent holes.
+
+**What was re-checked under the lock before D-73: the status, and nothing
+else.** `resolveStepUpAsApprover` re-read the authorization to confirm it was
+still `PENDING_STEP_UP` (D-62 Addition D, single-use). Everything else it
+trusted:
+
+| Lapsed between step-up and approval | Before D-73 |
+|---|---|
+| the step-up's own TTL | **approved**, and executable |
+| the spending mandate was REVOKED | **approved**, and executable |
+| the spending mandate's policy `expires_at` passed | **approved**, and executable |
+
+The TTL case deserves the sharpest statement. It was not unguarded —
+`server.ts` runs `expireIfNeeded` before calling this — but that check sits
+*outside* the lock, so a TTL lapsing in between was approved, and the service
+itself had no defence. A guarantee that depends on one caller remembering to
+call one helper first is not a guarantee; non-negotiable #6's whole point is
+that the check and the charge happen inside one lock.
+
+The revocation case is worse than the TTL one even though it is less subtle.
+`resolveMandateGate` validates the *approver's* mandate, and `evaluate()`
+runs against the *approver's* policy — so after a step-up was raised, nothing
+ever re-consulted the mandate that actually wanted the money. A principal
+could revoke the spending mandate, the one unambiguous "stop" in the system,
+and a pending step-up stayed approvable and stayed executable.
+
+**One new reason code, which is the conditional addition: `DENY_STEP_UP_EXPIRED`.**
+It did not exist — checked before adding, as required. `DENY_MANDATE_EXPIRED`
+and `DENY_MANDATE_REVOKED` already existed and are re-used unchanged, not
+renamed (#7). The new code is genuinely a distinct condition: the mandate's
+authority is intact and the window to *resolve* this particular step-up has
+closed. Nothing else in the enum said that — a step-up swept by the expiry
+worker carries no decision of its own, so there had never been a resolution
+attempt that needed a code.
+
+**Outcomes.** A lapsed TTL resolves the step-up as `"expired"`; a mandate
+that has lost its authority resolves it as `"declined"`. Both are
+`"resolved"` rather than `"rejected"`: the step-up is genuinely dead, not an
+attempt being refused, so it must be *consumed* and any reservation released
+instead of left open for a retry by the same approver a second later. Both
+write the real reason codes into the `step_up.declined` evidence event, so a
+receipt says which clock ran out.
+
+**`gateMandateStatus` moved to `authorization/mandate-gate.ts`.** It was
+private to `enforcement/stripe-issuing.ts`, and the approval path needs the
+same question answered. A second copy of a table mapping mandate status to
+reason code is the kind of duplication that drifts silently — one copy gains
+a status the other never hears about — so it moved verbatim rather than being
+re-typed. The card rail's behaviour is unchanged.
+
+Policy expiry is a *separate* function there, `gateMandateExpiry`, not folded
+in: `MandateStatus.EXPIRED` is a row something already marked, while a
+policy's `expires_at` passing is a clock fact nothing has written down yet.
+The engine already denies on the latter with the same code, so the card rail
+keeps calling only `gateMandateStatus` and nothing about it changes. The
+approval path needs it explicitly precisely because it runs no `evaluate()`
+against the original mandate's policy.
+
+**Tests.** (e1)/(e2)/(e3) flipped from "still approvable" to refused with the
+right code, each also asserting the authorization is no longer executable and
+that the evidence event carries the code. Two added:
+
+- **(e3b)** isolates the policy-expiry check. (e3) alone cannot distinguish
+  it from the TTL check, because by W2 both have lapsed and the TTL fires
+  first. (e3b) gives the step-up a 90-day TTL that genuinely outlives the
+  boundary — asserted, not assumed — so only `expires_at` can refuse it, and
+  asserts `DENY_MANDATE_EXPIRED` specifically.
+- **CONTROL** — an ACTIVE mandate's in-TTL step-up is still approved and
+  still executes. Without it, every (e) test would pass against a function
+  that refused everything.
+
+**Existing expectations that encoded the bug: none.** Every approver test in
+the suite resolves its step-up at the same instant it was raised, against an
+ACTIVE mandate — so no existing case ever let any of these three clocks run
+out. D-64's lesson once more: three real holes, all invisible to a suite that
+never advanced the clock between two calls.
+
+**Change cost if wrong:** two extra reads inside a lock already held, and the
+failure direction is a refusal rather than a payment. The visible behaviour
+change is that an approver acting on a step-up whose TTL has quietly passed
+now gets a declined step-up instead of a successful approval — which is what
+the TTL was for.
+
+**Still open, deliberately:** the approval does not re-evaluate the
+*original* mandate's spending limits, only its authority. D-71 makes the
+approval take a real hold on that mandate, so a cap breached by other spend
+in the interim is caught at execution rather than at approval. Narrowing that
+means running the original policy's engine a second time at approval, which
+is a behaviour change with its own design questions (which `now`, which
+merchant trust) and is not in this entry's scope.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

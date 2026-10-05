@@ -37,6 +37,7 @@ import { extractKeyPrefix } from "../agent-keys/keys.js";
 import type { AgentKeyRepository } from "../agent-keys/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import { hashAuthorizationRequest } from "./idempotency.js";
+import { gateMandateExpiry, gateMandateStatus } from "./mandate-gate.js";
 import type { AuthorizationRepository, NewLedgerEntry, StoredAuthorization } from "./types.js";
 
 export type AuthorizeResult =
@@ -425,6 +426,51 @@ export async function resolveStepUpAsApprover(
       if (!fresh) throw new Error(`authorization vanished mid-resolution: ${stepUp.id}`);
       if (fresh.status !== "PENDING_STEP_UP") {
         return { kind: "replayed" as const, authorization: fresh };
+      }
+
+      // D-73: the step-up's own TTL, re-read under the lock.
+      //
+      // Until D-73 the only thing re-checked here was the status. The HTTP
+      // route runs `expireIfNeeded` *before* calling this, outside the
+      // lock, so a TTL that lapsed in between was approved -- and the
+      // service had no defence of its own, which made the whole guarantee
+      // depend on one caller remembering to call one helper first. This
+      // check is where it belongs: the same row lock that takes the money
+      // (#6), reading the row's own `step_up_expires_at` rather than
+      // trusting the copy the caller passed in.
+      if (fresh.step_up_expires_at && new Date(fresh.step_up_expires_at).getTime() <= now.getTime()) {
+        const expiredReasons: Reason[] = [
+          {
+            code: ReasonCode.DENY_STEP_UP_EXPIRED,
+            message: `The step-up expired at ${fresh.step_up_expires_at} and can no longer be approved.`,
+          },
+        ];
+        const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "expired", now);
+        return { kind: "declined" as const, authorization: updated, reasons: expiredReasons };
+      }
+
+      // D-73: and the ORIGINAL mandate's own authority, likewise.
+      //
+      // `resolveMandateGate` above validated the *approver's* mandate, and
+      // `evaluate()` below runs against the *approver's* policy, so nothing
+      // re-asked whether the mandate that wants the money is still allowed
+      // to have it. A principal could revoke the spending mandate -- the
+      // one unambiguous "stop" in the system -- and a pending step-up was
+      // still approvable and still executable. Same for a mandate marked
+      // EXPIRED or SUPERSEDED, and for a policy whose own `expires_at` had
+      // passed (a fresh authorize() denies that; the approval did not).
+      //
+      // Read inside the lock, not reused from the copy fetched above for
+      // the approvers check: the point is the state *now*.
+      const originalUnderLock = await repo.getMandateDetail(stepUp.mandate_id);
+      const originalGate =
+        gateMandateStatus(originalUnderLock) ?? gateMandateExpiry(originalUnderLock, now);
+      if (originalGate) {
+        // Declined, not "rejected": the step-up is genuinely dead rather
+        // than this attempt being refused, so it must be consumed and any
+        // reservation released instead of left open for a retry.
+        const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "declined", now);
+        return { kind: "declined" as const, authorization: updated, reasons: originalGate };
       }
 
       const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);

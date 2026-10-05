@@ -23,6 +23,14 @@ export const ReasonCode = {
   DENY_NO_ACTIVE_MANDATE: "DENY_NO_ACTIVE_MANDATE",
   DENY_MANDATE_EXPIRED: "DENY_MANDATE_EXPIRED",
   DENY_MANDATE_REVOKED: "DENY_MANDATE_REVOKED",
+  /**
+   * D-73: the step-up's own TTL had already passed when an approver tried
+   * to resolve it. Distinct from DENY_MANDATE_EXPIRED (the mandate's
+   * authority lapsed) and from a step-up swept by the expiry worker (which
+   * has no decision of its own to carry a code) -- this is a resolution
+   * attempt refused because the window to resolve it had closed.
+   */
+  DENY_STEP_UP_EXPIRED: "DENY_STEP_UP_EXPIRED",
   DENY_MANDATE_SUPERSEDED: "DENY_MANDATE_SUPERSEDED",
   DENY_MANDATE_NOT_AUTHENTICATED: "DENY_MANDATE_NOT_AUTHENTICATED",
 
@@ -131,6 +139,8 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "No active mandate delegates this authority to this agent.",
   DENY_MANDATE_EXPIRED: "The mandate has expired.",
   DENY_MANDATE_REVOKED: "The mandate was revoked by the principal.",
+  DENY_STEP_UP_EXPIRED:
+    "The step-up's time limit had already passed, so it can no longer be approved.",
   DENY_MANDATE_SUPERSEDED:
     "The mandate version referenced has been replaced by a newer version.",
   DENY_MANDATE_NOT_AUTHENTICATED:

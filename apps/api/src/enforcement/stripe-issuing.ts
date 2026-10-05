@@ -46,6 +46,9 @@ import {
   type Reason,
 } from "@waysafe/core";
 import type { AuthorizationRepository, MandateDetail, NewLedgerEntry } from "../authorization/types.js";
+// D-73: moved out of this file so the step-up approval path reads the same
+// status table instead of a second copy of it.
+import { gateMandateStatus } from "../authorization/mandate-gate.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import type { InstrumentRepository } from "../instruments/types.js";
 
@@ -405,44 +408,6 @@ export interface IssuingEnforcementRepos {
  * (D-32 item 3) -- so only the mandate's own status is checked. `evaluate()`
  * still separately checks `policy.expires_at` once this gate passes.
  */
-function gateMandateStatus(detail: MandateDetail | null): Reason[] | null {
-  if (!detail) {
-    return [
-      {
-        code: ReasonCode.DENY_NO_ACTIVE_MANDATE,
-        message: "No mandate is associated with the instrument presented for this authorization.",
-      },
-    ];
-  }
-
-  const statusReason: Partial<Record<MandateStatus, Reason>> = {
-    EXPIRED: {
-      code: ReasonCode.DENY_MANDATE_EXPIRED,
-      message: "The mandate has expired.",
-    },
-    REVOKED: {
-      code: ReasonCode.DENY_MANDATE_REVOKED,
-      message: "The mandate was revoked by the principal.",
-    },
-    SUPERSEDED: {
-      code: ReasonCode.DENY_MANDATE_SUPERSEDED,
-      message: "The mandate version referenced has been replaced by a newer version.",
-    },
-    PENDING_AUTHENTICATION: {
-      code: ReasonCode.DENY_MANDATE_NOT_AUTHENTICATED,
-      message: "The mandate was never authenticated by the principal.",
-    },
-    DRAFT: {
-      code: ReasonCode.DENY_MANDATE_NOT_AUTHENTICATED,
-      message: "The mandate was never confirmed and authenticated by the principal.",
-    },
-  };
-
-  if (detail.status === "ACTIVE") return null;
-  const reason = statusReason[detail.status];
-  return [reason ?? { code: ReasonCode.DENY_NO_ACTIVE_MANDATE, message: "The mandate is not active." }];
-}
-
 export interface IssuingDecision {
   response: StripeIssuingResponse;
   /** Null when no instrument could be resolved at all -- nothing to write
