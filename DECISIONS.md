@@ -7144,6 +7144,85 @@ contract. The real cost sits in the added rule — rail-attested `domain`
 verifying without a directory hit. If that is ever wrong, the x402 domain
 allowlist path is what breaks, loudly, at STEP_UP rather than at ALLOW.
 
+## D-70 — The merchant directory is exact-match, not suffix-match (self-found)
+
+**Decision:** `createStaticDirectory`'s `lookupDomain` matches a host
+exactly. An entry may list additional exact `hosts` it covers, or set
+`include_subdomains` to accept its whole zone deliberately. Nothing else
+matches.
+
+**Not from the review.** Found while writing D-69's case (f4): I expected an
+asserted subdomain of a listed merchant to resolve ASSERTED, wrote that as
+the assertion, and was wrong. `lookupDomain` fell back to
+`domainMatches(known, normalized)`, so *any* subdomain of a listed merchant
+hit its parent's directory entry and resolved VERIFIED.
+
+Nothing anywhere checked that the party asserting
+`attacker-controlled.staples.com` controlled it. An agent simply typed the
+string. So an agent could **mint** VERIFIED merchant trust for any listed
+merchant at will — not weaken it, not guess at it, mint it — which is the
+same class of defect as non-negotiable #3's original "the agent types
+Staples", with one extra label on the front.
+
+Paired with the D-69 bleed it was worse than a weak signal: the minted
+domain laundered the agent's own `psp_account` straight through to ALLOW,
+and the real `staples.com` never had to be involved. D-69 closed the
+laundering half. This closes the minting half. Each was independently
+sufficient for the attack, which is why they are separate commits.
+
+**Allowlist suffix matching is deliberately untouched**, and that asymmetry
+is the point rather than an inconsistency. `findMatchingRef` still uses
+`domainMatches`, so a principal who allowlists `staples.com` still matches
+`shop.staples.com`. That entry was authored by the *principal*, about a
+merchant the principal chose, so its breadth is the principal's own call.
+The directory is *Waysafe's* claim about a third party's identity, and
+breadth there is Waysafe vouching for hosts it never looked at. Those are
+not the same act and should not have the same default.
+
+**The directory diff is empty, and that is the honest answer.** Every entry
+in every `createStaticDirectory` call in this repo is an apex domain —
+`staples.com`, `amazon.com`, `bestbuy.com`, `acmecloud-billing.com` — so
+none needed a `hosts` list. Checked rather than assumed: nothing in
+`examples/`, `/story`, `/film`, `/demo` or the `/proof` capture asserts a
+merchant subdomain. The one domain in the committed `/proof` chain is
+`127.0.0.1`, the x402 demo merchant's host, which is rail-attested under
+D-69 and never touches the directory. The only two places a subdomain
+appears at all are tests about this mechanism itself.
+
+**One existing expectation encoded the defect** — D-69 had none, this has
+one. `evaluate.test.ts`'s "a subdomain of an allowlisted domain still
+matches and verifies" asserted `Decision.ALLOW` for `shop.staples.com`, and
+in doing so conflated the two halves this entry separates: that the
+principal's allowlist matched, and that Waysafe had verified the host. It is
+now two tests. The first asserts `shop.staples.com` matches the allowlist
+and still reaches only STEP_UP, with `STEP_UP_MERCHANT_UNVERIFIED` and
+specifically *not* `STEP_UP_MERCHANT_NOT_ALLOWLISTED` — proving the suffix
+rule on the principal's side survived. The second asserts it ALLOWs once a
+directory entry actually lists that host. `merchant.test.ts`'s "matches a
+subdomain of an allowlisted merchant" needed no change, because it only ever
+asserted `.matched`.
+
+**Tests**, in the same commit as the fix per non-negotiable #3's clause:
+a new `D-70` block in `merchant.adversarial.test.ts`. The attack —
+`attacker-controlled.staples.com` resolves ASSERTED with a null
+`verified_at`, and cannot satisfy even an allowlist naming the real parent.
+The minting-plus-laundering chain end to end, with both identifiers now
+unverified. A control that a listed `checkout.staples.com` and
+`pay.staples.com` are VERIFIED, carry the entry's MCC, and do not drag a
+third unlisted host in with them. A control that `include_subdomains` still
+accepts a whole zone when set, with its own negative control (the same
+lookup against the same entry without the flag is ASSERTED, so the flag is
+what the test is testing) and a check that a lookalike parent
+(`staples.com.evil.example`) is outside the zone either way.
+
+**Change cost if wrong:** a legitimate merchant whose checkout lives on a
+subdomain now caps at STEP_UP until someone lists the host — a one-line
+directory edit, failing in the direction that asks a human rather than the
+direction that pays an attacker. The real replacement for the static
+directory (a live merchant data source, still unbuilt) inherits this
+contract: breadth is something an entry states, never something a pattern
+infers.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

@@ -355,25 +355,26 @@ describe("FINDING 4: trust is per-merchant, not per-identifier (breaks non-negot
     expect(resolved.trust).toBe(MerchantTrust.ASSERTED);
   });
 
-  it("(f4) THE AMPLIFIER: the directory suffix-matches, so ANY asserted subdomain of a listed merchant is VERIFIED", () => {
-    // I expected ASSERTED here and was wrong -- `createStaticDirectory`'s
-    // `lookupDomain` falls back to `domainMatches(known, normalized)`, so a
-    // subdomain hits the directory entry for its parent.
+  it("(f4) THE AMPLIFIER, closed by D-70: an asserted subdomain of a listed merchant is no longer VERIFIED", () => {
+    // I expected ASSERTED here originally and was wrong --
+    // `createStaticDirectory`'s `lookupDomain` fell back to
+    // `domainMatches(known, normalized)`, so a subdomain hit the directory
+    // entry for its parent. Nothing anywhere verified that the party
+    // asserting "checkout.staples.com" controlled it; an agent simply typed
+    // the string. So an agent could MINT verified trust for any listed
+    // merchant at will, and then launder its own PSP id through it via (a) --
+    // without the real staples.com being involved at all.
     //
-    // Nothing anywhere verifies that the party asserting
-    // "checkout.staples.com" controls it. An agent simply types the string.
-    // So an agent can MINT verified trust for any listed merchant at will,
-    // and then launder its own PSP id through it via (a) -- without needing
-    // the real staples.com to be involved at all.
+    // D-69 closed the laundering half; D-70 closed the minting half. See the
+    // D-70 block at the bottom of this file for the full case.
     const resolved = resolveMerchant(
       { domain: "checkout.staples.com" },
       DIRECTORY,
       MerchantAttestationSource.AGENT,
     );
-    expect(resolved.trust).toBe(MerchantTrust.VERIFIED);
-    expect(resolved.resolution_source).toBe("directory");
+    expect(resolved.trust).toBe(MerchantTrust.ASSERTED); // was VERIFIED
+    expect(resolved.resolution_source).toBe("assertion"); // was "directory"
 
-    // Any invented label works, including one that reads as hostile.
     // D-69 closed the laundering half of this: the invented subdomain still
     // verifies as a DOMAIN identifier (that is D-70's job), but it can no
     // longer vouch for a psp_account sibling.
@@ -566,5 +567,135 @@ describe("FINDING 4: trust is per-merchant, not per-identifier (breaks non-negot
     const result = satisfiesAllowlist([{ scheme: MerchantScheme.DOMAIN, value: "staples.com" }], resolved);
     expect(result.matched).toBe(true);
     expect(result.verified).toBe(true);
+  });
+});
+
+/**
+ * D-70 -- SELF-FOUND, not in the review.
+ *
+ * Found while writing D-69's case (f4): I expected an asserted subdomain of
+ * a listed merchant to be ASSERTED, asserted that, and was wrong. The
+ * directory suffix-matched, so an agent could mint VERIFIED trust for any
+ * listed merchant by typing a hostname nobody had ever checked.
+ *
+ * Non-negotiable #3's clause -- any change to merchant matching ships with a
+ * test proving the attack fails -- so these land in the same commit as the
+ * fix.
+ */
+describe("D-70: the merchant directory is exact-match, not suffix-match (self-found)", () => {
+  it("THE ATTACK: an invented subdomain of a listed merchant resolves ASSERTED, not VERIFIED", () => {
+    const resolved = resolveMerchant(
+      { domain: "attacker-controlled.staples.com" },
+      DIRECTORY,
+      MerchantAttestationSource.AGENT,
+    );
+    expect(resolved.trust).toBe(MerchantTrust.ASSERTED);
+    expect(resolved.resolution_source).toBe("assertion");
+    const domainRef = resolved.refs.find((r) => r.scheme === MerchantScheme.DOMAIN)!;
+    expect(domainRef.trust).toBe(MerchantTrust.ASSERTED);
+    expect(domainRef.verified_at).toBeNull();
+
+    // So it cannot satisfy even an allowlist that names the real parent --
+    // it matches by value (the principal's own suffix rule, deliberately
+    // kept) but is never verified, so the ceiling is STEP_UP.
+    const result = satisfiesAllowlist(
+      [{ scheme: MerchantScheme.DOMAIN, value: "staples.com" }],
+      resolved,
+    );
+    expect(result.matched).toBe(true);
+    expect(result.verified).toBe(false);
+  });
+
+  it("the minting + laundering chain is dead end to end", () => {
+    // The full D-69 + D-70 attack: mint trust from a subdomain nobody
+    // checked, then launder the agent's own payout account through it.
+    const minted = resolveMerchant(
+      { domain: "attacker-controlled.staples.com", psp_account: ATTACKER_PSP },
+      DIRECTORY,
+      MerchantAttestationSource.AGENT,
+    );
+    expect(minted.trust).toBe(MerchantTrust.ASSERTED);
+    expect(unverifiedIdentityRefs(minted)).toHaveLength(2); // neither verifies now
+    expect(
+      satisfiesAllowlist([{ scheme: MerchantScheme.PSP_ACCOUNT, value: ATTACKER_PSP }], minted)
+        .verified,
+    ).toBe(false);
+  });
+
+  it("CONTROL: a listed checkout.<merchant> host is still VERIFIED", () => {
+    // The legitimate need the suffix rule was papering over. Now it is
+    // something a human wrote down, and only the host that was written down
+    // matches.
+    const directory = createStaticDirectory([
+      {
+        domain: "staples.com",
+        display_name: "Staples",
+        mcc: "5943",
+        hosts: ["checkout.staples.com", "pay.staples.com"],
+      },
+    ]);
+
+    for (const host of ["staples.com", "checkout.staples.com", "pay.staples.com"]) {
+      const resolved = resolveMerchant({ domain: host }, directory, MerchantAttestationSource.AGENT);
+      expect(resolved.trust, host).toBe(MerchantTrust.VERIFIED);
+      expect(resolved.resolution_source, host).toBe("directory");
+      // The entry's MCC comes through on a listed host too, not just the apex.
+      expect(resolved.mcc, host).toBe("5943");
+    }
+
+    // Listing two hosts does not list a third.
+    expect(
+      resolveMerchant(
+        { domain: "attacker-controlled.staples.com" },
+        directory,
+        MerchantAttestationSource.AGENT,
+      ).trust,
+    ).toBe(MerchantTrust.ASSERTED);
+
+    // www. is not a special case -- normalizeDomain strips it before lookup,
+    // so it resolves as the apex it is.
+    expect(
+      resolveMerchant({ domain: "www.staples.com" }, directory, MerchantAttestationSource.AGENT)
+        .trust,
+    ).toBe(MerchantTrust.VERIFIED);
+  });
+
+  it("CONTROL: include_subdomains still accepts a whole zone, but only when set", () => {
+    // The opt-out. Off by default -- which was the defect -- and a real
+    // claim about a real DNS zone when on.
+    const openZone = createStaticDirectory([
+      { domain: "staples.com", display_name: "Staples", include_subdomains: true },
+    ]);
+    expect(
+      resolveMerchant({ domain: "anything.staples.com" }, openZone, MerchantAttestationSource.AGENT)
+        .trust,
+    ).toBe(MerchantTrust.VERIFIED);
+    expect(
+      resolveMerchant(
+        { domain: "deeply.nested.staples.com" },
+        openZone,
+        MerchantAttestationSource.AGENT,
+      ).trust,
+    ).toBe(MerchantTrust.VERIFIED);
+
+    // NEGATIVE CONTROL for this test: the same lookup against the same entry
+    // without the flag is ASSERTED, so the flag is what is being tested and
+    // not some other path.
+    const closedZone = createStaticDirectory([
+      { domain: "staples.com", display_name: "Staples" },
+    ]);
+    expect(
+      resolveMerchant({ domain: "anything.staples.com" }, closedZone, MerchantAttestationSource.AGENT)
+        .trust,
+    ).toBe(MerchantTrust.ASSERTED);
+
+    // And a lookalike parent is still not in the zone, flag or no flag.
+    expect(
+      resolveMerchant(
+        { domain: "staples.com.evil.example" },
+        openZone,
+        MerchantAttestationSource.AGENT,
+      ).trust,
+    ).toBe(MerchantTrust.ASSERTED);
   });
 });

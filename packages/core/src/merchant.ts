@@ -570,6 +570,25 @@ export interface MerchantDirectoryEntry {
   domain: string;
   display_name: string;
   mcc?: string;
+  /**
+   * Additional hosts this entry covers -- `checkout.staples.com`,
+   * `pay.staples.com`. Each is matched **exactly**, exactly like `domain`
+   * (D-70). Listing a host is Waysafe stating it checked that host, which is
+   * the whole point: the directory's breadth is now something someone wrote
+   * down rather than something a pattern inferred.
+   */
+  hosts?: string[];
+  /**
+   * Opt in to every subdomain of `domain` and of each `hosts` entry.
+   *
+   * Off unless explicitly set, and it should stay off for almost everything.
+   * This was the *implicit default* until D-70, and it meant an agent could
+   * mint VERIFIED trust for any listed merchant by typing a subdomain nobody
+   * had ever checked. Setting it says "I accept that any host under this
+   * domain speaks for this merchant", which is a real claim about a real DNS
+   * zone, not a convenience.
+   */
+  include_subdomains?: boolean;
 }
 
 export interface MerchantDirectory {
@@ -583,23 +602,64 @@ export const EMPTY_DIRECTORY: MerchantDirectory = {
 /**
  * A tiny seeded directory so the MVP demo has verified merchants without
  * standing up a data pipeline. Week 2+ replaces this with a real source.
+ *
+ * **Exact match only, unless an entry opts out** -- D-70, found while writing
+ * D-69's tests rather than in the review. `lookupDomain` used to fall back to
+ * `domainMatches(known, normalized)`, i.e. suffix matching, so *any* subdomain
+ * of a listed merchant resolved VERIFIED. Nothing anywhere checked that the
+ * party asserting `attacker-controlled.staples.com` controlled it -- an agent
+ * simply typed the string -- so an agent could mint verified trust for any
+ * listed merchant at will. Paired with the D-69 bleed it was worse than a
+ * weak signal: the minted domain laundered the agent's own `psp_account`
+ * straight to ALLOW, never touching the real `staples.com`.
+ *
+ * A directory hit is Waysafe vouching for someone else's identity, so its
+ * breadth has to be something a human wrote down: `hosts` for additional
+ * exact hosts, `include_subdomains` to accept a whole zone deliberately.
+ *
+ * Allowlist matching keeps its suffix rule (`domainMatches`, used by
+ * `findMatchingRef`) and that is not an inconsistency. A policy's allowlist
+ * was authored by the *principal*, about merchants the principal chose, so
+ * breadth there is the principal's own call. The directory is Waysafe's claim
+ * about a third party, and breadth there is Waysafe vouching for hosts it
+ * never looked at.
  */
 export function createStaticDirectory(
   entries: MerchantDirectoryEntry[],
 ): MerchantDirectory {
-  const byDomain = new Map<string, MerchantDirectoryEntry>();
+  /** Exact host -> entry. `domain` plus every `hosts` entry. */
+  const byHost = new Map<string, MerchantDirectoryEntry>();
+  /** Only entries that explicitly opted into their whole zone. */
+  const suffixRoots: Array<{ root: string; entry: MerchantDirectoryEntry }> = [];
+
   for (const entry of entries) {
     const normalized = normalizeDomain(entry.domain);
-    if (normalized) byDomain.set(normalized, { ...entry, domain: normalized });
+    if (!normalized) continue;
+    const resolved = { ...entry, domain: normalized };
+    byHost.set(normalized, resolved);
+
+    for (const host of entry.hosts ?? []) {
+      const normalizedHost = normalizeDomain(host);
+      if (normalizedHost) byHost.set(normalizedHost, resolved);
+    }
+
+    if (entry.include_subdomains) {
+      suffixRoots.push({ root: normalized, entry: resolved });
+      for (const host of entry.hosts ?? []) {
+        const normalizedHost = normalizeDomain(host);
+        if (normalizedHost) suffixRoots.push({ root: normalizedHost, entry: resolved });
+      }
+    }
   }
+
   return {
     lookupDomain(domain) {
       const normalized = normalizeDomain(domain);
       if (!normalized) return undefined;
-      const direct = byDomain.get(normalized);
-      if (direct) return direct;
-      for (const [known, entry] of byDomain) {
-        if (domainMatches(known, normalized)) return entry;
+      const exact = byHost.get(normalized);
+      if (exact) return exact;
+      for (const { root, entry } of suffixRoots) {
+        if (domainMatches(root, normalized)) return entry;
       }
       return undefined;
     },

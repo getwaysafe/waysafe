@@ -8,6 +8,7 @@ import {
   merchantRefKey,
   resolveMerchant,
   type MerchantAssertion,
+  type MerchantDirectory,
 } from "../merchant.js";
 import { ReasonCode, Decision } from "../reason-codes.js";
 import type { ProposedAction } from "../domain.js";
@@ -106,7 +107,13 @@ function action(
 function run(
   policy: Policy,
   proposedAction: ProposedAction,
-  opts: { spend?: SpendSnapshot; now?: Date; merchantSource?: "agent" | "rail" } = {},
+  opts: {
+    spend?: SpendSnapshot;
+    now?: Date;
+    merchantSource?: "agent" | "rail";
+    /** Overrides the module directory, for D-70's listed-host case. */
+    directory?: MerchantDirectory;
+  } = {},
 ) {
   // D-34: this suite represents the authorize() path -- a ProposedAction the
   // caller of authorize() submitted -- so "agent" is the honest default.
@@ -114,7 +121,7 @@ function run(
   // legitimate case (a payment rail's own callback) still verifies.
   const merchant = resolveMerchant(
     proposedAction.merchant,
-    DIRECTORY,
+    opts.directory ?? DIRECTORY,
     opts.merchantSource ?? "agent",
   );
   const input: EngineInput = {
@@ -228,12 +235,41 @@ describe("adversarial merchant assertions", () => {
     ]);
   });
 
-  it("a subdomain of an allowlisted domain still matches and verifies", () => {
+  // D-70 changed this case, and it is the one existing expectation in the
+  // suite that encoded the directory's old suffix matching. It used to assert
+  // ALLOW outright. The two halves it conflated are now separate: the
+  // PRINCIPAL's allowlist still matches a subdomain by suffix (their entry,
+  // their call), but WAYSAFE's directory no longer vouches for a host nobody
+  // listed, so the ceiling is STEP_UP until someone does.
+  it("a subdomain of an allowlisted domain still MATCHES the allowlist, but no longer verifies on its own (D-70)", () => {
     const result = run(
       PROCUREMENT_ASK,
       action(83, { domain: "shop.staples.com" }, { category: "office_supplies" }),
     );
+    expect(result.decision).toBe(Decision.STEP_UP);
+    // Not NOT_ALLOWLISTED -- it did match the principal's staples.com entry.
+    expect(result.reasons.map((r) => r.code)).toEqual([
+      ReasonCode.STEP_UP_MERCHANT_UNVERIFIED,
+    ]);
+  });
+
+  it("...and ALLOWs once the directory actually lists that host (D-70)", () => {
+    const result = run(
+      PROCUREMENT_ASK,
+      action(83, { domain: "shop.staples.com" }, { category: "office_supplies" }),
+      {
+        directory: createStaticDirectory([
+          {
+            domain: "staples.com",
+            display_name: "Staples",
+            mcc: "5943",
+            hosts: ["shop.staples.com"],
+          },
+        ]),
+      },
+    );
     expect(result.decision).toBe(Decision.ALLOW);
+    expect(result.reasons.map((r) => r.code)).toEqual([ReasonCode.ALLOW_WITHIN_MANDATE]);
   });
 
   it("an assertion with no usable identity at all is DENY, not STEP_UP", () => {
