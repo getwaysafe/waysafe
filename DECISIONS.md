@@ -7958,6 +7958,118 @@ cycle that does not exist today. That ordering constraint is documented in
 `transaction-context.ts` itself, where someone adding such a call would see
 it.
 
+## D-77 — The money-path proofs have to be reliable, and have to announce themselves
+
+**Decision:** the seven Postgres-dependent test files run in their own serial
+pass, and every run prints one line per externally-gated suite that skipped,
+naming the variable that would have enabled it.
+
+Two problems, both of which let a green run mean less than it looked like.
+
+### (a) A flaky proof
+
+`apps/api/src/authorization/budget.adversarial.test.ts` failed 3 of 9
+full-suite runs while the D-71 through D-74 work was going on, always passing
+on retry. It carries the ledger invariants: that an approved step-up charges
+the mandate that spent, that a window SUM is never negative, that a replayed
+webhook takes no second hold. A proof that fails a third of the time is close
+to no proof, because the honest response to a failure becomes "run it again".
+
+Seven files share one database. Run concurrently against an instance that
+scales to zero, they contend and intermittently time out. They now run in a
+second pass with `fileParallelism: false` (`vitest.config.db.ts`), excluded
+from the main pass by name (`POSTGRES_GATED_FILES` in `vitest.config.ts`).
+
+`npm test` runs both passes through `scripts/run-tests.mjs` rather than
+`vitest run && npm run test:db`. The `&&` version was written first and was
+wrong: this repository has a standing expected failure (the Amoy gas gap,
+D-42), so `&&` would have skipped the database pass on every run. Both passes
+always run; the exit code is non-zero if either fails.
+
+**Serializing was not sufficient, and the second cause was a test this
+session had just written.** The first ten-run verification came back 8 of 10.
+The failure was not `budget.adversarial.test.ts` at all: it was D-76's own
+latency test, asserting `worst < 2000` on an end-to-end decision. A Neon cold
+start produced 2208ms. The assertion was added in the commit immediately
+before this one, with a comment explaining that a tight bound would make the
+test flaky — and then a bound that did exactly that.
+
+That test is now a measurement, not an assertion. It prints the latency
+numbers and asserts only what the run deterministically did: five decisions
+recorded, five samples taken, every sample positive. The numbers live in
+D-76's entry, where a human reads them. A benchmark against a shared cloud
+database cannot be an assertion about this repository's code, because the
+quantity it measures is dominated by something this repository does not
+control.
+
+Measured after both changes: **10 of 10 full passes of the database suite.**
+
+### (b) A silent skip
+
+Nine suites depend on an external resource and `describe.skipIf` themselves
+away when it is absent. That is correct behaviour: `npm test` must stay green
+on a laptop with no database. It was also silent, and seven of the nine need
+Postgres — including the two carrying the D-4 row-lock proof and the D-72
+window-key proof. So a green run could mean "the money-path proofs passed" or
+"the money-path proofs did not run", with nothing on screen to tell them
+apart.
+
+That is D-64's lesson in different clothes: a suite that passes while proving
+nothing. The require flags (`WAYSAFE_REQUIRE_DB` and its three siblings)
+already turn a skip into a failure, which helps only someone who already
+knows to set them — the wrong default for a fact a reader needs to notice
+without being told to look.
+
+Each gate now records itself through `apps/api/src/test-support/skip-report.ts`,
+and a global teardown prints the summary. The channel is a temp file because
+vitest runs test files in worker processes, so a module-level array would be
+invisible to the main process. Suites that *ran* are recorded too, so the
+summary can say "9 total, 7 ran, 2 skipped" rather than only listing
+absences — the difference between a reader learning the gates exist and a
+reader having to already know.
+
+Output when nothing is configured:
+
+```
+Gated suites: 7 total, 0 ran, 7 skipped.
+  SKIPPED  PrismaAuthorizationRepository: row lock against real Postgres
+           needs DATABASE_URL (a reachable Postgres); set WAYSAFE_REQUIRE_DB to make this a failure instead
+  ...
+  A skipped suite proves nothing. If any of these guard a claim you rely on,
+  configure the resource and re-run, or set the require flag in CI.
+```
+
+### The nine gated suites
+
+| Suite | Needs | Require flag |
+|---|---|---|
+| `authorization/prisma-repository.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `authorization/budget.adversarial.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `enforcement/decision-atomicity.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `evidence/prisma-repository.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `principals/prisma-repository.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `agent-keys/prisma-repository.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `webauthn/prisma-repository.test.ts` | `DATABASE_URL` | `WAYSAFE_REQUIRE_DB` |
+| `payments/stripe-adapter.test.ts` | `STRIPE_SECRET_KEY` | `WAYSAFE_REQUIRE_STRIPE` |
+| `enforcement/stripe-issuing.bypass.test.ts` | `STRIPE_ISSUING_SECRET_KEY` | `WAYSAFE_REQUIRE_STRIPE_ISSUING` |
+
+`enforcement/x402.bypass.test.ts` part 3 is gated separately on four
+on-chain variables and records itself the same way. It also carries the
+standing D-42 funding failure, which is a real failure rather than a skip and
+so is not in this table.
+
+`stripe-issuing.bypass.test.ts` self-skips five further ways *after* its gate
+passes, including when the financial account has no available balance. Those
+inner skips are not in the summary, because the gate helper runs before them.
+Stated here rather than left to be discovered: that suite reporting "ran" in
+the summary does not mean the live bypass was exercised.
+
+**Change cost if wrong:** `npm test` is slower, by the serial database pass.
+The failure direction is a slow suite rather than a quiet one. The thing to
+watch is `POSTGRES_GATED_FILES`: a new Postgres-dependent test added to the
+main pass would reintroduce the contention, and nothing enforces that the
+list stays complete.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

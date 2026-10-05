@@ -11,8 +11,19 @@
  */
 
 import { describe, it } from "vitest";
+import { recordGatedSuite } from "../../test-support/skip-report.js";
 
 export function requireStripeOrExplainSkip(suiteName: string, reachable: boolean): void {
+  // D-77: recorded whether or not it ran, so the final summary can say how
+  // many gated suites there are and which of them did not execute.
+  recordGatedSuite(
+    {
+      suite: suiteName,
+      needs: "STRIPE_SECRET_KEY (a real test-mode key)",
+      requireFlag: "WAYSAFE_REQUIRE_STRIPE",
+    },
+    reachable,
+  );
   if (reachable) return;
   if (process.env.WAYSAFE_REQUIRE_STRIPE !== "1") return;
 

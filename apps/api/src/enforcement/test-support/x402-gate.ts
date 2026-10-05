@@ -16,8 +16,19 @@
  */
 
 import { describe, it } from "vitest";
+import { recordGatedSuite } from "../../test-support/skip-report.js";
 
 export function requireX402LiveOrExplainSkip(suiteName: string, reachable: boolean): void {
+  // D-77: recorded whether or not it ran, so the final summary can say how
+  // many gated suites there are and which of them did not execute.
+  recordGatedSuite(
+    {
+      suite: suiteName,
+      needs: "WAYSAFE_SAFE_COSIGNER_KEY + POLYGON_AMOY_RPC_URL + WAYSAFE_X402_LIVE_PAYER_ACCOUNT + WAYSAFE_X402_TEST_SESSION_KEY",
+      requireFlag: "WAYSAFE_REQUIRE_X402_LIVE",
+    },
+    reachable,
+  );
   if (reachable) return;
   if (process.env.WAYSAFE_REQUIRE_X402_LIVE !== "1") return;
 

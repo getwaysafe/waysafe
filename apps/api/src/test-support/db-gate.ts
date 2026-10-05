@@ -18,6 +18,7 @@
  */
 
 import { describe, it } from "vitest";
+import { recordGatedSuite } from "./skip-report.js";
 
 export async function probeDatabase(prisma: {
   $queryRaw: (strings: TemplateStringsArray) => Promise<unknown>;
@@ -39,6 +40,16 @@ export async function probeDatabase(prisma: {
  * handles it).
  */
 export function requireDbOrExplainSkip(suiteName: string, reachable: boolean): void {
+  // D-77: recorded whether or not it ran, so the final summary can say how
+  // many gated suites there are and which of them did not execute.
+  recordGatedSuite(
+    {
+      suite: suiteName,
+      needs: "DATABASE_URL (a reachable Postgres)",
+      requireFlag: "WAYSAFE_REQUIRE_DB",
+    },
+    reachable,
+  );
   if (reachable) return;
   if (process.env.WAYSAFE_REQUIRE_DB !== "1") return;
 
