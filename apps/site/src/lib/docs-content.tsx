@@ -272,6 +272,30 @@ export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP
     description: "This mandate's approvers would form a cycle with a mandate that already exists.",
   },
   {
+    code: "DENY_STEP_UP_EXPIRED",
+    decision: "DENY",
+    description:
+      "The step-up's time limit had already passed, so it can no longer be approved. Distinct from DENY_MANDATE_EXPIRED: the mandate's authority is intact, and the window to resolve this particular step-up has closed (D-73).",
+  },
+  {
+    code: "DENY_ASSET_NOT_IN_REGISTRY",
+    decision: "DENY",
+    description:
+      "The (chain, token contract address) pair is not one this deployment can evaluate or settle. Matching is by address, never by symbol (D-68).",
+  },
+  {
+    code: "DENY_ASSET_DECIMALS_MISMATCH",
+    decision: "DENY",
+    description:
+      "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction (D-68).",
+  },
+  {
+    code: "DENY_ASSET_UNSPECIFIED",
+    decision: "DENY",
+    description:
+      "The payment requirement named no token contract address, so no asset could be resolved (D-68).",
+  },
+  {
     code: "STEP_UP_AMOUNT_THRESHOLD",
     decision: "STEP_UP",
     description: "The amount is above the mandate's step-up threshold.",

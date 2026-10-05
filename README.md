@@ -195,6 +195,12 @@ docs/             THREAT-MODEL.md and other reference docs checked into the repo
 See [`SECURITY.md`](SECURITY.md) for the disclosure policy and known open
 issues.
 
+An independent adversarial review was run against commit `387958a` in
+September 2026; all six findings are closed, along with five more the
+remediation itself turned up — see
+[the findings section](SECURITY.md#findings-from-adversarial-review-2026-09-27)
+for each one, the attack it enabled, and where its test lives.
+
 ## License
 
 Apache License 2.0 — see [`LICENSE`](LICENSE).

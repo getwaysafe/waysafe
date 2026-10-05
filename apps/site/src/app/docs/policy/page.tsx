@@ -129,6 +129,17 @@ export default function Page() {
           the <em>transaction</em> path.
         </p>
         <p style={{ maxWidth: 700 }}>
+          Because that one signature is what the whole model rests on, enrolling a{" "}
+          <strong>second</strong> passkey for a principal that already has one requires a fresh
+          prior authentication with an existing credential — a single-use, expiring grant bound to
+          that specific principal and credential (D-66). An adversarial review found that an
+          authentication challenge could previously be answered with a <em>registration</em>
+          response, enrolling an attacker&rsquo;s own passkey against a victim principal. Every
+          challenge now carries a purpose recorded at issuance and validated against the
+          caller&rsquo;s mode; a mismatch is a{" "}
+          <code>400 challenge_purpose_mismatch</code>, never silently ignored.
+        </p>
+        <p style={{ maxWidth: 700 }}>
           An approver is any actor holding an approver mandate: a treasury service, a manager, a
           controller system, or the principal themselves. The human-in-the-loop, async-approval
           case most people picture first is the <strong>degenerate form</strong> of this model,
@@ -146,6 +157,26 @@ export default function Page() {
           <code>authorize()</code> calls. A per-period cumulative cap on an approver mandate is a
           real ceiling on how much it can approve in that period, not just on how much it can
           spend directly.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          An approval costs budget on <strong>both</strong> mandates, for two different reasons
+          (D-71). The approver&rsquo;s entry above is the ceiling on how much it may approve. The{" "}
+          <em>spending</em> mandate also takes a hold at approval time, so the approved amount
+          counts against the cap the principal actually signed. An adversarial review found that
+          it did not: with <code>reserve_on_step_up: false</code> the spending mandate&rsquo;s
+          ledger was untouched by an approval, so an unlimited number of payments could be
+          approved against its cap. The approver&rsquo;s charge is a separate check, never a
+          substitute for the spender&rsquo;s.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          Approval <strong>re-validates under the lock</strong> (D-73). Three things can lapse
+          between a step-up being raised and an approver resolving it: the step-up&rsquo;s own
+          TTL, the spending mandate being revoked, and that mandate&rsquo;s policy{" "}
+          <code>expires_at</code>. All three are re-read inside the same row lock that takes the
+          money, and any of them refuses the approval with its own code —{" "}
+          <code>DENY_STEP_UP_EXPIRED</code>, <code>DENY_MANDATE_REVOKED</code>,{" "}
+          <code>DENY_MANDATE_EXPIRED</code>. Before that review, all three were approved and
+          executable; a revoked mandate&rsquo;s pending step-up still went through.
         </p>
         <p style={{ maxWidth: 700 }}>
           Authority is <strong>single-level</strong>: an approver may authorize transactions but

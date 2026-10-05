@@ -110,6 +110,19 @@ export default function Page() {
           only what its own fetch returned. An agent cannot get itself co-signed by asserting what
           it&rsquo;s paying for.
         </p>
+        <p style={{ maxWidth: 700 }}>
+          <strong>Merchant verification is weaker on this rail than on the card rail, and that is
+          worth stating outright.</strong> On a card, identity is an acquirer-assigned merchant id
+          that arrives inside the network&rsquo;s own authorization payload. On x402, both the
+          payee address and the merchant&rsquo;s domain come from Waysafe&rsquo;s own fetch — so
+          the agent cannot forge either — but the host serving that resource is what declares its
+          own payee address, and nothing outside that host corroborates that the address belongs
+          to whoever owns the domain. So here, VERIFIED means <em>Waysafe fetched this resource and
+          this host asked for this payment</em>, not <em>this host is who it claims to be</em>. A
+          mandate that names real merchants is unaffected; a mandate leaning on{" "}
+          <code>unlisted: ALLOW</code> plus &ldquo;the merchant was verified&rdquo; gets materially
+          less assurance here than the same words buy on a card. Tracked as OQ-13.
+        </p>
         <pre>{`// request
 {
   "instrument_id": "inst_...",

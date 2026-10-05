@@ -113,6 +113,22 @@ const waysafe = new Waysafe({
           <code>STEP_UP</code>, exactly like an unverified <code>name</code>.
         </p>
         <p style={{ maxWidth: 700 }}>
+          Trust belongs to each <em>identifier</em>, not to the merchant as a whole (D-69). Sending
+          a real domain alongside an account id of your own does not launder the account id: a
+          match produces <code>ALLOW</code> only when the identifier that matched is itself
+          verified <strong>and</strong> no identifier on the request is unverified. The{" "}
+          <code>STEP_UP_MERCHANT_UNVERIFIED</code> reason names which one failed, so a receipt
+          distinguishes a laundered sibling from a wholly unknown merchant.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          On the WebAuthn ceremony routes, a challenge carries the purpose it was issued for and
+          that purpose is authoritative: answering an authentication challenge with a registration
+          response (or the reverse) is a <code>400</code> (
+          <code>{`{"error":"challenge_purpose_mismatch"}`}</code>), never silently accepted.
+          Enrolling a second passkey for a principal that already has one additionally requires a
+          fresh prior authentication with an existing credential (D-66).
+        </p>
+        <p style={{ maxWidth: 700 }}>
           Response status: <code>201</code> on a fresh decision, <code>200</code> if{" "}
           <code>idempotency_key</code> matches a prior request and the stored result is replayed,{" "}
           <code>404</code> (<code>{`{"error":"no_active_mandate"}`}</code>) if no active mandate
