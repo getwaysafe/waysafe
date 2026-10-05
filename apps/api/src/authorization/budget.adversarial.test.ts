@@ -1278,19 +1278,17 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
       "authorizations_one_decision_per_external_ref",
     );
     if (indexPresent.length === 0) {
-      // Self-skipping with the real reason, the convention this codebase
-      // already uses for a control it cannot install here (D-42/D-48). This
-      // database holds pre-D-74 /film demo rows that duplicate
-      // (mandateId, externalRef), so `npm run db:constraints` reports the
-      // index as skipped. Clearing them is a judgment call about demo
-      // history -- /proof's committed capture cites two of them by id -- so
-      // it is not done silently by a constraint script or by this test.
+      // The index is installed by `npm run db:constraints`, not by `db push`
+      // (Prisma cannot express a partial unique index), so a database that
+      // has only been pushed to does not have it yet. Self-skipping with the
+      // real reason rather than passing against an absent control -- the
+      // convention this codebase already uses (D-42/D-48).
       // eslint-disable-next-line no-console
       console.log(
         "SKIPPED (d3): authorizations_one_decision_per_external_ref is not installed on this " +
-          "database -- pre-D-74 demo rows duplicate (mandateId, externalRef). " +
-          "The application-level replay check in (d) is still proven above; " +
-          "the concurrent-delivery race is not.",
+          "database. Run `npm run db:constraints`. The application-level replay check in (d) " +
+          "is proven above regardless; the concurrent-delivery race is not closed without " +
+          "the index.",
       );
       return;
     }

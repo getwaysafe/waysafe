@@ -101,7 +101,7 @@ const CardReplayBodySchema = z.object({
  * `lib/demo/policy.ts`), so both are expected to DENY on
  * `DENY_MERCHANT_NOT_ALLOWLISTED` -- a real decision, not a scripted one;
  * see `stripe-issuing.test.ts` for the same rule proven directly. */
-const CARD_REPLAY_SCENARIOS = [
+export const CARD_REPLAY_SCENARIOS = [
   { label: "$1,240.00 -- unknown merchant, card ending 4421", amountCents: 124_000, networkId: "unknown_merchant_9911", merchantName: "UNKNOWN MERCHANT" },
   { label: "$89.99 -- recurring, unknown", amountCents: 8_999, networkId: "unknown_recurring_2207", merchantName: "UNKNOWN MERCHANT" },
 ] as const;
@@ -117,11 +117,39 @@ const CARD_REPLAY_SCENARIOS = [
  *      (running total after #1: 450c; 450+899=1349c, still under 2000c)
  *   3. $15.00, allowed merchant, over the per-tx cap   -> DENY, amount rule only
  *      (running total after #1+#2's allowed amount only: 450+1500=1950c, still under 2000c) */
-const PROOF_CARD_REPLAY_SCENARIOS = [
+export const PROOF_CARD_REPLAY_SCENARIOS = [
   { label: "$4.50 -- GoodBeans Card Program, within the mandate", amountCents: 450, networkId: "goodbeans_card_9001", merchantName: "GOODBEANS CARD PROGRAM" },
   { label: "$8.99 -- unlisted merchant, otherwise within limits", amountCents: 899, networkId: "unknown_subscription_5210", merchantName: "UNKNOWN MERCHANT" },
   { label: "$15.00 -- GoodBeans Card Program, over the per-transaction cap", amountCents: 1_500, networkId: "goodbeans_card_9001", merchantName: "GOODBEANS CARD PROGRAM" },
 ] as const;
+
+/**
+ * The Stripe authorization id a replayed demo scenario carries -- D-74.
+ *
+ * Exported so a test can assert what the route can and cannot mint. This was
+ * `iauth_demo_${scenario.networkId}`, which is wrong twice over: a real Stripe
+ * authorization id identifies one authorization, and
+ * `PROOF_CARD_REPLAY_SCENARIOS` deliberately uses one `networkId` for two
+ * different amounts ($4.50 and $15.00), so two genuinely distinct card
+ * authorizations in a single run shared one id. Under D-74's replay rule the
+ * second would have been served the first's decision -- the demo's own $15.00
+ * over-the-cap DENY would have come back as the $4.50 ALLOW.
+ *
+ * `instrumentId` is created fresh per run, so it is the natural per-run nonce;
+ * `index` disambiguates two scenarios that name the same merchant within one
+ * run. Both segments are load-bearing, which is why the test asserts each.
+ *
+ * D-74's unique index excludes exactly one historical literal,
+ * `iauth_demo_goodbeans_card_9001`. That exclusion is only safe while this
+ * function cannot produce it -- `routes.test.ts` is what keeps that true.
+ */
+export function demoIssuingAuthorizationId(
+  instrumentId: string,
+  index: number,
+  networkId: string,
+): string {
+  return `iauth_demo_${instrumentId}_${index}_${networkId}`;
+}
 
 export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos): void {
   /**
@@ -308,17 +336,11 @@ export function registerDemoRoutes(app: FastifyInstance, repos: DemoRoutesRepos)
     const attempts = [];
     for (const [index, scenario] of scenarios.entries()) {
       const authorization = {
-        // D-74: unique per run AND per scenario. This was
-        // `iauth_demo_${scenario.networkId}`, which is wrong twice over: a
-        // real Stripe authorization id identifies one authorization, and
-        // PROOF_CARD_REPLAY_SCENARIOS deliberately uses one networkId for
-        // two different amounts ($4.50 and $15.00), so two genuinely
-        // distinct card authorizations in a single run shared one id. With
-        // D-74's replay rule in place the second would have been served the
-        // first's decision -- the demo's own $15.00 over-the-cap DENY would
-        // have come back as the $4.50 ALLOW. The instrument is created
-        // fresh per run, so its id is the natural per-run nonce.
-        id: `iauth_demo_${instrument.id}_${index}_${scenario.networkId}`,
+        // D-74: unique per run AND per scenario. See
+        // `demoIssuingAuthorizationId` for what this used to be and why it
+        // was wrong; `routes.test.ts` asserts it can never mint the one
+        // literal D-74's unique index excludes.
+        id: demoIssuingAuthorizationId(instrument.id, index, scenario.networkId),
         amount: scenario.amountCents,
         currency: "usd",
         merchant_data: { network_id: scenario.networkId, category_code: "5999", name: scenario.merchantName },

@@ -167,19 +167,21 @@ is a testnet funding gap rather than a code regression (documented in
 
 ## Known open issues
 
-**D-74's unique index is not yet installed on the development database.**
-The application-level replay check is active and proven: a redelivered
-Issuing event returns the original decision, writes no second row and takes
-no second hold. The database-level control behind it — a unique index on
-`(mandate_id, external_ref)` — is what decides the case where two deliveries
-arrive *concurrently*, since both then read "not seen" and both try to
-insert. `npm run db:constraints` creates that index conditionally and reports
-what blocks it, because this database still holds pre-D-74 `/film` demo rows
-that duplicate the pair, and `/proof`'s committed capture cites two of them
-by id. Clearing them is a judgment call about demo history that a constraint
-script must not make silently. **Until the index is installed, the
-concurrent-delivery race is not closed.** The test for it says so out loud
-and skips, rather than passing against an absent control.
+**D-74's unique index is installed, scoped to exclude one historical
+literal.** The webhook-replay race is closed: a redelivered Issuing event
+returns the original decision and writes no second row or hold, and two
+*concurrent* deliveries now produce exactly one row — enforced by a unique
+index on `(mandate_id, external_ref)`, applied by `npm run db:constraints`.
+
+The index excludes exactly one value, `iauth_demo_goodbeans_card_9001`. Six
+historical `/film` demo rows carry it, and they cannot be removed: each is the
+subject of an evidence event, and two sit inside the contiguous, published
+chain slice `/proof` displays, so deleting them would leave published
+provenance pointing at nothing. The exclusion is a **closed** set rather than
+an open-ended exemption — D-74 changed the route so every id now carries a
+per-run instrument id, making that literal unmintable, and a test
+(`apps/api/src/demo/routes.test.ts`, with a negative control) is what keeps
+that true so the exemption cannot widen silently.
 
 These are already public, written up in detail in
 [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md). Please read the relevant

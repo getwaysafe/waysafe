@@ -68,14 +68,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS ledger_entries_one_reservation_per_authorizati
 -- colliding reference format would trip a global unique index for reasons
 -- that have nothing to do with idempotency.
 --
--- Guarded rather than unconditional: this project's own /film demo route used
--- a fixed `iauth_demo_<networkId>` per scenario until D-74, so a database that
--- has recorded demo runs holds rows this index would refuse. Creating it is
--- therefore conditional, and reports what blocks it instead of failing the
--- whole script -- the same honesty rule the self-skipping bypass tests follow.
--- Clearing those rows is a judgment call about demo history, not something a
--- constraint script should do silently: /proof's committed capture cites two
--- of them by id.
+-- ONE VALUE IS EXCLUDED, and the exclusion is closed rather than open-ended.
+-- Until D-74 the /film demo route minted `iauth_demo_<networkId>` per
+-- scenario, and /proof's scenario list deliberately uses one networkId for two
+-- different amounts -- so two distinct card authorizations in a single run
+-- shared that id. Those rows cannot be deleted: each is the `subjectId` of an
+-- evidence event, and two of them sit inside the contiguous, published chain
+-- slice /proof displays (sequences 440 and 442 of org_demo), so removing them
+-- would leave published provenance pointing at nothing.
+--
+-- Excluding the literal is safe *because it is unmintable*: D-74 changed the
+-- route to include the per-run instrument id and the scenario index, so no
+-- future row can carry this value. The exemption therefore covers a finite,
+-- frozen set of six historical demo rows and nothing that will ever be
+-- written again. A `createdAt` cutoff was considered and rejected --
+-- `createdAt` is caller-supplied in the repository, so a test could write
+-- beneath it, and the exemption would be invisible and open-ended.
 DO $$
 DECLARE
   conflicts int;
@@ -86,19 +94,23 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Guard kept for an unexpected case: any OTHER duplicated pair would still
+  -- refuse the index, and a NOTICE naming it beats a failed script.
   SELECT count(*) INTO conflicts FROM (
     SELECT 1 FROM "authorizations"
     WHERE "externalRef" IS NOT NULL
+      AND "externalRef" <> 'iauth_demo_goodbeans_card_9001'
     GROUP BY "mandateId", "externalRef"
     HAVING count(*) > 1
   ) dupes;
 
   IF conflicts > 0 THEN
-    RAISE NOTICE 'D-74: skipping authorizations_one_decision_per_external_ref -- % (mandateId, externalRef) pair(s) already duplicated. These are pre-D-74 rows (see the demo-route note above). The application-level replay check is active regardless; the index is what closes the concurrent-delivery race.', conflicts;
+    RAISE NOTICE 'D-74: skipping authorizations_one_decision_per_external_ref -- % unexpected (mandateId, externalRef) pair(s) duplicated beyond the one known frozen demo literal. Investigate before clearing: the application-level replay check is active regardless, but the concurrent-delivery race is not closed without this index.', conflicts;
     RETURN;
   END IF;
 
   CREATE UNIQUE INDEX authorizations_one_decision_per_external_ref
     ON "authorizations" ("mandateId", "externalRef")
-    WHERE "externalRef" IS NOT NULL;
+    WHERE "externalRef" IS NOT NULL
+      AND "externalRef" <> 'iauth_demo_goodbeans_card_9001';
 END $$;

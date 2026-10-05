@@ -7618,6 +7618,107 @@ Stripe's own retry model assumes, but it does mean a mandate edited between
 two deliveries of one event is not re-consulted — correct for a redelivery of
 one authorization, and worth knowing.
 
+**D-74 follow-up: index installed 2026-10-05, scoped to one excluded
+literal. `/proof` was not re-captured.** The original entry left the index
+uninstalled and named a `/proof` re-capture as the human call that would
+unblock it. Investigating that re-capture showed it was the wrong unblock,
+so the index was installed a different way and the re-capture was dropped.
+
+**Why `/proof` was not re-captured.** Two independent reasons, both checked
+against the live database rather than reasoned about:
+
+1. *A card-only re-capture cannot be spliced into the published chain.*
+   `/proof`'s `evidence.events` is a contiguous hash-chained slice,
+   sequence **436-443**: two passkey/mandate pairs (436-439), the three
+   `enforcement.stripe_issuing.decision` events (**440-442**), then the
+   `enforcement.x402.decision` (443). `org_demo`'s chain head is exactly
+   443 -- nothing has been appended since the capture -- so new card
+   decisions land at 444 and after. Nothing can occupy 440-442; that is
+   the one thing a hash chain exists to prevent. "Re-capture only the card
+   scenarios" and "keep one contiguous verified slice" cannot both hold.
+2. *The six legacy rows cannot be deleted at all.* Each is the `subjectId`
+   of an evidence event, and two of them --
+   `auth_01m2rbfbjv6s5wjw1117sc9h9m` (the $4.50 ALLOW, sequence 440) and
+   `auth_01m2rbfd75nbq8xxn7x72r5657` (the $15.00 over-cap DENY, sequence
+   442) -- sit inside the published slice. `EvidenceEvent.subjectId` is a
+   plain string with no foreign key, so deleting the authorizations would
+   not cascade; it would leave published provenance pointing at rows that
+   no longer exist, on the one page whose entire purpose is provenance.
+   This holds *after* any re-capture too: a fresh capture would stop
+   citing them, but events 440-442 remain in the chain permanently.
+
+A full re-capture of every lane was also available and was rejected: it
+changes all four on-chain transaction hashes (the three x402 rejections
+and the real ALLOW), which are published record. It would also have needed
+the cosigner EOA funded first -- 0.00893 POL on hand against roughly
+0.0162 POL per `execTransaction` at the 128 gwei price observed that day.
+
+**So the index is scoped instead.** The only `(mandateId, externalRef)`
+collision anywhere in the database is on a single value,
+`iauth_demo_goodbeans_card_9001` -- six rows, three pairs. The index
+excludes exactly that literal:
+
+```sql
+CREATE UNIQUE INDEX authorizations_one_decision_per_external_ref
+  ON "authorizations" ("mandateId", "externalRef")
+  WHERE "externalRef" IS NOT NULL
+    AND "externalRef" <> 'iauth_demo_goodbeans_card_9001';
+```
+
+**The exclusion is a closed set, not an open-ended exemption**, and that
+distinction is the whole justification. D-74 already changed the route to
+`demoIssuingAuthorizationId(instrumentId, index, networkId)`, so the bare
+literal is **unmintable**: every id now carries a per-run instrument id.
+The exemption therefore covers six frozen historical rows and nothing that
+can ever be written again. Named as one literal rather than a pattern
+(`iauth_demo_%` would have licensed exactly the generalization this
+refuses), and guarded: the `DO` block still raises a `NOTICE` if any
+*other* pair is duplicated, so an unexpected conflict is reported rather
+than silently failing the script.
+
+That safety is only as good as the route staying fixed, so it has a test.
+`apps/api/src/demo/routes.test.ts` asserts the id function cannot produce
+the excluded literal for any scenario in either real list, nor for hostile
+inputs, with a **negative control** proving the pre-D-74 scheme *did*
+produce it and *did* collide within a single run -- without which the test
+would pass against any id format and prove nothing. It also pins that
+`/proof`'s scenario list still reuses one merchant for two amounts, so the
+reason the exclusion exists stays legible to the next reader.
+
+`(d3)` -- the concurrent-delivery race -- now **executes** rather than
+self-skipping, and passes: two simultaneous deliveries of one event produce
+exactly one row. With the index dropped it fails, asserting two different
+authorization ids, so it is testing the index and not the fast path.
+
+**Why `(mandateId, externalRef)` is safe across a mandate version bump.**
+Asked during this follow-up and worth recording, because the composite key
+would be wrong if the mandate half were unstable. `Mandate.id` does **not**
+change when a mandate gets a new version: a new `MandateVersion` row is
+inserted and `Mandate.currentVersionId` is moved, while the `Mandate` row,
+its id, and `Instrument.mandateId` all persist. A redelivery arriving after
+a version bump therefore still resolves card -> instrument -> the same
+`mandateId`, so the key catches it, and the replay returns the **original**
+decision -- which cites the `mandateVersionId` it was actually decided
+against, not the new one. That is the correct semantics: a redelivery of one
+authorization must not be re-decided under a policy the cardholder's rail
+never saw. `MandateStatus.SUPERSEDED` exists in the enum but nothing writes
+it yet, so this holds by schema shape rather than by an exercised path.
+
+**The LIVE card capture is still blocked, and the "replayed" footnote
+stays.** Checked directly against the Stripe sandbox on 2026-10-05, not
+assumed from D-48: the two most recent real `issuing_authorization.request`
+attempts (02:13Z and 02:12Z) both resolved
+`approved=false, reason=insufficient_funds`. Everything D-48 fixed in code
+has landed -- all cardholders report `status: active` with no
+`disabled_reason`, and all cards are `active` -- so the sole remaining
+blocker is the financial account's available balance, which the 2026-09-22
+settlement date did not clear. The balance itself could not be read: the
+`rk_test_` key in this environment lacks the v2 Money Management permission
+(`connected_account_read`), which Stripe's own error names. The decline
+reason answers the question regardless. `/proof`'s card lane therefore
+remains a replay of hand-authored payloads through the real
+`StripeIssuingAdapter`, and says so.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
