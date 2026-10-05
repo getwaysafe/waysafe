@@ -6659,7 +6659,14 @@ does not even have passes **vacuously** -- `undefined` satisfies it. D-68's
 first draft asserted `result.authorizationId` was not null on an
 `X402Decision`, which has no such field, and the test passed while checking
 nothing. Assert the positive shape on a field that exists: `toMatch`,
-`toBe`, `toBeDefined`.) `server.adversarial.test.ts`
+`toBe`, `toBeDefined`.) (Third instance, added at D-69: a bug that
+requires **two fields set at once** was invisible to 683 passing tests
+that each set one. Every `resolveMerchant` call in the suite supplied
+exactly one identity scheme, so no test ever described the two-identifier
+assertion D-69's laundering attack needed -- `satisfiesAllowlist`'s own
+careful verified/unverified matrix included. A test matrix that varies one
+field at a time proves nothing about interaction: cover the
+multi-identifier case explicitly.) `server.adversarial.test.ts`
 enumerates the live route table and asserts every route is either named in
 the allowlist or rejects an agent credential. The first version used
 `app.printRoutes()` and was **worthless**: that method emits a *tree* of
@@ -7597,6 +7604,16 @@ verification. What remains is narrower and semantic: a mandate relying on
 assurance than that phrasing suggests, because on this rail verification
 attests that a payment was genuinely requested by the host Waysafe fetched,
 not that the host is the merchant the principal had in mind.
+
+**Candidate answer, recorded for later rather than acted on:** the likely
+resolution is not a behavior change at all but a distinct *trust level* --
+rail-ATTESTED ("this host genuinely requested this payment") separated from
+directory-VERIFIED ("Waysafe independently knows who this is") -- with a
+policy choosing which level satisfies which rule. That keeps today's x402
+ALLOW path working while letting a principal who cares write a mandate that
+requires the stronger one. It also subsumes the out-of-band binding below,
+which becomes a way to *earn* the stronger level rather than a precondition
+for any x402 payment at all.
 
 **What would close it:** binding the `payTo` to the domain out of band — a
 signed `.well-known` record the domain publishes naming its payee addresses,
