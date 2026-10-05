@@ -7334,6 +7334,87 @@ riskiest piece is the approval hold on a `reserve_on_step_up: false` mandate,
 which now consumes budget earlier than it used to — the conservative
 direction, and the one the policy's own cap already asked for.
 
+## D-72 — A charge lands in the window it was authorized in (review finding 6)
+
+**The rule:** every ledger row belonging to an authorization carries the
+calendar window that **authorization was decided in** — never the window the
+later event happens to fire in. A release cancels its reservation in that
+reservation's own window; a capture settles there; a credit offsets there.
+
+Finding 6 of the adversarial review of `387958a`. Every write recomputed
+`windowKeys(now)`, so a hold taken in one window and resolved in the next
+split across two:
+
+```
+reserve $90   August    -> RESERVATION +9000  dayKey/weekKey/monthKey = August
+release       September -> RELEASE     -9000  dayKey/weekKey/monthKey = September
+```
+
+August kept a $90 hold that no longer existed. September reported **negative
+cumulative spend**, so the mandate's September budget was its cap *plus* $90
+— a $150 transaction passed a $100 monthly cap in a month where nothing had
+been spent. A negative window SUM is exactly what non-negotiable #6 forbids,
+and it needed no concurrency at all: just a calendar boundary.
+
+**The attack, confirmed against real Postgres before the fix:**
+
+| Case | Before D-72 | After |
+|---|---|---|
+| (a) reserve W1, release W2 | W1 `+$9000`, W2 `-$9000`; `getSpendSnapshot` negative; $150 passes a $100 cap | both windows `$0`; $150 DENIED |
+| (b) reserve W1, capture W2 | charge filed in W2 but offset by its own release there, W1 keeps `+$9000` | all three rows in W1; W1 `$9000`, W2 `$0` |
+| (c) three holds straddling, mixed outcomes | W1 `+$21000`, W2 `-$13000` | W1 `$8000` = settled, W2 `$0` |
+| (c2) refund in a later window | credit filed in W2, pushing it negative | credit filed in W1 |
+
+(c) is the invariant test, asserting all three parts: no window SUM negative,
+each window's SUM equals what was authorized in it, and the total equals what
+settled. Before D-72 the *total* was already right — `w1 + w2` equalled the
+$80 that settled — which is what made this survive: the arithmetic balanced
+globally while both windows were individually wrong, and a per-window cap is
+the only thing that ever reads them.
+
+**Implementation.** No schema change. A reservation already stores its window
+keys, and `saveAuthorization` stamps them from the same instant it stamps the
+authorization's `createdAt`, so the two agree by construction. One helper per
+repository, deliberately identical so the two cannot drift: prefer the
+reservation's own stored keys when a reservation exists — so a release
+cancels the exact row it releases, including any row written before D-72
+whose keys may not match — and fall back to the authorization's decision
+window when there is none (a `reserve_on_step_up: false` capture, a refund).
+
+Sites changed: `resolveStepUp`'s release, `recordExecution`'s release and
+capture, `recordRefund`'s credit, and D-71's own
+`recordStepUpApprovalHold` (which deliberately shipped using `now`, so that
+D-71 was about *which mandate* and this entry is about *which window*).
+
+**Refunds are included, and were not in the finding.** A credit stamped with
+`now` pushes a negative row into a window where nothing was spent — the same
+defect as the cross-boundary release, reached by a different route, and it
+breaks the same half of the invariant. The rule has to cover every row that
+*pairs* with another.
+
+**One deliberate exception: `recordApproverLedgerEntry` still uses `now`.**
+That row is the approver's own permanent charge for the act of approving
+(D-62 Addition B). It pairs with nothing, is never released, and so cannot
+make a window negative. Charging an approver's August budget for a September
+approval would be the wrong answer, not a consistent one. The rule is about
+rows that must cancel within one window; this row records an event that
+happened when it happened.
+
+**Existing expectations that encoded the bug: none.** Checked rather than
+inferred from a green run: no test in the suite had ever written a ledger row
+with a `now` in a different calendar window from the authorization it
+belonged to. Every existing case reserves, releases and captures at one
+`NOW`, which is precisely why a bug that only appears on a boundary was
+invisible — the third instance of D-64's lesson, now about a dimension (the
+clock) rather than a field.
+
+**Change cost if wrong:** low and legible. The window a row lands in is
+visible in the row itself, and the invariant test fails loudly on any
+boundary sequence that breaks it. The one behavioural shift a user could
+notice is that a payment authorized at 23:59 and captured at 00:01 now
+counts against the earlier day — which is the intended reading of a daily
+limit, and the one a receipt can defend.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

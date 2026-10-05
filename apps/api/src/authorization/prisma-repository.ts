@@ -351,6 +351,43 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     }
   }
 
+  /**
+   * D-72: the calendar window a ledger row belongs to is the window the
+   * authorization was **decided** in -- never the window the later event
+   * happens to fire in.
+   *
+   * Before D-72 every write recomputed `windowKeys(now)`. A $90 hold taken
+   * in August and released in September wrote `RESERVATION +9000` under
+   * August's keys and `RELEASE -9000` under September's: August kept a hold
+   * that no longer existed, September reported **negative** cumulative
+   * spend, and the mandate's September budget was its cap plus $90. A
+   * negative window SUM is precisely what non-negotiable #6 says cannot
+   * happen, and it happened on a calendar boundary with no concurrency
+   * involved at all.
+   *
+   * Prefers the reservation's own stored keys when there is a reservation,
+   * so a release always cancels the row it releases exactly -- including
+   * for any row written before D-72, whose keys may not match the
+   * authorization's window. Falls back to the authorization's decision
+   * window when there is no reservation (a `reserve_on_step_up: false`
+   * capture, a refund), which by construction is the same value
+   * `saveAuthorization` stamped on a reservation it did write.
+   */
+  private async windowKeysFor(
+    auth: { mandateId: string; createdAt: Date },
+    reservation: { dayKey: string; weekKey: string; monthKey: string } | null,
+  ): Promise<{ day: string; week: string; month: string }> {
+    if (reservation) {
+      return {
+        day: reservation.dayKey,
+        week: reservation.weekKey,
+        month: reservation.monthKey,
+      };
+    }
+    const timezone = await this.timezoneFor(auth.mandateId);
+    return windowKeys(auth.createdAt, timezone);
+  }
+
   async resolveStepUp(
     mandateId: string,
     authorizationId: string,
@@ -381,8 +418,8 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       where: { mandateId, authorizationId, type: "RESERVATION" },
     });
     if (reservation) {
-      const timezone = await this.timezoneFor(mandateId);
-      const keys = windowKeys(now, timezone);
+      // D-72: the reservation's own window, not `now`'s.
+      const keys = await this.windowKeysFor(auth, reservation);
       await client.ledgerEntry.create({
         data: {
           id: generateId(ID_PREFIX.evidence),
@@ -457,11 +494,10 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     });
     if (existing) return; // reserve_on_step_up: true already took the hold
 
-    // Window keys from `now`, matching every other write in this file.
-    // D-72 is what changes where a hold lands; D-71 is only about which
-    // mandate's ledger it lands on.
-    const timezone = await this.timezoneFor(mandateId);
-    const keys = windowKeys(now, timezone);
+    // D-72: the window the authorization was decided in, not the window
+    // the approval happens to land in -- a step-up raised in August and
+    // approved in September is August's spend.
+    const keys = await this.windowKeysFor(auth, null);
     await client.ledgerEntry.create({
       data: {
         id: generateId(ID_PREFIX.evidence),
@@ -637,13 +673,13 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       );
     }
 
-    const timezone = await this.timezoneFor(auth.mandateId);
-    const keys = windowKeys(now, timezone);
-
     // D-71: scoped to this authorization's own mandate.
     const reservation = await client.ledgerEntry.findFirst({
       where: { mandateId: auth.mandateId, authorizationId: input.authorizationId, type: "RESERVATION" },
     });
+    // D-72: both the release and the capture land in the window this
+    // authorization was decided in.
+    const keys = await this.windowKeysFor(auth, reservation);
     if (reservation) {
       await client.ledgerEntry.create({
         data: {
@@ -691,8 +727,13 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     const auth = await client.authorization.findUnique({ where: { id: input.authorizationId } });
     if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
 
-    const timezone = await this.timezoneFor(auth.mandateId);
-    const keys = windowKeys(now, timezone);
+    // D-72: a credit offsets the charge it reverses, so it belongs in that
+    // charge's window. Stamping it with `now` would push a negative row
+    // into a window where nothing was ever spent -- the same defect as the
+    // cross-boundary release, by a different route. The reservation is
+    // gone by the time a refund arrives (released at capture), so this
+    // resolves through the authorization's decision window.
+    const keys = await this.windowKeysFor(auth, null);
 
     await client.ledgerEntry.create({
       data: {

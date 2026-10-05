@@ -793,7 +793,7 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     return { approver, spender, repo, repos };
   }
 
-  it("(a) THE ATTACK: a reservation made in W1 and released in W2 decrements W2, leaving W1 inflated and W2 negative", async () => {
+  it("(a) THE ATTACK, closed by D-72: a reservation made in W1 and released in W2 decrements W1, the window it was taken in", async () => {
     const { spender, repo, repos } = await setUpReservingSpender();
 
     // Reserve $90 in W1 (a STEP_UP above the $50 threshold reserves).
@@ -817,22 +817,22 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     const rows = await ledgerFor(spender.mandateId);
     const release = rows.find((r) => r.type === "RELEASE")!;
 
-    // THE BUG: the release is stamped with W2's keys, not the reservation's.
-    expect(release.monthKey).toBe(KEYS_W2.month);
-    expect(release.monthKey).not.toBe(KEYS_W1.month);
+    // The release carries the RESERVATION's keys. It was stamped with W2's
+    // before D-72, so it cancelled a hold in a window that never had one.
+    expect(release.monthKey).toBe(KEYS_W1.month);
+    expect(release.dayKey).toBe(KEYS_W1.day);
+    expect(release.weekKey).toBe(KEYS_W1.week);
 
-    // So W1 still carries a $90 hold that was released, and W2 carries
-    // negative spend -- which #6 says can never happen.
-    expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(90, "USD"));
-    expect(monthSum(rows, KEYS_W2.month)).toBe(-toMinorUnits(90, "USD"));
+    // Both windows are now true: the hold is gone from W1, and W2 never
+    // learned about a transaction that did not happen in it.
+    expect(monthSum(rows, KEYS_W1.month)).toBe(0);
+    expect(monthSum(rows, KEYS_W2.month)).toBe(0);
 
-    // The engine's own view of W2, read before anything spends into it:
-    // negative cumulative spend, which #6 says can never happen.
     const snapshot = await repo.getSpendSnapshot(spender.mandateId, { timezone: "UTC" } as never, W2);
-    expect(snapshot.month.amount).toBe(-toMinorUnits(90, "USD"));
+    expect(snapshot.month.amount).toBe(0); // was -$9000
 
-    // So the spender's W2 budget is $190 against a $100 cap: $150 in a
-    // single transaction, in a month where nothing has been spent at all.
+    // $150 in W2 is still refused -- the cap is $100, and no phantom
+    // release has inflated it.
     const overspend = await authorize(repos, {
       organizationId: spender.organizationId,
       request: request(spender.organizationId, spender.agentId, spender.principalId, 150),
@@ -840,12 +840,13 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
       apiKey: spender.apiKey,
     });
     if (overspend.kind !== "decided") throw new Error("unreachable");
-    expect(overspend.authorization.reasons.map((r) => r.code)).not.toContain(
+    expect(overspend.authorization.decision).toBe(Decision.DENY);
+    expect(overspend.authorization.reasons.map((r) => r.code)).toContain(
       ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED,
     );
   });
 
-  it("(b) reserve in W1, execute in W2: the charge lands in W2 but offsets its own release, so W1 keeps the whole $90", async () => {
+  it("(b) reserve in W1, execute in W2: the charge lands in W1 -- the window it was authorized in", async () => {
     const { approver, spender, repo, repos } = await setUpReservingSpender();
 
     const held = await authorize(repos, {
@@ -879,17 +880,17 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     );
 
     const rows = await ledgerFor(spender.mandateId);
-    // Three rows: RESERVATION in W1, RELEASE and CAPTURE in W2.
+    // All three rows carry W1: the window the authorization was decided in.
+    // RELEASE and CAPTURE used to be stamped W2, the window the *later*
+    // event happened to fire in.
     expect(rows.map((r) => [r.type, r.monthKey])).toEqual([
       ["RESERVATION", KEYS_W1.month],
-      ["RELEASE", KEYS_W2.month],
-      ["CAPTURE", KEYS_W2.month],
+      ["RELEASE", KEYS_W1.month],
+      ["CAPTURE", KEYS_W1.month],
     ]);
 
-    // $90 of real money was captured in W2. W2 reports $0 and W1 reports
-    // $90 -- which is inconsistent with (a), where the same boundary left
-    // W1 inflated by an amount that was never spent at all. Either way the
-    // window a charge lands in depends on when the *later* event fired.
+    // $90 was authorized in W1 and $90 is what W1 reports. W2 is untouched
+    // -- which is now consistent with (a) rather than its mirror image.
     expect(monthSum(rows, KEYS_W1.month)).toBe(toMinorUnits(90, "USD"));
     expect(monthSum(rows, KEYS_W2.month)).toBe(0);
   });
@@ -942,17 +943,71 @@ describe.skipIf(!reachable)(SUITE_NAME, { timeout: 30_000 }, () => {
     const rows = await ledgerFor(spender.mandateId);
     const settled = toMinorUnits(80, "USD"); // only the third actually moved
 
-    // Truth: $80 settled, in W2. The ledger says neither.
     const w1 = monthSum(rows, KEYS_W1.month);
     const w2 = monthSum(rows, KEYS_W2.month);
-    expect(w1).toBe(toMinorUnits(210, "USD")); // all three holds, none released here
-    expect(w2).toBe(-toMinorUnits(130, "USD")); // three releases, one capture
-    expect(w1 + w2).toBe(settled); // the total is right; both windows are wrong
 
-    // Both halves of the invariant the fix must establish, failing now:
-    expect(w2).toBeLessThan(0); // #6: a window SUM is never negative
-    expect(w1).not.toBe(0); // nothing settled in W1
-    expect(w2).not.toBe(settled); // and W2 does not report what settled in it
+    // THE INVARIANT, all three parts. Before D-72 this read
+    // w1 = $210, w2 = -$130.
+    //
+    //  1. No window SUM is negative (#6).
+    expect(w1).toBeGreaterThanOrEqual(0);
+    expect(w2).toBeGreaterThanOrEqual(0);
+    //  2. Each window's SUM is what was authorized in it. All three
+    //     authorizations were decided in W1, and $80 of the $210 survived
+    //     to settle; the other two were released in W1 too.
+    expect(w1).toBe(settled);
+    expect(w2).toBe(0);
+    //  3. The total equals what settled.
+    expect(w1 + w2).toBe(settled);
+
+    // Every row carries W1 -- nothing leaked across the boundary.
+    expect(rows.every((r) => r.monthKey === KEYS_W1.month)).toBe(true);
+  });
+
+  it("(c2) the invariant holds for a refund landing in a later window too", async () => {
+    // Not in the review, and the same defect by a different route: a CREDIT
+    // stamped with `now` would push a negative row into a window where
+    // nothing had been spent. Asserted on the rows directly rather than
+    // through getSpendSnapshot, so `refunds_credit_budget` -- which decides
+    // whether the engine *counts* a credit, not where it is filed -- is not
+    // a variable here.
+    const { spender, repo, repos } = await setUpReservingSpender({ capUsd: 1000 });
+
+    const allowed = await authorize(repos, {
+      organizationId: spender.organizationId,
+      request: request(spender.organizationId, spender.agentId, spender.principalId, 40),
+      now: W1,
+      apiKey: spender.apiKey,
+    });
+    if (allowed.kind !== "decided") throw new Error("unreachable");
+    expect(allowed.authorization.decision).toBe(Decision.ALLOW);
+
+    await repo.recordExecution(
+      {
+        authorizationId: allowed.authorization.id,
+        mandateId: spender.mandateId,
+        provider: "stripe",
+        providerReference: "pi_test_finding6c2",
+        providerFee: 0,
+      },
+      W1,
+    );
+
+    // The refund arrives a month later.
+    await repo.recordRefund(
+      {
+        authorizationId: allowed.authorization.id,
+        amount: toMinorUnits(40, "USD"),
+        provider: "stripe",
+        providerReference: "re_test_finding6c2",
+      },
+      W2,
+    );
+
+    const rows = await ledgerFor(spender.mandateId);
+    expect(rows.find((r) => r.type === "CREDIT")?.monthKey).toBe(KEYS_W1.month);
+    expect(monthSum(rows, KEYS_W2.month)).toBe(0); // not -$4000
+    expect(monthSum(rows, KEYS_W1.month)).toBeGreaterThanOrEqual(0);
   });
 
   it("(d) a replayed Issuing webhook reserves the mandate's budget a second time", async () => {

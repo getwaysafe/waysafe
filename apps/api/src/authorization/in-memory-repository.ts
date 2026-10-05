@@ -437,6 +437,29 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return row;
   }
 
+  /**
+   * D-72: the window a ledger row belongs to is the window the
+   * authorization was decided in, never the window the later event fires
+   * in. See `PrismaAuthorizationRepository.windowKeysFor` for the full
+   * reasoning and the bug it closes; this is the same rule, so the two
+   * repositories cannot drift on it.
+   */
+  private windowKeysFor(
+    auth: { mandate_id: string; created_at: string },
+    reservation: { dayKey: string; weekKey: string; monthKey: string } | undefined,
+  ): { day: string; week: string; month: string } {
+    if (reservation) {
+      return {
+        day: reservation.dayKey,
+        week: reservation.weekKey,
+        month: reservation.monthKey,
+      };
+    }
+    const mandate = this.mandates.get(auth.mandate_id);
+    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
+    return windowKeys(new Date(auth.created_at), timezone);
+  }
+
   async resolveStepUp(
     mandateId: string,
     authorizationId: string,
@@ -461,9 +484,8 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       (e) => e.authorizationId === authorizationId && e.type === "RESERVATION",
     );
     if (reservation) {
-      const mandate = this.mandates.get(mandateId);
-      const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
-      const keys = windowKeys(now, timezone);
+      // D-72: the reservation's own window, not `now`'s.
+      const keys = this.windowKeysFor(auth, reservation);
       entries.push({
         id: generateId(ID_PREFIX.evidence),
         mandateId,
@@ -527,9 +549,8 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     );
     if (existing) return; // reserve_on_step_up: true already took the hold
 
-    const mandate = this.mandates.get(mandateId);
-    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
-    const keys = windowKeys(now, timezone);
+    // D-72: the window the authorization was decided in.
+    const keys = this.windowKeysFor(auth, undefined);
     entries.push({
       id: generateId(ID_PREFIX.evidence),
       mandateId,
@@ -648,14 +669,12 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       );
     }
 
-    const mandate = this.mandates.get(auth.mandate_id);
-    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
-    const keys = windowKeys(now, timezone);
-
     const entries = this.ledgerByMandate.get(auth.mandate_id) ?? [];
     const reservation = entries.find(
       (e) => e.authorizationId === input.authorizationId && e.type === "RESERVATION",
     );
+    // D-72: release and capture both land in the authorization's own window.
+    const keys = this.windowKeysFor(auth, reservation);
     if (reservation) {
       entries.push({
         id: generateId(ID_PREFIX.evidence),
@@ -692,9 +711,10 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     const auth = this.authorizations.get(input.authorizationId);
     if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
 
-    const mandate = this.mandates.get(auth.mandate_id);
-    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
-    const keys = windowKeys(now, timezone);
+    // D-72: a credit offsets the charge it reverses, so it belongs in that
+    // charge's window -- stamping it with `now` would push a negative row
+    // into a window where nothing was spent.
+    const keys = this.windowKeysFor(auth, undefined);
 
     const entries = this.ledgerByMandate.get(auth.mandate_id) ?? [];
     entries.push({
