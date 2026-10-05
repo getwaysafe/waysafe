@@ -82,6 +82,7 @@ export async function executePayment(
     repos.authorization.recordExecution(
       {
         authorizationId: authorization.id,
+        mandateId: authorization.mandate_id,
         provider: adapter.name,
         providerReference: result.providerReference,
         providerFee: result.providerFee,

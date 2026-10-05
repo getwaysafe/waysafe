@@ -442,6 +442,20 @@ export async function resolveStepUpAsApprover(
         // and velocity limits actually accumulate from approvals, not
         // only from its own authorize() calls.
         await repo.recordApproverLedgerEntry(gate.mandateId, stepUp.id, stepUp.action.amount, now);
+        // D-71: and the ORIGINAL mandate holds it too, so the approved
+        // amount costs the budget of the mandate that is actually
+        // spending. A no-op when `reserve_on_step_up` already took the
+        // hold. Both writes are inside both mandates' locks. The
+        // approver's entry above is a separate D-62 check, never a
+        // substitute for this one: with only that entry, a
+        // `reserve_on_step_up: false` mandate had an unlimited number of
+        // $80 payments approved against an $80 cap.
+        await repo.recordStepUpApprovalHold(
+          stepUp.mandate_id,
+          stepUp.id,
+          stepUp.action.amount,
+          now,
+        );
         const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "approved", now);
         return { kind: "approved" as const, authorization: updated, reasons: result.reasons };
       }

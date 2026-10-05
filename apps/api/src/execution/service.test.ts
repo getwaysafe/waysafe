@@ -190,7 +190,7 @@ describe("executePayment", () => {
     expect(adapter.calls).toHaveLength(1);
   });
 
-  it("THE ATTACK: recordExecution refuses a non-executable status directly, even bypassing the type guard (defense in depth)", async () => {
+  it("THE ATTACK: recordExecution never charges twice, even bypassing the type guard (defense in depth)", async () => {
     const ctx = await setup();
     const auth = await decide(ctx, 83);
     const executable = asExecutable(auth);
@@ -204,13 +204,45 @@ describe("executePayment", () => {
     );
 
     // The authorization is now EXECUTED. Calling the repository method
-    // directly -- as if the type guard didn't exist -- must still be
-    // refused by the repository's own runtime check.
+    // directly -- as if the type guard didn't exist -- must not produce a
+    // second charge.
+    //
+    // D-71 changed the SHAPE of this defence, not its strength: it used to
+    // throw /not executable/, and now returns the recorded outcome, so a
+    // retried capture webhook or a retried execute() is idempotent instead
+    // of an error every caller has to special-case. What the test must
+    // assert is therefore "no second charge", which is the property that
+    // actually matters -- asserting the throw was asserting the mechanism.
+    const replayed = await ctx.authorization.recordExecution(
+      {
+        authorizationId: auth.id,
+        mandateId: auth.mandate_id,
+        provider: "fake",
+        providerReference: "ref",
+        providerFee: 0,
+      },
+      NOW,
+    );
+    expect(replayed.status).toBe("EXECUTED");
+    expect(replayed.id).toBe(auth.id);
+    const captures = ctx.authorization
+      .ledgerEntriesFor(auth.mandate_id)
+      .filter((e) => e.type === "CAPTURE");
+    expect(captures).toHaveLength(1);
+
+    // A genuinely wrong mandate id is still a hard error -- that is a
+    // caller bug, not a retry.
     await expect(
       ctx.authorization.recordExecution(
-        { authorizationId: auth.id, provider: "fake", providerReference: "ref", providerFee: 0 },
+        {
+          authorizationId: auth.id,
+          mandateId: "mandate_someone_elses",
+          provider: "fake",
+          providerReference: "ref",
+          providerFee: 0,
+        },
         NOW,
       ),
-    ).rejects.toThrow(/not executable/);
+    ).rejects.toThrow(/belongs to mandate/);
   });
 });

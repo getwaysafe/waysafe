@@ -229,6 +229,18 @@ export interface AgentListItem {
 
 export interface RecordExecutionInput {
   authorizationId: string;
+  /**
+   * The mandate this authorization was issued against -- D-71.
+   *
+   * Required, and validated against the authorization row rather than
+   * trusted: a mismatch is an error, never a silent write to whichever
+   * mandate the row happens to name. It exists because the reservation
+   * lookup has to be scoped to one mandate, and since D-62 two mandates
+   * can hold a RESERVATION under a single authorization id -- the
+   * approver's and the spender's. Keying on the authorization id alone
+   * found the approver's row and released it onto the spender's ledger.
+   */
+  mandateId: string;
   provider: string;
   providerReference: string;
   /** Integer minor units. */
@@ -309,6 +321,30 @@ export interface AuthorizationRepository {
    * approver's mandate, not the original one).
    */
   recordApproverLedgerEntry(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void>;
+
+  /**
+   * D-71: on approval, the ORIGINAL (spending) mandate holds the amount
+   * too, so an approved step-up costs the budget of the mandate that is
+   * actually spending.
+   *
+   * The approver's own entry (`recordApproverLedgerEntry`) is a *separate*
+   * D-62 Addition B check and never a substitute for this one -- before
+   * D-71 it was the only ledger row an approval produced, so a
+   * `reserve_on_step_up: false` mandate could have an unlimited number of
+   * $80 payments approved against an $80 cap.
+   *
+   * A no-op when a RESERVATION for this (mandate, authorization) already
+   * exists, which is the `reserve_on_step_up: true` case: the hold was
+   * taken when the step-up was created and must not be doubled. Must be
+   * called from inside `withMandateLock` for `mandateId` -- the original
+   * mandate, not the approver's.
+   */
+  recordStepUpApprovalHold(
     mandateId: string,
     authorizationId: string,
     amount: number,

@@ -7230,6 +7230,110 @@ directory (a live merchant data source, still unbuilt) inherits this
 contract: breadth is something an entry states, never something a pattern
 infers.
 
+## D-71 — An approved step-up charges the mandate that spent (review finding 5)
+
+**Decision:** the approved amount is held on the **original** (spending)
+mandate's ledger at approval time. `recordExecution` takes the mandate id,
+validates it against the authorization row, and scopes its reservation lookup
+to it. An authorization is captured once, enforced by a partial unique index.
+
+Finding 5 of the adversarial review of `387958a`. Two defects that turn out
+to be one, and only reproducible against real Postgres:
+
+**1. The approval wrote nothing to the spending mandate.** D-62's ALLOW
+branch called `recordApproverLedgerEntry` — the *approver's* permanent charge
+(Addition B) — and then flipped the status. With `reserve_on_step_up: false`
+there was no hold on the spending mandate to begin with, so between approval
+and execution that mandate's cumulative spend read zero and an unlimited
+number of $80 payments could be approved against an $80 cap.
+
+**2. `recordExecution`'s reservation lookup was not mandate-scoped.** It read
+`findFirst({ where: { authorizationId, type: "RESERVATION" } })`. Since D-62
+two mandates can hold a RESERVATION under one authorization id, so with
+defect 1 in play the only such row belonged to the **approver** — and
+`recordExecution` wrote a `RELEASE` for it onto the **spender's** ledger. The
+spender then had `RELEASE -$80` and `CAPTURE +$80`: net zero. $80 of real
+money moved and the mandate's SUM reported $0, so the next $80 ALLOWed.
+
+That is why these are one bug rather than two. Defect 2 is what made defect 1
+survive execution; without it the CAPTURE alone would have charged the
+spender correctly, if late.
+
+**The attack, confirmed against real Postgres before the fix:**
+
+| Case | Before D-71 | After |
+|---|---|---|
+| (a) $80 approved + executed, then another $80 | spender SUM `$0`, second **ALLOW** — $160 on a $100 cap | SUM `$80`, second **DENY** `DENY_CUMULATIVE_LIMIT_EXCEEDED` |
+| (a2) budget consumed at approval, before execution | spender ledger empty | hold present; a second $80 DENIED |
+| (b) where the $80 landed | approver's ledger only; spender `RELEASE -80` + `CAPTURE +80` = `$0` | spender holds, releases its **own** row, captures: `$80`; approver separately charged `$80` |
+| (c) reservation lookup | found the approver's row on another mandate | mandate-scoped; a wrong mandate id is rejected outright |
+| (d) `recordExecution` twice | threw `/not executable/` | no-op returning the original; one CAPTURE |
+
+**What changed.** `RecordExecutionInput` gains a required `mandateId`,
+validated against the authorization row rather than trusted — a mismatch
+throws, because a caller holding the wrong mandate id has a bug and charging
+"whichever mandate the row names" would hide it. Both real callers
+(`execution/service.ts`, `webhooks/service.ts`) already had the right id in
+hand. New `recordStepUpApprovalHold` writes the original mandate's hold,
+a no-op when one already exists (`reserve_on_step_up: true` took it at
+step-up time and it must not be doubled). `resolveStepUp`'s own release
+lookup was scoped too — same latent defect, reachable the moment a decline
+and an approval race.
+
+**The approver's charge stays a separate check.** D-62 Addition B exists so
+an approver's own limits accumulate from approvals. D-71 does not touch it
+and does not substitute for it: an approval now costs budget on **both**
+mandates, for two different reasons. The test asserts both rows and that the
+approver's is still never released, on its own ledger or anyone else's.
+
+**A replayed execution is now idempotent rather than an error.** The second
+`recordExecution` returns the recorded outcome instead of throwing, so a
+retried capture webhook or a retried `execute()` needs no special case. The
+real control is in the database, not the status check — two partial unique
+indexes in `manual-constraints.sql` (D-35's mechanism; `db push` cannot
+express a `WHERE` clause on `@@unique`, so `npm run db:constraints` applies
+them):
+
+```sql
+... ON ledger_entries (mandateId, authorizationId) WHERE type = 'CAPTURE';
+... ON ledger_entries (mandateId, authorizationId) WHERE type = 'RESERVATION';
+```
+
+Partial rather than a plain unique on the pair, because one authorization
+legitimately produces several rows on one mandate — a hold, its release, a
+capture, later credits. What must be unique is one of each *kind that can
+double-charge*. Scoped per mandate on purpose: the approver's row and the
+spender's row share an authorization id, which is legitimate and must stay
+possible. The CAPTURE index is what holds when two callers both read
+`AUTHORIZED`; the RESERVATION index is what makes
+`recordStepUpApprovalHold`'s "does a hold already exist?" read safe, since
+that read cannot be trusted on its own.
+
+**Why real Postgres.** `InMemoryAuthorizationRepository` keeps one ledger
+array per mandate, so its reservation lookups were mandate-scoped *by
+construction* and defect 2 was structurally invisible to it. That is exactly
+the gap D-15 said the in-memory fake would leave, finally biting: a bug in
+the money path that the entire in-memory suite could not express. The new
+`budget.adversarial.test.ts` is Postgres-gated for that reason, and skips
+cleanly without `DATABASE_URL`.
+
+**Existing expectations that encoded the bug: one.**
+`execution/service.test.ts`'s "recordExecution refuses a non-executable
+status directly" asserted `rejects.toThrow(/not executable/)` on an
+already-EXECUTED row. D-71 changes the *shape* of that defence, not its
+strength, so the test now asserts the property that actually matters — no
+second charge, one CAPTURE row, same authorization returned — plus that a
+genuinely wrong mandate id is still a hard error. Asserting the throw was
+asserting the mechanism. Nothing else in the suite had to change, because
+nothing else ever constructed a step-up on a non-reserving mandate and then
+executed it.
+
+**Change cost if wrong:** the `mandateId` requirement is compile-enforced, so
+a missed call site is a type error rather than a runtime surprise. The
+riskiest piece is the approval hold on a `reserve_on_step_up: false` mandate,
+which now consumes budget earlier than it used to — the conservative
+direction, and the one the policy's own cap already asked for.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

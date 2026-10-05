@@ -374,8 +374,11 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       return toStoredAuthorization(updated);
     }
 
+    // D-71: scoped to this mandate. Since D-62 two mandates can hold a
+    // RESERVATION under one authorization id, and an unscoped lookup here
+    // would release the approver's hold onto the original mandate's ledger.
     const reservation = await client.ledgerEntry.findFirst({
-      where: { authorizationId, type: "RESERVATION" },
+      where: { mandateId, authorizationId, type: "RESERVATION" },
     });
     if (reservation) {
       const timezone = await this.timezoneFor(mandateId);
@@ -414,6 +417,49 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     const auth = await client.authorization.findUnique({ where: { id: authorizationId } });
     if (!auth) throw new Error(`no such authorization: ${authorizationId}`);
 
+    const timezone = await this.timezoneFor(mandateId);
+    const keys = windowKeys(now, timezone);
+    await client.ledgerEntry.create({
+      data: {
+        id: generateId(ID_PREFIX.evidence),
+        organizationId: auth.organizationId,
+        mandateId,
+        authorizationId,
+        type: "RESERVATION",
+        amount,
+        currency: auth.currency,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      },
+    });
+  }
+
+  /** D-71. See `AuthorizationRepository.recordStepUpApprovalHold`. */
+  async recordStepUpApprovalHold(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void> {
+    const client = this.client;
+    const auth = await client.authorization.findUnique({ where: { id: authorizationId } });
+    if (!auth) throw new Error(`no such authorization: ${authorizationId}`);
+    if (auth.mandateId !== mandateId) {
+      throw new Error(
+        `authorization ${authorizationId} belongs to mandate ${auth.mandateId}, not ${mandateId}`,
+      );
+    }
+
+    const existing = await client.ledgerEntry.findFirst({
+      where: { mandateId, authorizationId, type: "RESERVATION" },
+    });
+    if (existing) return; // reserve_on_step_up: true already took the hold
+
+    // Window keys from `now`, matching every other write in this file.
+    // D-72 is what changes where a hold lands; D-71 is only about which
+    // mandate's ledger it lands on.
     const timezone = await this.timezoneFor(mandateId);
     const keys = windowKeys(now, timezone);
     await client.ledgerEntry.create({
@@ -566,6 +612,25 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     const client = this.client;
     const auth = await client.authorization.findUnique({ where: { id: input.authorizationId } });
     if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+
+    // D-71: an authorization is executed against the mandate that issued
+    // it, and nothing else. Rejected rather than coerced -- a caller that
+    // has the wrong mandate id has a bug, and charging "whichever mandate
+    // the row names" would hide it.
+    if (auth.mandateId !== input.mandateId) {
+      throw new Error(
+        `authorization ${input.authorizationId} belongs to mandate ${auth.mandateId}, not ${input.mandateId}`,
+      );
+    }
+
+    // D-71: an authorization is executable once. A second call returns the
+    // recorded outcome rather than throwing, so a retried capture webhook
+    // or a retried execute() is idempotent instead of an error the caller
+    // has to special-case. The unique index on (mandate_id,
+    // authorization_id) WHERE type = 'CAPTURE' is the real control -- this
+    // check only keeps the common path quiet.
+    if (auth.status === "EXECUTED") return toStoredAuthorization(auth);
+
     if (auth.status !== "AUTHORIZED" && auth.status !== "STEP_UP_APPROVED") {
       throw new Error(
         `authorization ${input.authorizationId} is not executable (status=${auth.status})`,
@@ -575,8 +640,9 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     const timezone = await this.timezoneFor(auth.mandateId);
     const keys = windowKeys(now, timezone);
 
+    // D-71: scoped to this authorization's own mandate.
     const reservation = await client.ledgerEntry.findFirst({
-      where: { authorizationId: input.authorizationId, type: "RESERVATION" },
+      where: { mandateId: auth.mandateId, authorizationId: input.authorizationId, type: "RESERVATION" },
     });
     if (reservation) {
       await client.ledgerEntry.create({

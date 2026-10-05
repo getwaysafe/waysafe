@@ -135,6 +135,7 @@ async function handleIssuingCapture(
     repos.authorization.recordExecution(
       {
         authorizationId: stored.id,
+        mandateId: stored.mandate_id,
         provider: "stripe_issuing",
         providerReference: authorization.id,
         providerFee: 0,

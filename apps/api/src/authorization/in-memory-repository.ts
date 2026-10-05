@@ -506,6 +506,44 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     this.ledgerByMandate.set(mandateId, entries);
   }
 
+  /** D-71. See `AuthorizationRepository.recordStepUpApprovalHold`. */
+  async recordStepUpApprovalHold(
+    mandateId: string,
+    authorizationId: string,
+    amount: number,
+    now: Date,
+  ): Promise<void> {
+    const auth = this.authorizations.get(authorizationId);
+    if (!auth) throw new Error(`no such authorization: ${authorizationId}`);
+    if (auth.mandate_id !== mandateId) {
+      throw new Error(
+        `authorization ${authorizationId} belongs to mandate ${auth.mandate_id}, not ${mandateId}`,
+      );
+    }
+
+    const entries = this.ledgerByMandate.get(mandateId) ?? [];
+    const existing = entries.find(
+      (e) => e.authorizationId === authorizationId && e.type === "RESERVATION",
+    );
+    if (existing) return; // reserve_on_step_up: true already took the hold
+
+    const mandate = this.mandates.get(mandateId);
+    const timezone = mandate?.currentVersion.policy.accounting.timezone ?? "UTC";
+    const keys = windowKeys(now, timezone);
+    entries.push({
+      id: generateId(ID_PREFIX.evidence),
+      mandateId,
+      authorizationId,
+      type: "RESERVATION",
+      amount,
+      dayKey: keys.day,
+      weekKey: keys.week,
+      monthKey: keys.month,
+      createdAt: now,
+    });
+    this.ledgerByMandate.set(mandateId, entries);
+  }
+
   async listExpiredPendingStepUps(now: Date): Promise<{ mandateId: string; authorizationId: string }[]> {
     return [...this.authorizations.values()]
       .filter(
@@ -596,6 +634,14 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
   async recordExecution(input: RecordExecutionInput, now: Date): Promise<StoredAuthorization> {
     const auth = this.authorizations.get(input.authorizationId);
     if (!auth) throw new Error(`no such authorization: ${input.authorizationId}`);
+    // D-71: executed against the mandate that issued it, and nothing else.
+    if (auth.mandate_id !== input.mandateId) {
+      throw new Error(
+        `authorization ${input.authorizationId} belongs to mandate ${auth.mandate_id}, not ${input.mandateId}`,
+      );
+    }
+    // D-71: executable once; a replay returns the recorded outcome.
+    if (auth.status === "EXECUTED") return auth;
     if (auth.status !== "AUTHORIZED" && auth.status !== "STEP_UP_APPROVED") {
       throw new Error(
         `authorization ${input.authorizationId} is not executable (status=${auth.status})`,
