@@ -25,6 +25,7 @@ export const POSTGRES_GATED_FILES = [
   "apps/api/src/principals/prisma-repository.test.ts",
   "apps/api/src/agent-keys/prisma-repository.test.ts",
   "apps/api/src/webauthn/prisma-repository.test.ts",
+  "apps/api/src/review2.adversarial.test.ts",
 ];
 
 export default defineConfig({

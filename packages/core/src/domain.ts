@@ -174,6 +174,21 @@ export const ProposedActionSchema = z.object({
   attestations: z.record(z.union([z.string(), z.number(), z.boolean()])).default(
     {},
   ),
+  /**
+   * The payment instrument this action will settle against — D-78.
+   *
+   * Declared at *authorization* time, not at execution time. Before D-78 the
+   * reference was supplied in the `POST /v1/authorizations/:id/execute` body,
+   * which meant the decision never covered where the money would actually go:
+   * any caller who could reach the route chose the instrument itself. An
+   * authorization now binds the instrument it was decided for, and execution
+   * uses that and nothing else.
+   *
+   * Optional in the schema so a pre-D-78 authorization row still parses.
+   * Execution refuses an authorization that has none, which is the migration
+   * path: declare it here.
+   */
+  payment_method_ref: z.string().min(1).optional(),
 });
 
 export type ProposedAction = z.infer<typeof ProposedActionSchema>;

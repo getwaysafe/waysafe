@@ -387,6 +387,8 @@ async function main() {
       category: "office_supplies",
       description: "Printer paper and toner",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision("$42.00 at staples.com", allow);
@@ -410,6 +412,8 @@ async function main() {
       category: "office_supplies",
       description: "A very large bulk order",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision("$203.00 at staples.com", deny);
@@ -428,6 +432,8 @@ async function main() {
       category: "office_supplies",
       description: "A monitor for the home office",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision("$87.00 at bestbuy.com", stepUpLegit);
@@ -477,6 +483,8 @@ async function main() {
       category: "office_supplies",
       description: '"Staples" -- no domain, no account, just the agent\'s word for it',
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision('$65.00, merchant asserted only as "Staples" (no domain)', stepUpSpoof);

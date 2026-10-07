@@ -153,7 +153,13 @@ const StepUpBodySchema = z.object({
 
 const ExecuteBodySchema = z.object({
   rail: z.string().min(1),
-  payment_method_ref: z.string().min(1),
+  /**
+   * D-78: no longer authoritative. Kept so an existing caller is told it
+   * mismatches rather than silently ignored, and so the wire shape does not
+   * break. The instrument actually used is the one declared on the action at
+   * authorization time.
+   */
+  payment_method_ref: z.string().min(1).optional(),
 });
 
 const ListQuerySchema = z.object({
@@ -316,6 +322,25 @@ const AGENT_ACCESSIBLE_ROUTES = new Set([
 
 function zodIssues(error: z.ZodError) {
   return error.issues.map((i) => ({ path: `/${i.path.join("/")}`, message: i.message }));
+}
+
+/**
+ * D-78: may this credential act on this authorization object?
+ *
+ * D-64 scoped every *route* by credential tier. It did not scope the
+ * *objects* behind those routes, so any agent key in an organization could
+ * read and execute any other agent's authorization -- confirmed by the
+ * second independent review (R4) against real Postgres, with two persisted
+ * agents and real keys. An org credential keeps organization-wide read,
+ * which is what the dashboard uses; an agent credential is confined to the
+ * authorizations it is the actor on.
+ *
+ * Returns true for an org credential. Instrument-actor authorizations
+ * (D-35, `agent_id: null`) are never an agent credential's to act on.
+ */
+function agentMayActOn(auth: StoredAuthorization, authContext: AuthContext): boolean {
+  if (authContext.agentId === null) return true;
+  return auth.agent_id === authContext.agentId;
 }
 
 function toReceiptJSON(auth: StoredAuthorization) {
@@ -1019,6 +1044,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!stored || stored.organization_id !== request.auth!.organizationId) {
       return reply.code(404).send({ error: "not_found" });
     }
+    // D-78: 404, not 403 -- an agent has no business learning that another
+    // agent's authorization exists. Same reasoning D-64 applied to
+    // GET /v1/mandates/:id.
+    if (!agentMayActOn(stored, request.auth!)) {
+      return reply.code(404).send({ error: "not_found" });
+    }
     const current = await expireIfNeeded(stored, new Date());
     return reply.send(toReceiptJSON(current));
   });
@@ -1051,6 +1082,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!stored || stored.organization_id !== request.auth!.organizationId) {
       return reply.code(404).send({ error: "not_found" });
     }
+    // DELIBERATELY no ownership check here. D-62 requires the resolver to be
+    // a DIFFERENT agent -- an approver mandate's own credential -- so
+    // `agentMayActOn` would refuse exactly the caller this route exists for.
+    // Who may resolve a step-up is decided by `resolveStepUpAsApprover`'s own
+    // rules, not by object ownership (D-78).
 
     const now = new Date();
     const current = await expireIfNeeded(stored, now);
@@ -1100,6 +1136,11 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!stored || stored.organization_id !== request.auth!.organizationId) {
       return reply.code(404).send({ error: "not_found" });
     }
+    // D-78: only the agent the authorization was decided for may execute it.
+    // 404 rather than 403, so the route is not an existence oracle.
+    if (!agentMayActOn(stored, request.auth!)) {
+      return reply.code(404).send({ error: "not_found" });
+    }
 
     const now = new Date();
     const current = await expireIfNeeded(stored, now);
@@ -1117,11 +1158,33 @@ export function buildServer(options: BuildServerOptions = {}) {
       return reply.code(400).send({ error: "unknown_rail", rail: body.data.rail });
     }
 
+    // D-78: the instrument comes from the authorization, never from this
+    // request. Before D-78 the caller chose it here, so a decision about an
+    // amount and a merchant said nothing about where the money went.
+    const declared = current.action.payment_method_ref;
+    if (!declared) {
+      return reply.code(409).send({
+        error: "payment_method_not_declared",
+        message:
+          "This authorization did not declare a payment_method_ref. Declare it in the " +
+          "action on POST /v1/authorizations so the decision covers the instrument " +
+          "the money moves from.",
+      });
+    }
+    if (body.data.payment_method_ref && body.data.payment_method_ref !== declared) {
+      return reply.code(409).send({
+        error: "payment_method_mismatch",
+        message:
+          "payment_method_ref does not match the instrument this authorization was " +
+          "decided for. Execution always uses the declared instrument.",
+      });
+    }
+
     const result = await executePayment(
       { authorization: repos.authorization, evidence: repos.evidence },
       executable,
       adapter,
-      body.data.payment_method_ref,
+      declared,
       now,
     );
 
@@ -1568,9 +1631,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     if (!query.success) {
       return reply.code(400).send({ error: "invalid_request", issues: zodIssues(query.error) });
     }
+    // D-78: an agent credential lists only its own authorizations. An org
+    // credential (agentId null) still gets the whole organization.
     const authorizations = await repos.authorization.listAuthorizations(
       request.auth!.organizationId,
       query.data.limit ?? DEFAULT_LIST_LIMIT,
+      request.auth!.agentId,
     );
     return reply.send({ authorizations: authorizations.map(toReceiptJSON) });
   });

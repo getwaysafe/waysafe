@@ -270,6 +270,8 @@ async function main() {
       merchant: { domain: "staples.com" },
       category: "office_supplies",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision(smallPurchase);
@@ -295,6 +297,8 @@ async function main() {
       merchant: { domain: "bestbuy.com" },
       category: "office_supplies",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision(unlistedMerchantPurchase);
@@ -346,6 +350,8 @@ async function main() {
       merchant: { domain: "staples.com" },
       category: "office_supplies",
       attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_demo",
     },
   });
   printDecision(overCap);

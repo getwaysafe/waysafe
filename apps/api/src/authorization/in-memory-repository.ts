@@ -784,9 +784,15 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     };
   }
 
-  async listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]> {
+  async listAuthorizations(
+    organizationId: string,
+    limit: number,
+    agentId?: string | null,
+  ): Promise<StoredAuthorization[]> {
     return [...this.authorizations.values()]
       .filter((a) => a.organizationId === organizationId)
+      // D-78: an agent credential sees only its own.
+      .filter((a) => (agentId ? a.agent_id === agentId : true))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
       .slice(0, limit);
   }

@@ -14,3 +14,4 @@ copy-review.md
 # next.config.ts sets agentRules:false precisely to avoid it; ignored here
 # as a backstop so a build can never commit a second source of truth.
 AGENTS.md
+.codex-review/

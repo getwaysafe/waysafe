@@ -716,6 +716,9 @@ describe("payment execution and step-up completion (Week 4)", () => {
         // trying to exercise.
         merchant: { domain: "staples.com" },
         attestations: {},
+        // D-78: the instrument is declared at authorization time now, so the
+        // decision covers where the money moves from.
+        payment_method_ref: "pm_test",
       },
       context: {},
     };
@@ -1062,6 +1065,7 @@ describe("POST /v1/webhooks/stripe", () => {
           currency: "USD",
           merchant: { domain: "staples.com" },
           attestations: {},
+          payment_method_ref: "pm_test",
         },
         context: {},
       },

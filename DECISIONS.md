@@ -8070,6 +8070,93 @@ watch is `POSTGRES_GATED_FILES`: a new Postgres-dependent test added to the
 main pass would reintroduce the contention, and nothing enforces that the
 list stays complete.
 
+## D-78 — An authorization belongs to the agent it was decided for (review 2, R4)
+
+**Decision:** `GET /v1/authorizations`, `GET /v1/authorizations/:id` and
+`POST /v1/authorizations/:id/execute` are scoped to the acting agent. An org
+credential keeps organization-wide read. Execution uses the payment
+instrument declared on the action at authorization time, and nothing the
+caller sends at execution.
+
+Finding R4 of the second independent review, graded Critical there and the
+largest money-at-risk item of the eleven. Reproduced independently against
+real Postgres with **two persisted agents and real `PrismaAgentKeyRepository`
+keys** -- an upgrade over the review's own probe, which authenticated a key
+for an agent id that had no `Agent` row and used the in-memory key
+repository, so its result could have been an artefact of the fake. It was
+not.
+
+**What D-64 did and did not do.** D-64 inverted *route* authorization to
+default-deny by credential tier, which is why these three routes require a
+credential at all. It said nothing about the *objects* behind them. So any
+agent key in an organization could list every authorization, read any of
+them, and execute any of them. The blast radius of one leaked agent key was
+therefore not "that agent's mandates" as §1 of the threat model claimed, but
+every authorization every agent in the organization had ever been granted.
+
+**A second defect in the same route, and the worse of the two.** The
+instrument was supplied in the `execute` request body. So a decision about an
+amount and a merchant never covered *where the money came from*: whoever
+reached the route chose the instrument. The review's probe executed another
+agent's authorization while naming its own payment method, which is two
+failures compounding -- the object was not scoped, and the money's source was
+never part of the decision.
+
+`ProposedAction` gains an optional `payment_method_ref`, declared at
+authorization time and recorded with the decision. Execution reads it from
+the stored action. A body-supplied value that differs is a `409
+payment_method_mismatch` rather than being silently ignored, and an
+authorization with none declared is a `409 payment_method_not_declared` --
+which is the migration path for a pre-D-78 row, stated as a refusal rather
+than a fallback.
+
+**One route deliberately has no ownership check, and nearly got one.** My
+first patch landed `agentMayActOn` in `POST /v1/authorizations/:id/step-up`
+by matching the wrong occurrence of an identical code shape. That would have
+broken D-62: the resolver there is *required* to be a different agent, an
+approver mandate's own credential, so an ownership check refuses exactly the
+caller the route exists for. Caught because R4's own test then failed with
+`409` instead of `404` on a different assertion -- the ownership check was
+never reached on execute. The step-up route now carries a comment saying why
+it has none, so the next person reading for consistency does not add one.
+
+**Who may act on what, after D-78:**
+
+| Credential | list | read one | execute | resolve a step-up |
+|---|---|---|---|---|
+| agent key, is the actor | own only | yes | yes | no (D-62) |
+| agent key, not the actor | excluded | 404 | 404 | only as a named approver (D-62) |
+| org credential | whole org | yes | yes | no (`agentId: null` matches no mandate) |
+
+**Tests.** `apps/api/src/review2.adversarial.test.ts`'s R4 block, flipped
+from asserting the attack to asserting the block, plus three additions: an
+org credential still reads organization-wide (without which the fix would
+look correct while breaking the dashboard), the actor itself can still do all
+three (without which the test would pass against a route that refused
+everyone), and an authorization with no declared instrument refuses to
+execute.
+
+Verified by negative control: making `agentMayActOn` return true
+unconditionally and letting the body's ref win again fails the R4 test at
+`expected 200 to be 404`.
+
+**Existing expectations that encoded the bug: none, and the reason is
+uncomfortable.** No test in the suite had ever authenticated a *second*
+agent and tried to touch the first one's authorization. `server.test.ts`
+exercises one agent per organization throughout, so the whole class was
+invisible. What did change is mechanical rather than adversarial: eight
+`execute` call sites in `server.test.ts`, five in
+`packages/sdk/src/integration.test.ts`, and seven across `examples/` now
+declare `payment_method_ref` on the action instead of at execution. The SDK's
+`ExecuteParams.paymentMethodRef` becomes optional and non-authoritative.
+
+**Change cost if wrong:** the scoping is a refusal, so a mistake is a 404 for
+a caller that should have been allowed, which is loud. The instrument binding
+is the breaking half: any caller that declared its instrument only at
+execution now gets a 409 until it moves the field. That is deliberate -- a
+silent fallback to the caller's value would have left the hole open for
+exactly the callers that had not migrated.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

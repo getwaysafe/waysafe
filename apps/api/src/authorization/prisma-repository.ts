@@ -815,9 +815,14 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     };
   }
 
-  async listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]> {
+  async listAuthorizations(
+    organizationId: string,
+    limit: number,
+    agentId?: string | null,
+  ): Promise<StoredAuthorization[]> {
     const rows = await this.client.authorization.findMany({
-      where: { organizationId },
+      // D-78: an agent credential sees only its own.
+      where: agentId ? { organizationId, agentId } : { organizationId },
       orderBy: { createdAt: "desc" },
       take: limit,
     });

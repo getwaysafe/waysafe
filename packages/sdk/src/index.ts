@@ -355,7 +355,16 @@ export interface AuthorizationDecision {
 export interface ExecuteParams {
   /** Payment adapter name, e.g. "stripe", "x402". */
   rail: string;
-  paymentMethodRef: string;
+  /**
+   * D-78: no longer what decides the instrument. Declare
+   * `payment_method_ref` on the action at `authorize()` time instead; the
+   * server executes against that and nothing else.
+   *
+   * Still accepted so an existing caller gets an explicit
+   * `payment_method_mismatch` rather than having its value silently
+   * ignored. Omitting it is now the normal shape.
+   */
+  paymentMethodRef?: string;
 }
 
 const EXECUTABLE: unique symbol = Symbol("waysafe.executable");
@@ -941,7 +950,9 @@ export class Waysafe {
     const { body } = await this.request<ReceiptWire>(
       "POST",
       `/v1/authorizations/${decision.decision.authorization_id}/execute`,
-      { rail: params.rail, payment_method_ref: params.paymentMethodRef },
+      params.paymentMethodRef
+        ? { rail: params.rail, payment_method_ref: params.paymentMethodRef }
+        : { rail: params.rail },
     );
     return toDecision(body, false);
   }

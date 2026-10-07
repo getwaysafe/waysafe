@@ -179,6 +179,8 @@ describe("the full journey through the SDK against a real server", () => {
         merchant: { domain: "staples.com" },
         category: "office_supplies",
         attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_test",
       },
     });
     expect(decision.decision).toBe("ALLOW");
@@ -207,6 +209,8 @@ describe("the full journey through the SDK against a real server", () => {
         currency: "USD",
         merchant: { domain: "staples.com" },
         attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_test",
       },
     });
     expect(decision.decision).toBe("DENY");
@@ -332,6 +336,8 @@ describe("the full journey through the SDK against a real server", () => {
         merchant: { domain: "staples.com" },
         category: "office_supplies",
         attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_test",
       },
     });
     expect(decision.decision).toBe("STEP_UP");
@@ -382,6 +388,8 @@ describe("the full journey through the SDK against a real server", () => {
           currency: "USD",
           merchant: { domain: "staples.com" },
           attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_test",
         },
       }),
     ).rejects.toBeInstanceOf(NoActiveMandateError);
@@ -398,6 +406,8 @@ describe("the full journey through the SDK against a real server", () => {
         currency: "USD",
         merchant: { domain: "staples.com" },
         attestations: {},
+        // D-78: the instrument is declared with the decision.
+        payment_method_ref: "pm_test",
       },
     });
 

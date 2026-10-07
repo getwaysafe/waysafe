@@ -453,7 +453,18 @@ export interface AuthorizationRepository {
   getMandateDetail(mandateId: string): Promise<MandateDetail | null>;
 
   /** Most-recent-first, capped at `limit`. */
-  listAuthorizations(organizationId: string, limit: number): Promise<StoredAuthorization[]>;
+  /**
+   * D-78: `agentId` scopes the result to one agent's own authorizations.
+   * Null/omitted returns the whole organization, which is what an org
+   * credential is for. An agent credential must never get the org-wide list:
+   * the second review's R11 used exactly that to find another agent's
+   * authorization id and then execute it.
+   */
+  listAuthorizations(
+    organizationId: string,
+    limit: number,
+    agentId?: string | null,
+  ): Promise<StoredAuthorization[]>;
 
   listAgents(organizationId: string): Promise<AgentListItem[]>;
 }
