@@ -87,6 +87,8 @@ export interface StoredAuthorization {
    * authorization id (D-35) -- the join key a later webhook event (capture)
    * uses to find this row back. Null for an agent-actor authorization. */
   external_ref: string | null;
+  /** D-79. Null for rails with no revision concept, and for pre-D-79 rows. */
+  external_revision?: number | null;
   step_up_expires_at: string | null;
   created_at: string;
   decided_at: string;
@@ -141,6 +143,13 @@ export interface SaveAuthorizationInput {
   /** A rail's own reference for this decision (D-35), e.g. a Stripe Issuing
    * authorization id. Null for an agent-actor authorization. */
   externalRef?: string | null;
+  /**
+   * D-79: which revision of that external authorization this row decided.
+   * Stripe reuses one `issuing_authorization.id` for incremental requests,
+   * so the id alone cannot distinguish a redelivery from a request for more
+   * money. Null for rails with no revision concept.
+   */
+  externalRevision?: number | null;
   stepUpExpiresAt: Date | null;
   now: Date;
   /** Written atomically with the authorization row, inside the same mandate lock. */
@@ -301,6 +310,40 @@ export interface AuthorizationRepository {
    * reasoning as `getAuthorization`: the caller doesn't know the
    * organization until this resolves it. */
   findByExternalRef(externalRef: string): Promise<StoredAuthorization | null>;
+
+  /**
+   * D-79: the row that decided one specific revision of an external
+   * authorization, or null.
+   *
+   * `findByExternalRef` alone cannot answer "have I decided *this* request?"
+   * once a rail can revise a request under the same id. A redelivery is the
+   * same (ref, revision) and replays; a higher revision is a new decision on
+   * the increment.
+   */
+  findByExternalRefAndRevision(
+    externalRef: string,
+    revision: number | null,
+  ): Promise<StoredAuthorization | null>;
+
+  /**
+   * D-79: every decision recorded for one external authorization on one
+   * mandate, oldest revision first.
+   *
+   * The caller needs the whole set, not one row: deciding whether a payload
+   * is a redelivery or an increment means comparing it against each revision
+   * already decided, and allocating the next revision number if it is new.
+   */
+  listByExternalRef(mandateId: string, externalRef: string): Promise<StoredAuthorization[]>;
+
+  /**
+   * D-79: net amount currently held for one external authorization, across
+   * every revision of it -- reservations minus releases, scoped to one
+   * mandate.
+   *
+   * The aggregate hold is what an increment is measured against: a request
+   * to raise $10 to $30 must reserve the $20 difference, not another $30.
+   */
+  getExternalRefHold(mandateId: string, externalRef: string): Promise<number>;
 
   /**
    * Serializes everything the callback does against this mandate: two

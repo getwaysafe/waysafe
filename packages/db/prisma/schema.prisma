@@ -350,6 +350,12 @@ model Authorization {
   /// authorization id (D-35) -- the join key a later webhook event (capture)
   /// uses to find this row back. Null for an agent-actor authorization.
   externalRef String?
+  /// D-79: which revision of that external authorization this row decided.
+  /// Stripe reuses one `issuing_authorization.id` across incremental
+  /// requests, so the id alone cannot tell a redelivery from a request for
+  /// more money. Taken from `request_history.length`. Null for rails that
+  /// have no revision concept and for pre-D-79 rows.
+  externalRevision Int?
 
   stepUpExpiresAt DateTime?
   stepUpEvidenceId String?

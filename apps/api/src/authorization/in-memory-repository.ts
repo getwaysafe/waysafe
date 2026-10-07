@@ -360,6 +360,39 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return this.authorizations.get(id) ?? null;
   }
 
+  /** D-79. See `AuthorizationRepository.findByExternalRefAndRevision`. */
+  async findByExternalRefAndRevision(
+    externalRef: string,
+    revision: number | null,
+  ): Promise<StoredAuthorization | null> {
+    for (const auth of this.authorizations.values()) {
+      if (auth.external_ref === externalRef && (auth.external_revision ?? null) === revision) {
+        return auth;
+      }
+    }
+    return null;
+  }
+
+  /** D-79. See `AuthorizationRepository.listByExternalRef`. */
+  async listByExternalRef(mandateId: string, externalRef: string): Promise<StoredAuthorization[]> {
+    return [...this.authorizations.values()]
+      .filter((a) => a.mandate_id === mandateId && a.external_ref === externalRef)
+      .sort((a, b) => (a.external_revision ?? 0) - (b.external_revision ?? 0));
+  }
+
+  /** D-79. See `AuthorizationRepository.getExternalRefHold`. */
+  async getExternalRefHold(mandateId: string, externalRef: string): Promise<number> {
+    const ids = new Set(
+      [...this.authorizations.values()]
+        .filter((a) => a.mandate_id === mandateId && a.external_ref === externalRef)
+        .map((a) => a.id),
+    );
+    if (ids.size === 0) return 0;
+    return (this.ledgerByMandate.get(mandateId) ?? [])
+      .filter((e) => ids.has(e.authorizationId) && (e.type === "RESERVATION" || e.type === "RELEASE"))
+      .reduce((sum, e) => sum + e.amount, 0);
+  }
+
   async findByExternalRef(externalRef: string): Promise<StoredAuthorization | null> {
     for (const auth of this.authorizations.values()) {
       if (auth.external_ref === externalRef) return auth;
@@ -398,7 +431,10 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       for (const existing of this.authorizations.values()) {
         if (
           existing.external_ref === input.externalRef &&
-          existing.mandate_id === input.mandateId
+          existing.mandate_id === input.mandateId &&
+          // D-79: uniqueness is per REVISION now. Two revisions of one
+          // external authorization are two legitimate decisions.
+          (existing.external_revision ?? null) === (input.externalRevision ?? null)
         ) {
           throw new ExternalRefConflictError(input.externalRef);
         }
@@ -444,6 +480,7 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       idempotency_key: input.idempotencyKey,
       request_hash: input.requestHash,
       external_ref: input.externalRef ?? null,
+      external_revision: input.externalRevision ?? null,
       step_up_expires_at: input.stepUpExpiresAt?.toISOString() ?? null,
       created_at: input.now.toISOString(),
       decided_at: input.now.toISOString(),

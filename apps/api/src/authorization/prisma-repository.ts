@@ -258,8 +258,52 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
   }
 
   async findByExternalRef(externalRef: string): Promise<StoredAuthorization | null> {
-    const row = await this.client.authorization.findFirst({ where: { externalRef } });
+    // D-79: multiple revisions can share one externalRef, so this returns
+    // the LATEST. Callers that need one specific revision use
+    // findByExternalRefAndRevision.
+    const row = await this.client.authorization.findFirst({
+      where: { externalRef },
+      orderBy: [{ externalRevision: "desc" }, { createdAt: "desc" }],
+    });
     return row ? toStoredAuthorization(row) : null;
+  }
+
+  /** D-79. See `AuthorizationRepository.findByExternalRefAndRevision`. */
+  async findByExternalRefAndRevision(
+    externalRef: string,
+    revision: number | null,
+  ): Promise<StoredAuthorization | null> {
+    const row = await this.client.authorization.findFirst({
+      where: { externalRef, externalRevision: revision },
+    });
+    return row ? toStoredAuthorization(row) : null;
+  }
+
+  /** D-79. See `AuthorizationRepository.listByExternalRef`. */
+  async listByExternalRef(mandateId: string, externalRef: string): Promise<StoredAuthorization[]> {
+    const rows = await this.client.authorization.findMany({
+      where: { mandateId, externalRef },
+      orderBy: [{ externalRevision: "asc" }, { createdAt: "asc" }],
+    });
+    return rows.map(toStoredAuthorization);
+  }
+
+  /** D-79. See `AuthorizationRepository.getExternalRefHold`. */
+  async getExternalRefHold(mandateId: string, externalRef: string): Promise<number> {
+    const rows = await this.client.authorization.findMany({
+      where: { mandateId, externalRef },
+      select: { id: true },
+    });
+    if (rows.length === 0) return 0;
+    const entries = await this.client.ledgerEntry.findMany({
+      where: {
+        mandateId,
+        authorizationId: { in: rows.map((r) => r.id) },
+        type: { in: ["RESERVATION", "RELEASE"] },
+      },
+      select: { amount: true },
+    });
+    return entries.reduce((sum, e) => sum + e.amount, 0);
   }
 
   /**
@@ -323,6 +367,7 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
           merchant: input.merchant as unknown as Prisma.InputJsonValue,
           idempotencyKey: input.idempotencyKey,
           requestHash: input.requestHash,
+          externalRevision: input.externalRevision ?? null,
           externalRef: input.externalRef ?? null,
           stepUpExpiresAt: input.stepUpExpiresAt,
           createdAt: input.now,
@@ -895,6 +940,7 @@ interface AuthorizationRow {
   idempotencyKey: string | null;
   requestHash: string | null;
   externalRef: string | null;
+  externalRevision: number | null;
   stepUpExpiresAt: Date | null;
   createdAt: Date;
   decidedAt: Date;
@@ -919,6 +965,7 @@ function toStoredAuthorization(row: AuthorizationRow): StoredAuthorization {
     idempotency_key: row.idempotencyKey,
     request_hash: row.requestHash,
     external_ref: row.externalRef,
+    external_revision: row.externalRevision ?? null,
     step_up_expires_at: row.stepUpExpiresAt ? row.stepUpExpiresAt.toISOString() : null,
     created_at: row.createdAt.toISOString(),
     decided_at: row.decidedAt.toISOString(),

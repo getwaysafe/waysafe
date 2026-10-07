@@ -292,8 +292,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R1 — Stripe incremental authorization replays the original approval (review: R9/High)", () => {
-    it("a $10 approval is replayed for the same id requesting $10,000; a fresh id declines", async () => {
+  describe("R1 — closed by D-79: an increment is a new decision, not a replay (review: R9/High)", () => {
+    it("a $10 approval does NOT cover a $10,000 request on the same id", async () => {
       // A D-74 REGRESSION, and worth naming as such. D-74 made a redelivered
       // Issuing event return the original decision, which is right for a
       // redelivery. Stripe also reuses one authorization id for an
@@ -312,12 +312,16 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         pending_request: { ...(card.pending_request as object), amount: toMinorUnits(10_000, "USD") },
       } as unknown as Stripe.Issuing.Authorization;
 
-      const replay = await handleIssuingAuthorizationRequest(f.repos, adapter, incremented, NOW);
-      expect(replay.response.approved).toBe(true);
-      expect(replay.authorizationId).toBe(first.authorizationId);
+      // The increment is now evaluated on its own. $10,000 is far above the
+      // $10 per-transaction ceiling, so it is DENIED rather than replayed.
+      const increment = await handleIssuingAuthorizationRequest(f.repos, adapter, incremented, NOW);
+      expect(increment.response.approved).toBe(false);
+      expect(increment.response.reason_codes).toContain(
+        ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
+      );
+      expect(increment.authorizationId).not.toBe(first.authorizationId);
 
-      // CONTROL: the same $10,000 payload under a fresh id is correctly
-      // declined, so the approval above is the replay and not a broken cap.
+      // CONTROL: the same $10,000 payload under a fresh id is still declined.
       const control = await handleIssuingAuthorizationRequest(
         f.repos,
         adapter,
@@ -326,7 +330,79 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
       );
       expect(control.response.approved).toBe(false);
 
-      // The ledger still holds $10 against a $10,000 approved request.
+      // Still $10 held, and now that is the truth rather than an accident.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+    });
+
+    it("a genuine redelivery -- same id, same revision, same amount -- still replays", async () => {
+      // D-74's property, which must survive D-79: an identical redelivery
+      // takes no second hold.
+      const f = await fixture(policyFrom({ per_transaction_max: toMinorUnits(10, "USD") }));
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      const adapter = new StripeIssuingAdapter();
+
+      const first = await handleIssuingAuthorizationRequest(f.repos, adapter, card, NOW);
+      expect(first.response.approved).toBe(true);
+      const again = await handleIssuingAuthorizationRequest(f.repos, adapter, card, NOW);
+      expect(again.response).toEqual(first.response);
+      expect(again.authorizationId).toBe(first.authorizationId);
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+    });
+
+    it("an increment within the cap is approved, and the hold becomes the aggregate", async () => {
+      // The legitimate case: a restaurant tab raised from $10 to $30 under a
+      // $50 per-transaction and $100 cumulative ceiling. The second decision
+      // reserves the $20 DIFFERENCE, so the total held is $30, not $40.
+      const f = await fixture(
+        policyFrom({
+          per_transaction_max: toMinorUnits(50, "USD"),
+          cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(100, "USD") }],
+        }),
+      );
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      const adapter = new StripeIssuingAdapter();
+
+      const first = await handleIssuingAuthorizationRequest(f.repos, adapter, card, NOW);
+      expect(first.response.approved).toBe(true);
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+
+      const raised = {
+        ...card,
+        request_history: [{ amount: toMinorUnits(10, "USD") }],
+        pending_request: { ...(card.pending_request as object), amount: toMinorUnits(30, "USD") },
+      } as unknown as Stripe.Issuing.Authorization;
+      const second = await handleIssuingAuthorizationRequest(f.repos, adapter, raised, NOW);
+      expect(second.response.approved).toBe(true);
+      expect(second.authorizationId).not.toBe(first.authorizationId);
+
+      // The aggregate, not the sum of both full amounts.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(30, "USD"));
+    });
+
+    it("increments cannot be stacked past the per-transaction ceiling one delta at a time", async () => {
+      // The reason the per-transaction rule is checked against the AGGREGATE
+      // and not the delta: ten $10 deltas would each pass a $10 ceiling.
+      const f = await fixture(
+        policyFrom({
+          per_transaction_max: toMinorUnits(15, "USD"),
+          cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(1000, "USD") }],
+        }),
+      );
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      const adapter = new StripeIssuingAdapter();
+      expect((await handleIssuingAuthorizationRequest(f.repos, adapter, card, NOW)).response.approved).toBe(true);
+
+      const raised = {
+        ...card,
+        request_history: [{ amount: toMinorUnits(10, "USD") }],
+        pending_request: { ...(card.pending_request as object), amount: toMinorUnits(20, "USD") },
+      } as unknown as Stripe.Issuing.Authorization;
+      const second = await handleIssuingAuthorizationRequest(f.repos, adapter, raised, NOW);
+      // The $10 delta would pass a $15 ceiling. The $20 aggregate does not.
+      expect(second.response.approved).toBe(false);
+      expect(second.response.reason_codes).toContain(
+        ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
+      );
       expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
     });
   });

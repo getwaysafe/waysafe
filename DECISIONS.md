@@ -8157,6 +8157,85 @@ execution now gets a 409 until it moves the field. That is deliberate -- a
 silent fallback to the caller's value would have left the hole open for
 exactly the callers that had not migrated.
 
+## D-79 — An incremental authorization is a new decision, not a replay (review 2, R1)
+
+**Decision:** a redelivery is the same external reference, the same request
+sequence **and** the same amount. Anything else under that reference is a
+revision: a new decision whose subject is the difference between the new
+total and what is already held, with the per-transaction ceiling applied to
+the aggregate. The reservation across every revision sums to the amount now
+authorized.
+
+**This is a D-74 regression, and D-74's own entry was wrong about it.** D-74
+keyed replay on `(mandateId, externalRef)` because a redelivered Stripe
+webhook carries the same `issuing_authorization.id`. That is true and it is
+incomplete: Stripe reuses the same id for an **incremental request**, where
+`pending_request.amount` changes. A two-column key cannot tell those apart,
+so a request for more money was served the earlier, smaller decision. The
+second independent review approved $10, then had **$10,000 approved on the
+same id**, with the ledger still holding $10. A fresh id was correctly
+declined, which is what makes it a replay defect rather than a broken cap.
+
+D-74's text says its index "is the real control" for webhook idempotency.
+That stands for redelivery. It was wrong as a general statement about one
+external authorization's lifecycle, and this entry is the correction.
+
+**The model.** `Authorization` gains `externalRevision`, and the partial
+unique index becomes `(mandateId, externalRef, externalRevision)`.
+
+- **Redelivery** — a row exists with the same revision and the same amount.
+  Replay it. No new row, no new hold. D-74's property, preserved and tested.
+- **Revision** — something is decided under this reference and no row matches
+  on both. A new decision, at the next free revision number.
+- **The subject of that decision is the delta**, `requested − priorHold`,
+  because the prior hold is already inside the ledger SUM the spend snapshot
+  reads. Reserving the full new total would double-count.
+- **Except for the per-transaction ceiling**, which is checked against the
+  **aggregate**. Ten $10 increments would otherwise each pass a $10
+  per-transaction cap while totalling $100. That check uses the existing
+  `DENY_TRANSACTION_LIMIT_EXCEEDED` and carries the aggregate and the prior
+  hold in its detail, so a receipt says what was actually refused. No new
+  reason code was needed.
+
+**The revision number is a decision sequence, not the payload's history
+length**, and getting that wrong cost one debugging round. The first
+implementation used `request_history.length` directly. The review's own
+increment payload leaves `request_history` untouched, so the increment
+collided with the original on the uniqueness key, the insert was refused, and
+D-74's own conflict handler replayed the winner -- the attack still passed,
+by a different route. The revision is now `max(historyLength, highest
+existing + 1)`, so two revisions can never share a key however the rail
+behaves.
+
+**Capture reconciliation is NOT in this entry.** One external authorization
+can now have several rows, and the capture path still finds one by reference.
+`findByExternalRef` returns the latest revision, which keeps today's
+behaviour coherent for the single-revision case and is not a model of
+settling against an aggregate hold. That is R7's work, in the next group, and
+it is named here rather than left for someone to discover.
+
+**Tests.** `review2.adversarial.test.ts`'s R1 block, four cases: the attack
+flipped to a DENY with the right code, a genuine redelivery still replaying
+with no second hold (D-74's property, which must survive), a legitimate
+increment inside the cap where the hold becomes the $30 aggregate rather than
+$40, and the stacking case that justifies checking the aggregate.
+
+Verified by negative control: restoring D-74's rule -- replay on the
+reference alone -- fails three of the four.
+
+**Existing expectations that encoded the bug: none.** No test had ever sent
+two payloads under one external reference with different amounts;
+`budget.adversarial.test.ts`'s D-74 cases send identical payloads, which is
+the redelivery case and still passes unchanged.
+
+**Change cost if wrong:** an increment that should have been approved is
+declined, loudly, with the aggregate in the reason detail. The riskier half
+is the index change: an existing deployment that already created the
+two-column index keeps it, because `db:constraints` returns early when an
+index of that name exists. Replacing a uniqueness constraint on a money table
+unattended is not something a script should do, so that is deliberate and the
+SQL says so.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

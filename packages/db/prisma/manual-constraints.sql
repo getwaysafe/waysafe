@@ -110,7 +110,28 @@ BEGIN
   END IF;
 
   CREATE UNIQUE INDEX authorizations_one_decision_per_external_ref
-    ON "authorizations" ("mandateId", "externalRef")
+    ON "authorizations" ("mandateId", "externalRef", "externalRevision")
     WHERE "externalRef" IS NOT NULL
       AND "externalRef" <> 'iauth_demo_goodbeans_card_9001';
 END $$;
+
+-- D-79: the key above gained "externalRevision", and the reason is a
+-- correction to D-74.
+--
+-- D-74 keyed replay on (mandateId, externalRef) because a redelivered Stripe
+-- webhook carries the same authorization id. True, and incomplete: Stripe
+-- also reuses that id for an INCREMENTAL request, where the amount changes.
+-- A two-column key therefore served a request for more money the earlier,
+-- smaller decision -- the second independent review approved $10 and then had
+-- $10,000 approved on the same id.
+--
+-- A revision is a genuinely distinct decision and needs its own row, so the
+-- uniqueness that stops a redelivery must not stop an increment. Replay is
+-- now (ref, revision, amount) in the application, and this index stops two
+-- concurrent deliveries of the SAME revision.
+--
+-- An existing deployment that already created the two-column index keeps it
+-- until the DO block above is re-run after dropping it by hand; the block
+-- returns early when an index of that name exists, which is deliberate --
+-- silently replacing a uniqueness constraint on a money table is not
+-- something a script should do unattended.

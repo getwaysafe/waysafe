@@ -511,10 +511,53 @@ export async function handleIssuingAuthorizationRequest(
   // RESERVATION -- $120 held for one $60 card authorization, with no event
   // that would ever release the duplicate. The lookup is only the fast
   // path; the uniqueness constraint below is the control.
-  const alreadyDecided = await repos.authorization.findByExternalRef(authorization.id);
-  if (alreadyDecided && alreadyDecided.mandate_id === mandateId) {
-    return replayOf(alreadyDecided);
-  }
+  /**
+   * D-79: which revision of this external authorization is being asked
+   * about. Stripe reuses one `issuing_authorization.id` across incremental
+   * requests, appending to `request_history` each time, so the id alone
+   * cannot tell a redelivery from a request for more money. D-74's replay
+   * key was therefore wrong for increments: the second independent review
+   * approved $10 and then had a $10,000 request on the same id served the
+   * original approval.
+   */
+  const historyLength = Array.isArray(authorization.request_history)
+    ? authorization.request_history.length
+    : 0;
+  const requestedAmount = parsed?.action.amount ?? 0;
+
+  const decidedSoFar = await repos.authorization.listByExternalRef(mandateId, authorization.id);
+
+  /**
+   * A redelivery is the same id, the same request sequence AND the same
+   * amount. All three, because the amount is what actually matters and
+   * Stripe does not guarantee that `request_history` grows in a way this
+   * code could rely on alone -- the second review's own increment payload
+   * left it untouched, which is exactly the case a sequence-only key misses.
+   */
+  const redelivery = decidedSoFar.find(
+    (row) =>
+      (row.external_revision ?? 0) === historyLength &&
+      row.action.amount === requestedAmount,
+  );
+  if (redelivery) return replayOf(redelivery);
+
+  /**
+   * Not a redelivery, and something is already decided under this id, so
+   * this is a REVISION: a new decision whose subject is the DIFFERENCE
+   * between the new total and what is already held.
+   *
+   * The revision number is the next free one rather than the payload's
+   * history length, so two revisions can never collide on the uniqueness
+   * key just because Stripe did not grow the history.
+   */
+  const isIncrement = decidedSoFar.length > 0;
+  const revision = isIncrement
+    ? Math.max(historyLength, ...decidedSoFar.map((r) => (r.external_revision ?? 0) + 1))
+    : historyLength;
+  const priorHold = isIncrement
+    ? await repos.authorization.getExternalRefHold(mandateId, authorization.id)
+    : 0;
+  const incrementAmount = requestedAmount - priorHold;
 
   const detail = await repos.authorization.getMandateDetail(mandateId);
   const gateReasons = gateMandateStatus(detail);
@@ -542,9 +585,40 @@ export async function handleIssuingAuthorizationRequest(
     } else {
       const mandate = detail as MandateDetail;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
-      result = evaluate({ policy: mandate.policy, action: parsed.action, merchant, spend, now });
+
+      // D-79: on an increment, the engine decides the DELTA, because the
+      // prior hold is already in the ledger SUM the snapshot reads. The
+      // per-transaction ceiling is the one rule that must see the AGGREGATE
+      // instead -- otherwise ten $10 increments would each pass a $10
+      // per-transaction cap while totalling $100.
+      const aggregate = requestedAmount;
+      const perTransactionMax = mandate.policy.per_transaction_max;
+      if (isIncrement && perTransactionMax !== undefined && aggregate > perTransactionMax) {
+        result = {
+          decision: Decision.DENY,
+          reasons: [
+            {
+              code: ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
+              message:
+                `This incremental request would raise the authorization to ` +
+                `${aggregate} minor units, above the per-transaction ceiling of ` +
+                `${perTransactionMax}.`,
+              policy_path: "/per_transaction_max",
+              detail: { aggregate, per_transaction_max: perTransactionMax, prior_hold: priorHold },
+            },
+          ],
+        };
+      } else {
+        const decidedAction = isIncrement
+          ? { ...parsed.action, amount: incrementAmount }
+          : parsed.action;
+        result = evaluate({ policy: mandate.policy, action: decidedAction, merchant, spend, now });
+      }
+
       if (result.decision === Decision.ALLOW) {
-        ledgerEntries.push({ type: "RESERVATION", amount: parsed.action.amount });
+        // The hold is the DELTA, so the total held across every revision of
+        // this external authorization equals the amount now authorized.
+        ledgerEntries.push({ type: "RESERVATION", amount: incrementAmount });
       }
     }
 
@@ -574,6 +648,7 @@ export async function handleIssuingAuthorizationRequest(
       idempotencyKey: null,
       requestHash: null,
       externalRef: authorization.id,
+      externalRevision: revision,
       stepUpExpiresAt: null,
       now,
       ledgerEntries,
