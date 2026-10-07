@@ -111,13 +111,27 @@ export function isSettleableAsset(asset: RegisteredAsset): boolean {
 }
 
 /**
- * Atomic units of `asset` -> USD cents, using the registry's decimals.
+ * Atomic units of `asset` -> USD cents, using the registry's decimals,
+ * **rounded up**.
  *
  * Moved here from x402.ts so there is exactly one implementation and it
  * cannot be called with a merchant-supplied scale. All-integer (BigInt)
  * arithmetic: D-2 forbids `parseFloat` on an amount, and that rule applies
  * to a second decimal scale (asset decimals) just as much as to currency
  * minor units.
+ *
+ * D-88: rounds up, not half-up. USDC has six decimals and a cent is ten
+ * thousand atomic units, so round-half-up sent every transfer under half a
+ * cent to zero. The second independent review co-signed 14,997 atomic units
+ * across three requests and the ledger recorded $0.00 — a real transfer that
+ * the cumulative limits (D-4) never saw, on a receipt that said nothing
+ * moved. A nonzero atomic amount now always costs at least one cent, and an
+ * exact number of cents is never inflated.
+ *
+ * Rounding up rather than down is the conservative direction: the budget is
+ * charged at least what moved. The *transfer* is still the exact atomic
+ * amount — rounding is the budget's unit, never the payment's — so the
+ * receipt carries both figures (see `enforcement.x402.decision`).
  */
 export function assetAtomicToCents(atomicAmount: string, asset: RegisteredAsset): number | null {
   if (!/^\d+$/.test(atomicAmount)) return null;
@@ -125,7 +139,22 @@ export function assetAtomicToCents(atomicAmount: string, asset: RegisteredAsset)
 
   const scale = 10n ** BigInt(asset.decimals - 2);
   const atomic = BigInt(atomicAmount);
-  const cents = (atomic + scale / 2n) / scale; // round-half-up, no floats
+  // Ceiling division on non-negative integers. No floats.
+  const cents = (atomic + scale - 1n) / scale;
   if (cents > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   return Number(cents);
+}
+
+/**
+ * Whether `atomicAmount` is an exact whole number of cents for this asset,
+ * i.e. whether `assetAtomicToCents` rounded it up.
+ *
+ * D-88: a receipt that says `amount: 1` for 4,999 atomic units has to be able
+ * to say that the cent was rounding rather than the amount.
+ */
+export function isExactCents(atomicAmount: string, asset: RegisteredAsset): boolean {
+  if (!/^\d+$/.test(atomicAmount)) return false;
+  if (asset.decimals < 2) return false;
+  const scale = 10n ** BigInt(asset.decimals - 2);
+  return BigInt(atomicAmount) % scale === 0n;
 }

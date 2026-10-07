@@ -8922,6 +8922,53 @@ have allowed, with `DENY_VELOCITY_LIMIT_EXCEEDED` and a `detail` carrying the
 projected count and the limit. Diagnosable, and the opposite of the failure
 it replaces.
 
+## D-88 — A nonzero transfer is never recorded as zero (review 2, R8)
+
+**Decision:** `assetAtomicToCents` rounds **up**, not half-up. A nonzero
+atomic amount always costs at least one cent, and an exact number of cents is
+never inflated. The signed receipt carries the atomic amount alongside the
+cents.
+
+**The defect.** USDC has six decimals, so one cent is ten thousand atomic
+units and round-half-up sent everything under half a cent to zero. The second
+independent review co-signed 14,997 atomic units across three requests and
+the ledger recorded $0.00. Three real transfers the cumulative limits (D-4)
+never saw, on three receipts that said nothing moved — and an agent that
+asked for 4,999 units at a time could repeat it without limit, because the
+budget it was spending never changed.
+
+Rounding up rather than down is the conservative direction: the budget is
+charged at least what moved, never less. The cost is that a sub-cent transfer
+is charged a full cent, which overstates spend by under one cent per
+transaction. Overstating a budget declines a transaction that could have been
+allowed; understating it moves money that should not have moved. Only one of
+those is a control failure.
+
+**Rounding is the budget's unit, never the payment's.** The co-signature
+still authorizes the exact atomic amount (`co_signature.amount_atomic` is
+unchanged), and settlement still transfers exactly that. Nothing on the rail
+is rounded. What changed is what the ledger and the receipt record.
+
+**The receipt says which figure is which.** `enforcement.x402.decision` gained
+`amount_atomic` (what was co-signed), `asset_decimals` (the registry's scale,
+D-68 — never the merchant's claim), and `amount_rounded_up`. A receipt that
+says `amount: 1` for 4,999 atomic units has to be able to say that the cent
+was rounding rather than the amount; `isExactCents` in `assets.ts` is how it
+knows.
+
+**Tests.** Three cases in `review2.adversarial.test.ts`'s R8 block, through
+real Postgres: the review's own three sub-cent transfers now record one cent
+each and three cents on the ledger, with `amount_atomic: "4999"` on the
+signed event; the rounding direction pinned at five boundaries; and a
+**control** that an exact number of cents is not inflated, which a naive
+`floor + 1` would have broken.
+
+Verified by negative control: restoring `(atomic + scale / 2n) / scale` fails
+two of the three.
+
+**Existing expectations that encoded the bug: none.**
+
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

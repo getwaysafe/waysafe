@@ -35,7 +35,7 @@ import {
   type ResourceFetchPolicy,
 } from "./resource-fetch.js";
 import type { RegisteredAsset, Signer } from "@waysafe/core";
-import { assetAtomicToCents, isSettleableAsset, resolveAsset } from "@waysafe/core";
+import { assetAtomicToCents, isExactCents, isSettleableAsset, resolveAsset } from "@waysafe/core";
 import {
   Decision,
   ID_PREFIX,
@@ -650,6 +650,14 @@ export async function handleX402PaymentRequest(
           message: "The resource's 402 response could not be parsed into a supported payment request.",
         },
       ];
+  // D-88: what the receipt needs in order to show the atomic amount next to
+  // the cents the budget was charged, and to say when the two differ.
+  const resolvedAssetDecimals = assetResolution.ok ? assetResolution.asset.decimals : null;
+  const amountWasRoundedUp =
+    assetResolution.ok && parsed !== null
+      ? !isExactCents(requirement.maxAmountRequired, assetResolution.asset)
+      : null;
+
   // D-75: the refusal takes precedence over everything downstream of it --
   // nothing was fetched, so there is no merchant or asset to report on.
   // D-80: computed inside the lock below, not here -- `detail` above is a
@@ -733,6 +741,12 @@ export async function handleX402PaymentRequest(
           reason_codes: result.reasons.map((r) => r.code),
           amount: parsed?.action.amount ?? null,
           currency: "USD",
+          // D-88: the exact amount co-signed, alongside the cents the budget
+          // was charged. The cents are rounded up, so these two figures are
+          // not the same number and the receipt says which is which.
+          amount_atomic: requirement.maxAmountRequired ?? null,
+          asset_decimals: resolvedAssetDecimals,
+          amount_rounded_up: amountWasRoundedUp,
           merchant: merchantAssertion,
           resource_url: params.resourceUrl,
           pay_to: requirement.payTo,

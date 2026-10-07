@@ -1620,8 +1620,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R8 — sub-cent x402 transfers record zero cents (review: R1/Medium)", () => {
-    it("three nonzero atomic transfers are each recorded as $0.00", async () => {
+  describe("R8 — closed by D-88: a nonzero transfer is never recorded as zero (review: R1/Medium)", () => {
+    it("three sub-cent atomic transfers are each charged one cent, with the atomic amount on the receipt", async () => {
       const f = await fixture();
       const instrument = await f.repos.instruments.createInstrument(
         {
@@ -1654,17 +1654,49 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           NOW,
         );
         expect(result.response.decision).toBe(Decision.ALLOW);
+        // The co-signature still authorizes the exact atomic amount. Rounding
+        // is the budget's unit, never the transfer's.
         expect(result.response.co_signature?.amount_atomic).toBe("4999");
       }
 
       const rows = await f.authorization.listAuthorizations(f.org, 10);
-      expect(rows.filter((r) => r.action.amount === 0)).toHaveLength(3);
-      // 14,997 atomic units co-signed, $0.00 on the ledger and the receipt.
-      expect((await spend(f)).mandate.amount).toBe(0);
+      expect(rows.filter((r) => r.action.amount === 0)).toHaveLength(0); // was 3
+      expect(rows.filter((r) => r.action.amount === 1)).toHaveLength(3);
+      // 14,997 atomic units co-signed, three cents on the ledger. Before D-88
+      // it was $0.00 and the cumulative limits never saw the spend at all.
+      expect((await spend(f)).mandate.amount).toBe(3); // was 0
 
-      // CONTROL: the conversion is right above one cent.
-      expect(assetAtomicToCents("1000000", AMOY_USDC)).toBe(100);
+      // The signed receipt carries the atomic amount alongside the cents, so
+      // a principal can see that 4,999 atomic units were charged as one cent
+      // rather than having to trust the rounded figure on its own.
+      const events = await f.evidence.listForOrganization(f.org);
+      const decision = events.find((e) => e.type === "enforcement.x402.decision");
+      expect(decision).toBeDefined();
+      expect(decision!.payload).toMatchObject({
+        amount: 1,
+        currency: "USD",
+        amount_atomic: "4999",
+        asset_decimals: AMOY_USDC.decimals,
+        amount_rounded_up: true,
+      });
+    });
+
+    it("rounds UP, so a fraction of a cent is never free", () => {
+      // Every case here returned the floor or the nearest cent before D-88.
+      expect(assetAtomicToCents("1", AMOY_USDC)).toBe(1); // 0.000001 USDC
+      expect(assetAtomicToCents("4999", AMOY_USDC)).toBe(1); // was 0
+      expect(assetAtomicToCents("5000", AMOY_USDC)).toBe(1);
+      expect(assetAtomicToCents("10001", AMOY_USDC)).toBe(2); // was 1
+      expect(assetAtomicToCents("1000001", AMOY_USDC)).toBe(101); // was 100
+    });
+
+    it("CONTROL: an exact number of cents is not inflated", () => {
+      // Rounding up must not charge an extra cent on an exact amount, which
+      // a naive `floor + 1` would.
+      expect(assetAtomicToCents("0", AMOY_USDC)).toBe(0);
       expect(assetAtomicToCents("10000", AMOY_USDC)).toBe(1);
+      expect(assetAtomicToCents("1000000", AMOY_USDC)).toBe(100);
+      expect(assetAtomicToCents("2500000", AMOY_USDC)).toBe(250);
     });
   });
 
