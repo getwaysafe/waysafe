@@ -1017,8 +1017,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R7 — Issuing lifecycle: reversal, partial capture, multiple captures (review: R10/High)", () => {
-    it("a reversed authorization keeps its reservation forever", async () => {
+  describe("R7 — closed by D-83: the card lifecycle is modelled (review: R10/High)", () => {
+    it("a reversed authorization releases its hold", async () => {
       const f = await fixture();
       const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
       const approved = await handleIssuingAuthorizationRequest(
@@ -1040,14 +1040,15 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         }),
         NOW,
       );
-      expect(reversal.kind).toBe("ignored");
+      expect(reversal).toMatchObject({ kind: "applied", effect: "release:reversed" });
 
-      // The hold survives a reversal, so the mandate's budget stays spent on
-      // a transaction the network already gave back.
-      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+      // The budget is back. Before D-83 the hold survived forever.
+      expect((await spend(f)).mandate.amount).toBe(0);
+      const events = await f.evidence.listForOrganization(f.org);
+      expect(events.some((e) => e.type === "enforcement.stripe_issuing.released")).toBe(true);
     });
 
-    it("an expired authorization keeps its reservation too", async () => {
+    it("an expired authorization releases its hold too", async () => {
       const f = await fixture();
       const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
       await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
@@ -1057,17 +1058,16 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         stripeEvent("issuing_authorization.updated", { ...card, status: "expired", approved: true }),
         NOW,
       );
-      expect(expiry.kind).toBe("ignored");
-      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+      expect(expiry).toMatchObject({ kind: "applied", effect: "release:expired" });
+      expect((await spend(f)).mandate.amount).toBe(0);
     });
 
-    it("a partial capture records the AUTHORIZED amount, not the settled amount", async () => {
+    it("a partial capture records the SETTLED amount, not the authorized amount", async () => {
       const f = await fixture();
       const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
       await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
 
-      // Stripe settles $2.50 of the $10 hold, in a different currency field
-      // than the one that was authorized.
+      // Stripe settles $2.50 of the $10 hold.
       const capture = await handleStripeWebhook(
         f.repos,
         stripeEvent("issuing_authorization.updated", {
@@ -1075,7 +1075,7 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           status: "closed",
           approved: true,
           amount: toMinorUnits(2.5, "USD"),
-          currency: "eur",
+          currency: "usd",
         }),
         NOW,
       );
@@ -1085,13 +1085,89 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         where: { mandateId: f.mandateId, type: "CAPTURE" },
       });
       expect(captures.map((c) => [c.amount, c.currency])).toEqual([
-        [toMinorUnits(10, "USD"), "USD"],
+        [toMinorUnits(2.5, "USD"), "USD"],
       ]);
-      // $2.50 moved; $10 is recorded.
+      // $2.50 moved and $2.50 is recorded. Before D-83 it was $10.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(2.5, "USD"));
+
+      // The receipt carries BOTH figures, so it can answer "was this
+      // partial?" without a second lookup.
+      const events = await f.evidence.listForOrganization(f.org);
+      const captured = events.find((e) => e.type === "enforcement.stripe_issuing.captured");
+      expect(captured?.payload).toMatchObject({
+        authorized: toMinorUnits(10, "USD"),
+        settled: toMinorUnits(2.5, "USD"),
+        partial: true,
+      });
+    });
+
+    it("a settled currency that disagrees with the authorization is refused, not converted", async () => {
+      // There is no FX anywhere in this codebase. Converting silently would
+      // be worse than refusing, and the webhook layer can retry.
+      const f = await fixture();
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
+
+      await expect(
+        handleStripeWebhook(
+          f.repos,
+          stripeEvent("issuing_authorization.updated", {
+            ...card,
+            status: "closed",
+            approved: true,
+            amount: toMinorUnits(2.5, "USD"),
+            currency: "eur",
+          }),
+          NOW,
+        ),
+      ).rejects.toThrow(/does not match the authorization/);
+      // Nothing captured, and the hold is untouched for the retry.
       expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
     });
 
-    it("a second capture event for the same authorization is ignored, so multi-capture under-records", async () => {
+    it("an increment's AGGREGATE hold is what settlement reconciles against (D-79 + D-83)", async () => {
+      // $10 raised to $30 across two revisions, then $28 settles. Both holds
+      // must be released and $28 captured -- not $30, and not twice.
+      const f = await fixture(
+        policyFrom({
+          per_transaction_max: toMinorUnits(50, "USD"),
+          cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(100, "USD") }],
+        }),
+      );
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      const adapter = new StripeIssuingAdapter();
+      await handleIssuingAuthorizationRequest(f.repos, adapter, card, NOW);
+      const raised = {
+        ...card,
+        request_history: [{ amount: toMinorUnits(10, "USD") }],
+        pending_request: { ...(card.pending_request as object), amount: toMinorUnits(30, "USD") },
+      } as unknown as Stripe.Issuing.Authorization;
+      await handleIssuingAuthorizationRequest(f.repos, adapter, raised, NOW);
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(30, "USD"));
+
+      const settled = await handleStripeWebhook(
+        f.repos,
+        stripeEvent("issuing_authorization.updated", {
+          ...raised,
+          status: "closed",
+          approved: true,
+          amount: toMinorUnits(28, "USD"),
+          currency: "usd",
+        }),
+        NOW,
+      );
+      expect(settled.kind).toBe("applied");
+
+      // $28 charged, both holds gone.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(28, "USD"));
+      const rows = await prisma.ledgerEntry.findMany({ where: { mandateId: f.mandateId } });
+      expect(rows.filter((r) => r.type === "RESERVATION")).toHaveLength(2);
+      expect(rows.filter((r) => r.type === "RELEASE")).toHaveLength(2);
+      expect(rows.filter((r) => r.type === "CAPTURE")).toHaveLength(1);
+      expect(rows.filter((r) => r.type === "CAPTURE")[0]?.amount).toBe(toMinorUnits(28, "USD"));
+    });
+
+    it("a second settlement event for an already-settled authorization is refused, not double-charged", async () => {
       const f = await fixture();
       const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
       await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
@@ -1103,6 +1179,7 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           status: "closed",
           approved: true,
           amount: toMinorUnits(6, "USD"),
+          currency: "usd",
         }),
         NOW,
       );
@@ -1120,8 +1197,12 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         }),
         NOW,
       );
-      expect(second.kind).toBe("ignored");
-      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+      // Refused and NOT retryable: this authorization is settled. Several
+      // real settlements against one authorization arrive as their own
+      // transaction objects, which D-84 handles.
+      expect(second).toMatchObject({ kind: "ignored", retryable: false });
+      // $6 settled, $6 recorded -- the first settlement, not the hold.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(6, "USD"));
     });
   });
 

@@ -50,6 +50,8 @@ import {
   type NewMandate,
   type RecordExecutionInput,
   type RecordRefundInput,
+  type SettleExternalInput,
+  type SettlementOutcome,
   type ResolveMandateInput,
   type SaveAuthorizationInput,
   type StoredAuthorization,
@@ -792,6 +794,154 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
       data: { status: "EXECUTED" },
     });
     return toStoredAuthorization(updated);
+  }
+
+  /** D-83. See `AuthorizationRepository.settleExternalAuthorization`. */
+  async settleExternalAuthorization(
+    input: SettleExternalInput,
+    now: Date,
+  ): Promise<SettlementOutcome> {
+    const client = this.client;
+    const rows = await client.authorization.findMany({
+      where: { mandateId: input.mandateId, externalRef: input.externalRef },
+      orderBy: [{ externalRevision: "asc" }, { createdAt: "asc" }],
+    });
+    if (rows.length === 0) {
+      throw new Error(`no authorization recorded for external ref ${input.externalRef}`);
+    }
+
+    const latest = rows[rows.length - 1]!;
+    if (latest.currency !== input.settledCurrency.toUpperCase()) {
+      // No FX in this codebase. Converting silently would be worse than
+      // refusing, and refusing is retryable at the webhook layer.
+      throw new Error(
+        `settled currency ${input.settledCurrency} does not match the authorization's ${latest.currency}`,
+      );
+    }
+
+    const entries = await client.ledgerEntry.findMany({
+      where: {
+        mandateId: input.mandateId,
+        authorizationId: { in: rows.map((r) => r.id) },
+        type: { in: ["RESERVATION", "RELEASE"] },
+      },
+    });
+
+    // Release each revision's outstanding hold in that revision's own
+    // window (D-72), not in the window the settlement happens to arrive in.
+    let released = 0;
+    for (const row of rows) {
+      const mine = entries.filter((e) => e.authorizationId === row.id);
+      const outstanding = mine.reduce((sum, e) => sum + e.amount, 0);
+      if (outstanding === 0) continue;
+      const reservation = mine.find((e) => e.type === "RESERVATION") ?? null;
+      const keys = await this.windowKeysFor(row, reservation);
+      await client.ledgerEntry.create({
+        data: {
+          id: generateId(ID_PREFIX.evidence),
+          organizationId: row.organizationId,
+          mandateId: input.mandateId,
+          authorizationId: row.id,
+          type: "RELEASE",
+          amount: -outstanding,
+          currency: row.currency,
+          dayKey: keys.day,
+          weekKey: keys.week,
+          monthKey: keys.month,
+          createdAt: now,
+        },
+      });
+      released += outstanding;
+    }
+
+    // One CAPTURE, for what actually moved, on the latest revision -- in the
+    // window that revision was authorized in.
+    if (input.settledAmount > 0) {
+      const keys = await this.windowKeysFor(latest, null);
+      await client.ledgerEntry.create({
+        data: {
+          id: generateId(ID_PREFIX.evidence),
+          organizationId: latest.organizationId,
+          mandateId: input.mandateId,
+          authorizationId: latest.id,
+          type: "CAPTURE",
+          amount: input.settledAmount,
+          currency: latest.currency,
+          provider: input.provider,
+          providerFee: 0,
+          dayKey: keys.day,
+          weekKey: keys.week,
+          monthKey: keys.month,
+          createdAt: now,
+        },
+      });
+    }
+
+    await client.authorization.updateMany({
+      where: { id: { in: rows.map((r) => r.id) } },
+      data: { status: "EXECUTED" },
+    });
+
+    return {
+      released,
+      captured: input.settledAmount,
+      authorized: released,
+      rows: rows.length,
+    };
+  }
+
+  /** D-83. See `AuthorizationRepository.releaseExternalAuthorization`. */
+  async releaseExternalAuthorization(
+    mandateId: string,
+    externalRef: string,
+    _reason: "reversed" | "expired" | "declined",
+    now: Date,
+  ): Promise<{ released: number; rows: number }> {
+    const client = this.client;
+    const rows = await client.authorization.findMany({
+      where: { mandateId, externalRef },
+    });
+    if (rows.length === 0) return { released: 0, rows: 0 };
+
+    const entries = await client.ledgerEntry.findMany({
+      where: {
+        mandateId,
+        authorizationId: { in: rows.map((r) => r.id) },
+        type: { in: ["RESERVATION", "RELEASE"] },
+      },
+    });
+
+    let released = 0;
+    for (const row of rows) {
+      const mine = entries.filter((e) => e.authorizationId === row.id);
+      const outstanding = mine.reduce((sum, e) => sum + e.amount, 0);
+      if (outstanding === 0) continue;
+      const reservation = mine.find((e) => e.type === "RESERVATION") ?? null;
+      const keys = await this.windowKeysFor(row, reservation);
+      await client.ledgerEntry.create({
+        data: {
+          id: generateId(ID_PREFIX.evidence),
+          organizationId: row.organizationId,
+          mandateId,
+          authorizationId: row.id,
+          type: "RELEASE",
+          amount: -outstanding,
+          currency: row.currency,
+          dayKey: keys.day,
+          weekKey: keys.week,
+          monthKey: keys.month,
+          createdAt: now,
+        },
+      });
+      released += outstanding;
+    }
+
+    await client.authorization.updateMany({
+      where: { id: { in: rows.map((r) => r.id) }, status: { in: ["AUTHORIZED", "STEP_UP_APPROVED"] } },
+      data: { status: "EXPIRED" },
+    });
+
+    return { released, rows: rows.length };
   }
 
   async recordRefund(input: RecordRefundInput, now: Date): Promise<void> {

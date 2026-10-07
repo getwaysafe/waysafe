@@ -163,26 +163,41 @@ async function recordOnly(
  * declined) is ignored, not applied -- there is nothing to capture yet, or
  * ever.
  */
+/**
+ * D-83: the card authorization lifecycle, modelled rather than patched.
+ *
+ * `issuing_authorization.updated` fires on every change. Before D-83 only
+ * `closed && approved` did anything, and it captured the AUTHORIZED amount.
+ * Three consequences the second independent review confirmed: a reversed
+ * authorization kept its hold forever, an expired one did too, and a $2.50
+ * settlement of a $10 hold was recorded as $10.
+ *
+ * The unit of settlement is the external authorization, not one Waysafe row:
+ * since D-79 it can have several revisions, each with its own hold, and what
+ * moves is one settled figure against the sum of them.
+ */
 async function handleIssuingCapture(
   repos: WebhookRepos,
   authorization: Stripe.Issuing.Authorization,
   event: Stripe.Event,
   now: Date,
 ): Promise<WebhookResult> {
-  if (authorization.status !== "closed" || !authorization.approved) {
-    // Retryable: a pending authorization may close later, so recording this
-    // delivery as seen would drop the real capture when it arrives (D-81).
+  const status = authorization.status;
+
+  // Still open. Retryable: it may close, reverse or expire later, and
+  // recording this delivery as seen would drop whichever arrives (D-81).
+  if (status === "pending") {
     return {
       kind: "ignored",
-      reason: `issuing authorization not yet captured (status: ${authorization.status}, approved: ${authorization.approved})`,
+      reason: `issuing authorization still pending (${authorization.id})`,
       retryable: true,
     };
   }
 
   const stored = await repos.authorization.findByExternalRef(authorization.id);
   if (!stored) {
-    // Retryable: the decision may not be written yet. A settlement with no
-    // authorization at all is a force capture, which D-84 handles.
+    // A settlement with no authorization at all is a force capture, which
+    // arrives as issuing_transaction.created and is handled in D-84.
     return {
       kind: "ignored",
       reason: `no stored authorization for issuing authorization ${authorization.id}`,
@@ -201,21 +216,62 @@ async function handleIssuingCapture(
     );
     if (!isNew) return { kind: "duplicate" } as const;
 
-    if (stored.status !== "AUTHORIZED") {
+    /**
+     * Reversed, expired, or closed-but-declined: no money moved, so the
+     * aggregate hold is released and nothing is captured. Stripe's own
+     * lifecycle has all three and none of them was handled before D-83.
+     */
+    if (status === "reversed" || status === "expired" || !authorization.approved) {
+      const reason = status === "reversed" ? "reversed" : status === "expired" ? "expired" : "declined";
+      const outcome = await repos.authorization.releaseExternalAuthorization(
+        stored.mandate_id,
+        authorization.id,
+        reason,
+        now,
+      );
+      await repos.evidence.withOrganizationLock(stored.organization_id, () =>
+        repos.evidence.appendEvent({
+          organizationId: stored.organization_id,
+          type: "enforcement.stripe_issuing.released",
+          subjectType: "authorization",
+          subjectId: stored.id,
+          payload: {
+            stripe_authorization_id: authorization.id,
+            reason,
+            released: outcome.released,
+            revisions: outcome.rows,
+          },
+          now,
+        }),
+      );
+      return { kind: "applied", effect: `release:${reason}` } as const;
+    }
+
+    if (stored.status === "EXECUTED") {
+      // Already settled. A second settlement against one authorization is a
+      // multi-capture, which arrives as its own transaction object (D-84).
       return {
         kind: "ignored",
-        reason: `authorization ${stored.id} is not in a capturable state (status: ${stored.status})`,
+        reason: `authorization ${stored.id} is already settled`,
         retryable: false,
       } as const;
     }
 
-    await repos.authorization.recordExecution(
+    /**
+     * Closed and approved: the SETTLED amount is what moved.
+     * `authorization.amount` on a closed object is the settled figure in the
+     * card's own currency; the authorized figure is what we held. A partial
+     * settlement must charge the smaller real number.
+     */
+    const settled = authorization.amount;
+    const outcome = await repos.authorization.settleExternalAuthorization(
       {
-        authorizationId: stored.id,
         mandateId: stored.mandate_id,
+        externalRef: authorization.id,
+        settledAmount: settled,
+        settledCurrency: authorization.currency,
         provider: "stripe_issuing",
         providerReference: authorization.id,
-        providerFee: 0,
       },
       now,
     );
@@ -226,7 +282,16 @@ async function handleIssuingCapture(
         type: "enforcement.stripe_issuing.captured",
         subjectType: "authorization",
         subjectId: stored.id,
-        payload: { stripe_authorization_id: authorization.id },
+        payload: {
+          stripe_authorization_id: authorization.id,
+          // Both figures, deliberately: a receipt that shows only one cannot
+          // answer "was this a partial settlement?".
+          authorized: outcome.authorized,
+          settled: outcome.captured,
+          released: outcome.released,
+          revisions: outcome.rows,
+          partial: outcome.captured < outcome.authorized,
+        },
         now,
       }),
     );

@@ -44,6 +44,8 @@ import {
   type NewMandate,
   type RecordExecutionInput,
   type RecordRefundInput,
+  type SettleExternalInput,
+  type SettlementOutcome,
   type ResolveMandateInput,
   type SaveAuthorizationInput,
   type StoredAuthorization,
@@ -772,6 +774,110 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
 
     auth.status = "EXECUTED";
     return auth;
+  }
+
+  /** D-83. See `AuthorizationRepository.settleExternalAuthorization`. */
+  async settleExternalAuthorization(
+    input: SettleExternalInput,
+    now: Date,
+  ): Promise<SettlementOutcome> {
+    const rows = [...this.authorizations.values()]
+      .filter((a) => a.mandate_id === input.mandateId && a.external_ref === input.externalRef)
+      .sort((a, b) => (a.external_revision ?? 0) - (b.external_revision ?? 0));
+    if (rows.length === 0) {
+      throw new Error(`no authorization recorded for external ref ${input.externalRef}`);
+    }
+    const latest = rows[rows.length - 1]!;
+    if (latest.action.currency !== input.settledCurrency.toUpperCase()) {
+      throw new Error(
+        `settled currency ${input.settledCurrency} does not match the authorization's ${latest.action.currency}`,
+      );
+    }
+
+    const entries = this.ledgerByMandate.get(input.mandateId) ?? [];
+    let released = 0;
+    for (const row of rows) {
+      const mine = entries.filter(
+        (e) => e.authorizationId === row.id && (e.type === "RESERVATION" || e.type === "RELEASE"),
+      );
+      const outstanding = mine.reduce((sum, e) => sum + e.amount, 0);
+      if (outstanding === 0) continue;
+      const keys = this.windowKeysFor(row, mine.find((e) => e.type === "RESERVATION"));
+      entries.push({
+        id: generateId(ID_PREFIX.evidence),
+        mandateId: input.mandateId,
+        authorizationId: row.id,
+        type: "RELEASE",
+        amount: -outstanding,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      });
+      released += outstanding;
+    }
+
+    if (input.settledAmount > 0) {
+      const keys = this.windowKeysFor(latest, undefined);
+      entries.push({
+        id: generateId(ID_PREFIX.evidence),
+        mandateId: input.mandateId,
+        authorizationId: latest.id,
+        type: "CAPTURE",
+        amount: input.settledAmount,
+        provider: input.provider,
+        providerFee: 0,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      });
+    }
+    this.ledgerByMandate.set(input.mandateId, entries);
+    for (const row of rows) row.status = "EXECUTED";
+
+    return { released, captured: input.settledAmount, authorized: released, rows: rows.length };
+  }
+
+  /** D-83. See `AuthorizationRepository.releaseExternalAuthorization`. */
+  async releaseExternalAuthorization(
+    mandateId: string,
+    externalRef: string,
+    _reason: "reversed" | "expired" | "declined",
+    now: Date,
+  ): Promise<{ released: number; rows: number }> {
+    const rows = [...this.authorizations.values()].filter(
+      (a) => a.mandate_id === mandateId && a.external_ref === externalRef,
+    );
+    if (rows.length === 0) return { released: 0, rows: 0 };
+
+    const entries = this.ledgerByMandate.get(mandateId) ?? [];
+    let released = 0;
+    for (const row of rows) {
+      const mine = entries.filter(
+        (e) => e.authorizationId === row.id && (e.type === "RESERVATION" || e.type === "RELEASE"),
+      );
+      const outstanding = mine.reduce((sum, e) => sum + e.amount, 0);
+      if (outstanding === 0) continue;
+      const keys = this.windowKeysFor(row, mine.find((e) => e.type === "RESERVATION"));
+      entries.push({
+        id: generateId(ID_PREFIX.evidence),
+        mandateId,
+        authorizationId: row.id,
+        type: "RELEASE",
+        amount: -outstanding,
+        dayKey: keys.day,
+        weekKey: keys.week,
+        monthKey: keys.month,
+        createdAt: now,
+      });
+      released += outstanding;
+    }
+    this.ledgerByMandate.set(mandateId, entries);
+    for (const row of rows) {
+      if (row.status === "AUTHORIZED" || row.status === "STEP_UP_APPROVED") row.status = "EXPIRED";
+    }
+    return { released, rows: rows.length };
   }
 
   async recordRefund(input: RecordRefundInput, now: Date): Promise<void> {

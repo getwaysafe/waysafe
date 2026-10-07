@@ -8459,6 +8459,80 @@ than the authorization's, the comparison would be across units -- today they
 never are, because `recordExecution` takes the currency from the
 authorization row itself.
 
+## D-83 — The card authorization lifecycle, modelled (review 2, R7)
+
+**Decision:** `issuing_authorization.updated` is handled for every terminal
+state. Reversal, expiry and a closed-but-declined authorization release the
+**aggregate** hold across all D-79 revisions. A settlement captures the
+**settled** amount, not the authorized one. The unit of settlement is the
+external authorization, not one Waysafe row.
+
+Finding R7 of the second independent review. Before D-83 only
+`closed && approved` did anything at all, and it captured the authorized
+figure. Three confirmed consequences:
+
+- a **reversed** authorization kept its $10 hold forever, so the mandate
+  stayed charged for a transaction the network had already given back;
+- an **expired** one did the same;
+- a **$2.50 settlement of a $10 hold was recorded as $10**.
+
+**The model.** Two repository methods, both operating on the external
+reference rather than a row id, because since D-79 one external
+authorization can have several revisions each holding part of the total:
+
+- `settleExternalAuthorization` releases every revision's outstanding hold
+  **in that revision's own window** (D-72, not the window the settlement
+  arrived in), then writes one `CAPTURE` for the settled figure on the
+  latest revision, and transitions every row to `EXECUTED`.
+- `releaseExternalAuthorization` releases the aggregate hold without
+  capturing, for a reversal, an expiry or a decline, and leaves the rows
+  `EXPIRED`.
+
+**A settled currency that disagrees with the authorization's throws rather
+than converting.** There is no FX anywhere in this codebase. Inventing one
+silently inside a ledger write would be worse than refusing, and refusing is
+retryable at the webhook layer because D-81 made the event record roll back
+with the effect. The reproduction test originally fed `currency: "eur"` with
+`amount: 250` to see what happened; the answer was that the old code recorded
+`[1000, "USD"]` and ignored both fields. Now it refuses, and the hold is
+left intact for the retry.
+
+**The receipt carries both figures.** `enforcement.stripe_issuing.captured`
+records `authorized`, `settled`, `released`, `revisions` and a `partial`
+flag. A receipt showing only one number cannot answer "was this a partial
+settlement?", which is the first question a principal reconciling a statement
+asks.
+
+**A second settlement event against an already-settled authorization is
+refused and marked non-retryable.** Several genuine settlements against one
+authorization are not a repeated `issuing_authorization.updated`; they are
+separate `issuing_transaction` objects, which D-84 handles. Treating a second
+`updated` event as another capture would double-charge on a redelivery.
+
+**Tests.** `review2.adversarial.test.ts`'s R7 block, six cases: reversal and
+expiry each releasing and emitting
+`enforcement.stripe_issuing.released`; a partial settlement charging $2.50
+rather than $10 with both figures on the receipt; a currency mismatch
+refused with the hold intact; an increment's $30 aggregate across two
+revisions settling at $28 with two releases, two reservations and exactly one
+capture; and a second settlement refused without double-charging.
+
+Verified by negative control: ignoring reversal/expiry again and capturing
+the authorized amount again fails five of the six.
+
+**Existing expectations that encoded the bug: none, and that is the
+uncomfortable part again.** `webhooks/service.test.ts`'s D-35 capture test
+settles an authorization whose settled amount happens to equal the authorized
+amount, so it passes identically before and after. No test had ever sent a
+reversal, an expiry, or a partial settlement -- the three states this entry
+exists for.
+
+**Change cost if wrong:** a release that should not have happened returns
+budget the mandate had legitimately spent, which overstates what is available.
+That is the direction worth watching, and it is bounded by the hold: a release
+can never exceed what was reserved, because it is computed as the outstanding
+sum per revision rather than from the payload.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

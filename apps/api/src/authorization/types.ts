@@ -283,6 +283,30 @@ export interface RecordExecutionInput {
   providerFee: number;
 }
 
+export interface SettleExternalInput {
+  mandateId: string;
+  externalRef: string;
+  /** What the network actually took, in integer minor units -- D-83. */
+  settledAmount: number;
+  /** The currency the settled figure is in. Must match the authorization's,
+   * and a mismatch throws rather than being converted: this codebase has no
+   * FX and inventing one silently would be worse than refusing. */
+  settledCurrency: string;
+  provider: string;
+  providerReference: string;
+}
+
+export interface SettlementOutcome {
+  /** Total hold released across every revision. */
+  released: number;
+  /** What was captured -- the settled figure, not the authorized one. */
+  captured: number;
+  /** The aggregate that had been authorized, for the receipt. */
+  authorized: number;
+  /** Rows transitioned. */
+  rows: number;
+}
+
 export interface RecordRefundInput {
   authorizationId: string;
   /**
@@ -345,6 +369,40 @@ export interface AuthorizationRepository {
     externalRef: string,
     revision: number | null,
   ): Promise<StoredAuthorization | null>;
+
+  /**
+   * D-83: settle one external authorization against its AGGREGATE hold.
+   *
+   * The card rail's unit of settlement is the external authorization, not
+   * one of Waysafe's rows: since D-79 an authorization can have several
+   * revisions, each with its own RESERVATION, and the money that moves is
+   * one settled figure against the sum of them.
+   *
+   * Releases every revision's hold in that revision's own window (D-72),
+   * then writes one CAPTURE for `settledAmount` -- what the network
+   * actually took, not what was authorized. A partial settlement therefore
+   * leaves the mandate charged for the smaller real figure, and every row
+   * ends EXECUTED.
+   *
+   * Returns what it did, so the caller can evidence it honestly.
+   */
+  settleExternalAuthorization(input: SettleExternalInput, now: Date): Promise<SettlementOutcome>;
+
+  /**
+   * D-83: release one external authorization's aggregate hold without
+   * settling -- a reversal or an expiry.
+   *
+   * Stripe's lifecycle includes both, and before D-83 neither was handled:
+   * the hold survived forever, so a mandate stayed charged for a
+   * transaction the network had already given back. Every revision's hold
+   * is released in its own window and the rows end EXPIRED.
+   */
+  releaseExternalAuthorization(
+    mandateId: string,
+    externalRef: string,
+    reason: "reversed" | "expired" | "declined",
+    now: Date,
+  ): Promise<{ released: number; rows: number }>;
 
   /**
    * D-79: every decision recorded for one external authorization on one
