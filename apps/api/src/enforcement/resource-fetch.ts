@@ -271,6 +271,85 @@ function assertAddressAllowed(
 }
 
 /**
+ * D-89: one absolute timer for the whole fetch.
+ *
+ * The only timer before this was `req.setTimeout`, which is an **idle**
+ * timer: every byte that arrives resets it. A server writing one space every
+ * 20ms held a 60ms-budget fetch open for four seconds and then returned
+ * successfully — the deadline was not merely overrun, it never fired. The
+ * second independent review reported ~230ms; the real behaviour is bounded
+ * only by the merchant's patience, which is the definition of a slowloris.
+ *
+ * `policy.timeoutMs` is now an absolute wall-clock budget from the first DNS
+ * query to the last byte of the last hop's body. One `setTimeout`, armed
+ * once, aborting an `AbortController` that every stage is attached to:
+ *
+ *   - DNS and the address classification race it (`raceDeadline`),
+ *   - connect and TLS inherit it via the request's own `signal`,
+ *   - the body read inherits it the same way,
+ *   - and every redirect hop shares the same controller rather than
+ *     recomputing a fresh per-hop timeout from the time remaining.
+ *
+ * The per-hop `remaining` check stays. It is now redundant for correctness
+ * and still worth having: it produces the timeout error before a doomed
+ * connection is opened at all.
+ *
+ * `req.setTimeout` also stays, armed from the remaining budget, as a
+ * **separate idle timeout**. It fails a connection that goes quiet sooner
+ * than the absolute deadline would, which is the thing it was always good
+ * for. It is no longer the control.
+ */
+interface FetchDeadline {
+  readonly signal: AbortSignal;
+  /** Milliseconds left in the budget; never negative. */
+  remaining(): number;
+  expired(): boolean;
+  /** The error every stage reports, so one budget produces one message. */
+  error(): ResourceUrlNotPermittedError;
+  /** Must be called on every exit path, or the timer keeps the event loop busy. */
+  clear(): void;
+}
+
+function startDeadline(policy: ResourceFetchPolicy): FetchDeadline {
+  const controller = new AbortController();
+  const at = Date.now() + policy.timeoutMs;
+  const timer = setTimeout(() => controller.abort(), policy.timeoutMs);
+  // Never hold the process open on account of a fetch that already returned.
+  timer.unref?.();
+  return {
+    signal: controller.signal,
+    remaining: () => Math.max(0, at - Date.now()),
+    expired: () => controller.signal.aborted || Date.now() >= at,
+    error: () => new ResourceUrlNotPermittedError(`timed out after ${policy.timeoutMs}ms`),
+    clear: () => clearTimeout(timer),
+  };
+}
+
+/**
+ * Settle as soon as either `work` finishes or the deadline fires.
+ *
+ * For the stages that take no `AbortSignal` of their own — `dns.lookup` is
+ * the one that matters, and a hostile or merely broken resolver is exactly
+ * the kind of thing that hangs. The listener is removed either way, so a
+ * fetch with twenty hops does not accumulate twenty of them.
+ */
+async function raceDeadline<T>(work: Promise<T>, deadline: FetchDeadline): Promise<T> {
+  if (deadline.expired()) throw deadline.error();
+  let onAbort: (() => void) | null = null;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(deadline.error());
+        deadline.signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) deadline.signal.removeEventListener("abort", onAbort);
+  }
+}
+
+/**
  * GET a caller-supplied URL under an explicit policy.
  *
  * Uses `node:http`/`node:https` rather than `fetch` for one reason: the
@@ -282,49 +361,55 @@ export async function fetchResourceUnderPolicy(
   raw: string,
   policy: ResourceFetchPolicy,
 ): Promise<ResourceFetchResult> {
-  const deadline = Date.now() + policy.timeoutMs;
+  // D-89: one absolute budget, shared by DNS, connect, every hop and every
+  // body read. See `startDeadline`.
+  const deadline = startDeadline(policy);
   const pinnedAddresses: string[] = [];
   let current = raw;
 
-  for (let hop = 0; hop <= policy.maxRedirects; hop += 1) {
-    const target = await validateTarget(current, policy);
-    pinnedAddresses.push(target.address);
+  try {
+    for (let hop = 0; hop <= policy.maxRedirects; hop += 1) {
+      // A hostile resolver that never answers is inside the budget too.
+      const target = await raceDeadline(validateTarget(current, policy), deadline);
+      pinnedAddresses.push(target.address);
 
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new ResourceUrlNotPermittedError(`timed out after ${policy.timeoutMs}ms`);
-    }
+      // Redundant for correctness now that the timer aborts in flight, and
+      // kept because reporting the timeout beats opening a doomed socket.
+      if (deadline.expired()) throw deadline.error();
 
-    const hopResult = await requestOnce(target, policy, remaining);
+      const hopResult = await requestOnce(target, policy, deadline);
 
-    // Redirects are never followed by the http module itself; this is the
-    // only place a hop happens, and the next URL goes back through
-    // validateTarget above.
-    if (hopResult.status >= 300 && hopResult.status < 400 && hopResult.location) {
-      if (hop === policy.maxRedirects) {
-        throw new ResourceUrlNotPermittedError(
-          `more than ${policy.maxRedirects} redirects`,
-        );
+      // Redirects are never followed by the http module itself; this is the
+      // only place a hop happens, and the next URL goes back through
+      // validateTarget above.
+      if (hopResult.status >= 300 && hopResult.status < 400 && hopResult.location) {
+        if (hop === policy.maxRedirects) {
+          throw new ResourceUrlNotPermittedError(
+            `more than ${policy.maxRedirects} redirects`,
+          );
+        }
+        current = new URL(hopResult.location, target.url).toString();
+        continue;
       }
-      current = new URL(hopResult.location, target.url).toString();
-      continue;
+
+      return {
+        status: hopResult.status,
+        body: hopResult.body,
+        finalUrl: target.url.toString(),
+        pinnedAddresses,
+      };
     }
 
-    return {
-      status: hopResult.status,
-      body: hopResult.body,
-      finalUrl: target.url.toString(),
-      pinnedAddresses,
-    };
+    throw new ResourceUrlNotPermittedError(`more than ${policy.maxRedirects} redirects`);
+  } finally {
+    deadline.clear();
   }
-
-  throw new ResourceUrlNotPermittedError(`more than ${policy.maxRedirects} redirects`);
 }
 
 function requestOnce(
   target: ValidatedTarget,
   policy: ResourceFetchPolicy,
-  timeoutMs: number,
+  deadline: FetchDeadline,
 ): Promise<{ status: number; body: string; location?: string }> {
   const { url, address, family } = target;
   const isHttps = url.protocol === "https:";
@@ -337,6 +422,10 @@ function requestOnce(
     path: `${url.pathname}${url.search}`,
     method: "GET",
     headers: { accept: "application/json", "user-agent": "Waysafe/x402-fetcher" },
+    // D-89: THE deadline. Aborts connect, TLS and the body read alike, and
+    // is the same controller on every redirect hop. Unlike `setTimeout`
+    // below, nothing the server sends can push it back.
+    signal: deadline.signal,
     // THE control (D-75): the socket never resolves the name again, so a
     // second DNS answer cannot move the connection somewhere else.
     lookup: (_hostname, opts, cb) => {
@@ -380,11 +469,23 @@ function requestOnce(
       res.on("error", reject);
     });
 
-    req.setTimeout(timeoutMs, () => {
+    // D-89: a separate IDLE timeout, not the deadline. It fails a connection
+    // that goes quiet earlier than the absolute budget would; it cannot
+    // extend the budget, because it is never armed for longer than what is
+    // left of it.
+    req.setTimeout(deadline.remaining(), () => {
       req.destroy();
-      reject(new ResourceUrlNotPermittedError(`timed out after ${policy.timeoutMs}ms`));
+      reject(deadline.error());
     });
-    req.on("error", reject);
+    req.on("error", (error: Error & { code?: string; name?: string }) => {
+      // The abort arrives here as an AbortError. Reported as the timeout it
+      // is, so one budget produces one message rather than leaking Node's.
+      if (error.name === "AbortError" || error.code === "ABORT_ERR") {
+        reject(deadline.error());
+        return;
+      }
+      reject(error);
+    });
     req.end();
   });
 }

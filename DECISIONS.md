@@ -8969,6 +8969,59 @@ two of the three.
 **Existing expectations that encoded the bug: none.**
 
 
+## D-89 — The resource-fetch deadline is absolute (review 2, R9)
+
+**Decision:** `policy.timeoutMs` is a wall-clock budget from the first DNS
+query to the last byte of the last hop's body. One `setTimeout`, armed once,
+aborting one `AbortController` that DNS, connect, TLS, every redirect hop and
+every body read are all attached to.
+
+**The defect was worse than reported.** The review said a 60ms policy
+returned after ~230ms. Measured here, the same shape of server — one space
+written every 20ms — held a 60ms fetch open for **4,016 milliseconds and then
+returned successfully**. The deadline did not merely overrun; it never fired
+at all. `req.setTimeout` is an **idle** timer, and every byte that arrives
+resets it, so the bound was the merchant's patience rather than the policy.
+That is a slowloris against the API's own event loop, and the production
+default of 5 seconds made each occupied connection cheap to hold.
+
+What the per-hop arithmetic did protect was redirects: the loop re-derived a
+fresh timeout from `deadline - Date.now()` between hops, so a chain of slow
+redirects was already bounded. That property is kept — the R9 block tests it
+and labels it as a guard rather than a reproduction, because it passed before
+this change.
+
+**How the stages attach.**
+
+| stage | how the deadline reaches it |
+| --- | --- |
+| DNS + address classification | `raceDeadline(validateTarget(...))` — `dns.lookup` takes no signal, and a resolver that never answers is exactly the thing that hangs |
+| connect, TLS | the request's own `signal` |
+| body read | the same `signal` |
+| each redirect hop | the same controller, not a recomputed per-hop timeout |
+
+`req.setTimeout` stays, armed from `deadline.remaining()`, as a **separate
+idle timeout**: it fails a connection that goes quiet sooner than the
+absolute deadline would, which is what it was always good for. It can no
+longer extend the budget, because it is never armed for longer than what is
+left of one. The abort surfaces as Node's `AbortError`, mapped back to
+`timed out after Nms` so one budget produces one message.
+
+**Tests.** Three cases in `review2.adversarial.test.ts`'s R9 block: the
+slow-drip body now fails at 69ms against a 60ms budget (was 4,016ms, and
+resolved); three slow redirect hops stay inside a 100ms budget; and a
+**control** that a prompt response inside the budget still succeeds —
+without which a timer that fired immediately would look like a fix. The
+assertion is `elapsed <= budget + 150ms`, a tolerance chosen to be
+generous about CI scheduling while still distinguishing 60ms from "as long
+as the server likes".
+
+Verified by negative control: removing `signal: deadline.signal` from the
+request options returns to 4,012ms and resolves.
+
+**Existing expectations that encoded the bug: none.**
+
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

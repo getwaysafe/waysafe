@@ -1701,33 +1701,107 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R9 — a slow-drip body outlives the fetch deadline (review: R2/Medium)", () => {
-    it("a 60ms policy returns well past 60ms while the server dribbles bytes", async () => {
-      // D-75's policy sets an overall deadline, and `requestOnce` arms a
-      // socket timeout from the time remaining. A socket timeout is an IDLE
-      // timer: each chunk resets it, so a server that writes one byte every
-      // 20ms keeps the connection open indefinitely.
+  describe("R9 — closed by D-89: the fetch deadline is absolute (review: R2/Medium)", () => {
+    // The budget plus what a loaded CI box can add between the timer firing
+    // and the promise settling. Deliberately generous: the defect this
+    // replaces overran a 60ms budget by 170ms and would have overrun any
+    // budget indefinitely, so a tolerance that distinguishes 60ms from
+    // "however long the server feels like" is the thing worth asserting.
+    const TOLERANCE_MS = 150;
+
+    it("a slow-drip body cannot outlive the budget", async () => {
+      // Before D-89 the only timer was `req.setTimeout`, which is an IDLE
+      // timer: every chunk resets it, so one byte every 20ms held the
+      // connection open for as long as the server cared to write.
       const server = createServer((_req, res) => {
         res.writeHead(402, { "content-type": "application/json" });
         const timer = setInterval(() => res.write(" "), 20);
         setTimeout(() => {
           clearInterval(timer);
           res.end("{}");
-        }, 400);
+        }, 4000);
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const port = (server.address() as AddressInfo).port;
 
       try {
         const started = Date.now();
-        await fetchResourceUnderPolicy(`http://127.0.0.1:${port}/`, {
+        const outcome = await fetchResourceUnderPolicy(`http://127.0.0.1:${port}/`, {
           ...LOCAL_RESOURCE_FETCH_POLICY,
           timeoutMs: 60,
-        }).catch(() => undefined);
+        }).then(
+          () => "resolved" as const,
+          (e: Error) => e.message,
+        );
         const elapsed = Date.now() - started;
         // eslint-disable-next-line no-console
-        console.log(`R9: a 60ms deadline returned after ${elapsed}ms`);
-        expect(elapsed).toBeGreaterThan(300);
+        console.log(`R9: a 60ms deadline returned after ${elapsed}ms (${outcome})`);
+
+        expect(outcome).toContain("timed out after 60ms");
+        // Was ~230ms against a 60ms budget, and unbounded in principle.
+        expect(elapsed).toBeLessThanOrEqual(60 + TOLERANCE_MS);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
+    it("a chain of slow redirects cannot outlive the budget either", async () => {
+      // This one already held before D-89: `fetchResourceUnderPolicy` checks
+      // the remaining budget between hops. Kept as a guard, not as a
+      // reproduction -- it is the property the new absolute timer must not
+      // quietly lose while replacing the per-hop arithmetic.
+      let hops = 0;
+      const server = createServer((req, res) => {
+        hops += 1;
+        const port = (server.address() as AddressInfo).port;
+        setTimeout(() => {
+          res.writeHead(302, { location: `http://127.0.0.1:${port}/${hops}` });
+          res.end();
+        }, 40);
+        void req;
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as AddressInfo).port;
+
+      try {
+        const started = Date.now();
+        const outcome = await fetchResourceUnderPolicy(`http://127.0.0.1:${port}/`, {
+          ...LOCAL_RESOURCE_FETCH_POLICY,
+          timeoutMs: 100,
+          maxRedirects: 20,
+        }).then(
+          () => "resolved" as const,
+          (e: Error) => e.message,
+        );
+        const elapsed = Date.now() - started;
+        // eslint-disable-next-line no-console
+        console.log(`R9: ${hops} slow redirect hops under a 100ms deadline took ${elapsed}ms`);
+
+        expect(outcome).toContain("timed out after 100ms");
+        expect(elapsed).toBeLessThanOrEqual(100 + TOLERANCE_MS);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    });
+
+    it("CONTROL: a prompt response inside the budget still succeeds", async () => {
+      // Without this, a deadline that fired immediately would look correct.
+      const server = createServer((_req, res) => {
+        res.writeHead(402, { "content-type": "application/json" });
+        res.end(JSON.stringify({ x402Version: 1, accepts: [] }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as AddressInfo).port;
+
+      try {
+        const result = await fetchResourceUnderPolicy(`http://127.0.0.1:${port}/`, {
+          ...LOCAL_RESOURCE_FETCH_POLICY,
+          timeoutMs: 2000,
+        });
+        expect(result.status).toBe(402);
+        expect(JSON.parse(result.body)).toMatchObject({ x402Version: 1 });
       } finally {
         server.closeAllConnections();
         await new Promise<void>((resolve) => server.close(() => resolve()));
