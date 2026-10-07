@@ -54,7 +54,7 @@ import {
 } from "../authorization/types.js";
 // D-73: moved out of this file so the step-up approval path reads the same
 // status table instead of a second copy of it.
-import { gateMandateStatus } from "../authorization/mandate-gate.js";
+import { gateMandateExpiry, gateMandateStatus } from "../authorization/mandate-gate.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import type { InstrumentRepository } from "../instruments/types.js";
 
@@ -559,8 +559,11 @@ export async function handleIssuingAuthorizationRequest(
     : 0;
   const incrementAmount = requestedAmount - priorHold;
 
+  // Read before the lock only for the merchant resolution and the receipt
+  // fields below. The AUTHORITY check is re-read inside the lock (D-80) --
+  // a gate read outside the lock is a cache, and the second review revoked a
+  // mandate in exactly that window.
   const detail = await repos.authorization.getMandateDetail(mandateId);
-  const gateReasons = gateMandateStatus(detail);
 
   // D-34: this is the one rail-attested resolveMerchant() call in the
   // codebase -- merchant_data.network_id came from Stripe's own webhook
@@ -580,10 +583,15 @@ export async function handleIssuingAuthorizationRequest(
     let result: EngineResult;
     const ledgerEntries: NewLedgerEntry[] = [];
 
+    // D-80: the mandate's authority, re-read under the lock that takes the
+    // money rather than trusted from the pre-lock read above.
+    const underLock = await repos.authorization.getMandateDetail(mandateId);
+    const gateReasons = gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now);
+
     if (gateReasons) {
       result = { decision: Decision.DENY, reasons: gateReasons };
     } else {
-      const mandate = detail as MandateDetail;
+      const mandate = underLock as MandateDetail;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
 
       // D-79: on an increment, the engine decides the DELTA, because the

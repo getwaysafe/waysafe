@@ -1060,8 +1060,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R10 — a revocation committed between the gate and the lock still ALLOWs (review: R12)", () => {
-    it("the gate's mandate status is read before the row lock, so a revocation in between is missed", async () => {
+  describe("R10 — closed by D-80: mandate authority is re-read under the money lock (review: R12)", () => {
+    it("a revocation committed between the gate and the lock now DENIES", async () => {
       const f = await fixture();
 
       // THE SEAM, test-only: `withMandateLock` is wrapped so a revocation
@@ -1082,14 +1082,65 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
       };
 
       const racing = await decided(f, 1);
-      expect(racing.decision).toBe(Decision.ALLOW);
+      expect(racing.decision).toBe(Decision.DENY); // was ALLOW
+      expect(racing.reasons.map((r) => r.code)).toContain(ReasonCode.DENY_MANDATE_REVOKED);
+      // And it took no hold.
+      expect((await spend(f)).mandate.amount).toBe(0);
 
       (f.authorization as { withMandateLock: unknown }).withMandateLock = original;
 
-      // CONTROL: once the revocation is visible to the gate, it denies.
+      // CONTROL: still denied once the revocation is visible to the gate too.
       const after = await decided(f, 1);
       expect(after.decision).toBe(Decision.DENY);
       expect(after.reasons.map((r) => r.code)).toContain(ReasonCode.DENY_MANDATE_REVOKED);
+    });
+
+    it("CONTROL: an ACTIVE mandate still ALLOWs, so the re-read is not refusing everything", async () => {
+      const f = await fixture();
+      const ok = await decided(f, 1);
+      expect(ok.decision).toBe(Decision.ALLOW);
+    });
+
+    it("the card rail re-reads it too: a revocation in the same window DENIES", async () => {
+      // D-80 applies to every decision path, not just authorize(). The card
+      // rail read its gate before the lock in exactly the same shape.
+      const f = await fixture();
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+
+      const original = f.authorization.withMandateLock.bind(f.authorization);
+      let armed = true;
+      (f.authorization as { withMandateLock: unknown }).withMandateLock = async (
+        mandateId: string,
+        fn: () => Promise<unknown>,
+      ) => {
+        if (armed) {
+          armed = false;
+          await prisma.mandate.update({ where: { id: mandateId }, data: { status: "REVOKED" } });
+        }
+        return original(mandateId, fn as never);
+      };
+
+      const decision = await handleIssuingAuthorizationRequest(
+        f.repos,
+        new StripeIssuingAdapter(),
+        card,
+        NOW,
+      );
+      (f.authorization as { withMandateLock: unknown }).withMandateLock = original;
+
+      expect(decision.response.approved).toBe(false);
+      expect(decision.response.reason_codes).toContain(ReasonCode.DENY_MANDATE_REVOKED);
+      expect((await spend(f)).mandate.amount).toBe(0);
+    });
+
+    it("an expired POLICY is caught under the lock as well, not only a revoked row", async () => {
+      // gateMandateExpiry, which x402 never consulted at all before D-80
+      // because that file kept its own copy of the status gate and no
+      // expiry check.
+      const f = await fixture(policyFrom({ expires_at: "2026-01-01T00:00:00.000Z" }));
+      const auth = await decided(f, 1);
+      expect(auth.decision).toBe(Decision.DENY);
+      expect(auth.reasons.map((r) => r.code)).toContain(ReasonCode.DENY_MANDATE_EXPIRED);
     });
   });
 

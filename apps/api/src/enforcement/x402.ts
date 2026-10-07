@@ -54,6 +54,11 @@ import {
   type MerchantAssertion,
   type Reason,
 } from "@waysafe/core";
+// D-80: the shared mandate gate. This file kept its own five-line copy of
+// `gateMandateStatus`, which is exactly the drift D-73 consolidated the card
+// rail's copy to avoid -- and it meant a status added to the enum would have
+// been honoured on one rail and ignored on the other.
+import { gateMandateExpiry, gateMandateStatus } from "../authorization/mandate-gate.js";
 import type { AuthorizationRepository, MandateDetail, NewLedgerEntry } from "../authorization/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import type { InstrumentRepository, NewInstrument } from "../instruments/types.js";
@@ -526,46 +531,6 @@ export interface X402EnforcementRepos {
   instruments: InstrumentRepository;
 }
 
-/** Same narrowing as stripe-issuing.ts's `gateMandateStatus`, and for the
- * identical reason: there is no agent to bind or suspend on a rail-
- * initiated decision, only the mandate's own lifecycle. Kept as its own
- * copy rather than imported from stripe-issuing.ts -- that file is a card-
- * rail adapter and importing from it would make this one depend on a
- * sibling rail for no shared behavior beyond five lines, the same
- * deliberate non-sharing `probeStripeIssuingKey`'s doc comment already
- * explains for a different pair of functions. */
-function gateMandateStatus(detail: MandateDetail | null): Reason[] | null {
-  if (!detail) {
-    return [
-      {
-        code: ReasonCode.DENY_NO_ACTIVE_MANDATE,
-        message: "No mandate is associated with the instrument presented for this payment.",
-      },
-    ];
-  }
-
-  const statusReason: Partial<Record<MandateStatus, Reason>> = {
-    EXPIRED: { code: ReasonCode.DENY_MANDATE_EXPIRED, message: "The mandate has expired." },
-    REVOKED: { code: ReasonCode.DENY_MANDATE_REVOKED, message: "The mandate was revoked by the principal." },
-    SUPERSEDED: {
-      code: ReasonCode.DENY_MANDATE_SUPERSEDED,
-      message: "The mandate version referenced has been replaced by a newer version.",
-    },
-    PENDING_AUTHENTICATION: {
-      code: ReasonCode.DENY_MANDATE_NOT_AUTHENTICATED,
-      message: "The mandate was never authenticated by the principal.",
-    },
-    DRAFT: {
-      code: ReasonCode.DENY_MANDATE_NOT_AUTHENTICATED,
-      message: "The mandate was never confirmed and authenticated by the principal.",
-    },
-  };
-
-  if (detail.status === "ACTIVE") return null;
-  const reason = statusReason[detail.status];
-  return [reason ?? { code: ReasonCode.DENY_NO_ACTIVE_MANDATE, message: "The mandate is not active." }];
-}
-
 export interface X402Decision {
   response: X402EnforcementResponse;
   mandateId: string | null;
@@ -687,11 +652,10 @@ export async function handleX402PaymentRequest(
       ];
   // D-75: the refusal takes precedence over everything downstream of it --
   // nothing was fetched, so there is no merchant or asset to report on.
-  const gateReasons = fetchRejection
-    ? [fetchRejection]
-    : parsed
-      ? gateMandateStatus(detail)
-      : unparseableReasons;
+  // D-80: computed inside the lock below, not here -- `detail` above is a
+  // pre-lock read and a cached "this mandate may spend" is the one thing
+  // that must never be cached.
+  const preLockReasons = fetchRejection ? [fetchRejection] : parsed ? null : unparseableReasons;
 
   // D-40: the one rail-attested resolveMerchant() call in this file --
   // `requirement` came from Waysafe's own fetch (`fetcher`), never from
@@ -706,10 +670,17 @@ export async function handleX402PaymentRequest(
     let result: EngineResult;
     const ledgerEntries: NewLedgerEntry[] = [];
 
+    // D-80: the mandate's authority, re-read under the lock that takes the
+    // money. The second independent review revoked a mandate between a
+    // pre-lock gate read and the lock and still got an ALLOW (R10).
+    const underLock = await repos.authorization.getMandateDetail(mandateId);
+    const gateReasons =
+      preLockReasons ?? (gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now));
+
     if (gateReasons) {
       result = { decision: Decision.DENY, reasons: gateReasons };
     } else {
-      const mandate = detail as MandateDetail;
+      const mandate = underLock as MandateDetail;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
       result = evaluate({ policy: mandate.policy, action: parsed!.action, merchant, spend, now });
       if (result.decision === Decision.ALLOW) {

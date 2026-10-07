@@ -31,6 +31,7 @@ import {
   resolveMerchant,
   type AuthorizationRequest,
   type AuthorizationStatus,
+  type EngineResult,
   type Reason,
 } from "@waysafe/core";
 import { extractKeyPrefix } from "../agent-keys/keys.js";
@@ -181,8 +182,29 @@ export async function authorize(
     }
 
     const merchant = resolveMerchant(request.action.merchant, repo.getMerchantDirectory(), "agent");
-    const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);
-    const result = evaluate({ policy: gate.policy, action: request.action, merchant, spend, now });
+
+    /**
+     * D-80: the mandate's authority is re-read HERE, under the lock that
+     * takes the money.
+     *
+     * `resolveMandateGate` above runs before the lock, so a revocation that
+     * commits in between was invisible: the second independent review (R10)
+     * revoked a mandate between the gate read and the lock and still got an
+     * ALLOW. This is the same rule D-73 applied to approvals, now applied to
+     * every decision path -- a gate read outside a lock is a cache, and a
+     * cached "this mandate may spend" is the one thing that must never be.
+     */
+    const underLock = await repo.getMandateDetail(gate.mandateId);
+    const staleReasons =
+      gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now);
+
+    let result: EngineResult;
+    if (staleReasons) {
+      result = { decision: Decision.DENY, reasons: staleReasons };
+    } else {
+      const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);
+      result = evaluate({ policy: gate.policy, action: request.action, merchant, spend, now });
+    }
 
     const status = statusForDecision(result.decision);
     const ledgerEntries: NewLedgerEntry[] = shouldReserve(

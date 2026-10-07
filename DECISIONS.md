@@ -8236,6 +8236,72 @@ index of that name exists. Replacing a uniqueness constraint on a money table
 unattended is not something a script should do, so that is deliberate and the
 SQL says so.
 
+## D-80 — Mandate authority is re-read under the money lock, on every decision path (review 2, R10)
+
+**Decision:** every path that can move money re-reads the mandate's status
+and its policy expiry inside the row lock, and denies on either. This is the
+rule D-73 applied to approvals, now applied everywhere.
+
+Finding R10 of the second independent review. `resolveMandateGate` runs
+*before* `withMandateLock`, so a revocation committing in between was
+invisible: the review revoked a mandate in that window and still received an
+ALLOW. A gate read outside the lock is a cache, and a cached "this mandate may
+spend" is the one thing that must never be cached.
+
+**Three paths had the same shape, not one.** The review found it in
+`authorize()`. Checking the others rather than assuming:
+
+| Path | Before D-80 | After |
+|---|---|---|
+| `authorize()` | gate read pre-lock, trusted | re-read inside the lock |
+| `handleIssuingAuthorizationRequest` | `gateMandateStatus(detail)` computed pre-lock | re-read inside the lock |
+| `handleX402PaymentRequest` | same, and with **no expiry check at all** | re-read inside the lock, status and expiry |
+
+**x402 was carrying its own copy of the gate, which is why it had no expiry
+check.** That file kept a private five-line `gateMandateStatus`, with a
+comment explaining the deliberate non-sharing. D-73 had already consolidated
+the card rail's copy into `authorization/mandate-gate.ts` for exactly the
+reason this demonstrates: a status added to the enum would have been honoured
+on one rail and ignored on the other, and `gateMandateExpiry` -- added by
+D-73 -- never reached x402 at all. The duplicate is deleted and all three
+paths now read one table.
+
+**The deny is a real receipt, not an exception.** A stale-authority denial
+flows through the same persistence path as any other DENY, carrying
+`DENY_MANDATE_REVOKED`, `DENY_MANDATE_EXPIRED` or
+`DENY_MANDATE_NOT_AUTHENTICATED`. No new reason code: these already name the
+condition exactly, which is what D-73 established when it re-routed them into
+the approval path.
+
+**Tests.** `review2.adversarial.test.ts`'s R10 block, flipped and extended to
+four cases: the race now denies and takes no hold, an ACTIVE mandate still
+ALLOWs (without which the fix would look right while refusing everyone), the
+card rail denies in the same window, and an expired *policy* is caught under
+the lock rather than only a revoked row.
+
+The test seam is a wrapper around `withMandateLock` that commits the
+revocation on first call. **Can a real endpoint trigger this interleaving?
+Yes.** Nothing exotic is required: `POST /v1/authorizations` and
+`DELETE`-style revocation are separate requests on separate connections, and
+the window is the gap between two queries in the same handler. The seam
+forces the ordering deterministically rather than creating a possibility that
+did not exist -- which is why the fix is a re-read and not a retry.
+
+Verified by negative control: restoring the pre-lock read on both the agent
+and card paths fails two of the four.
+
+**Existing expectations that encoded the bug: none.** No test had ever
+mutated a mandate between the gate and the lock. What did need care was the
+opposite direction -- the x402 consolidation changes which reasons that rail
+can return, and the full offline suite plus the serial Postgres pass were run
+to confirm nothing depended on the old private copy.
+
+**Change cost if wrong:** one extra read inside a lock already held, and the
+failure direction is a denial with a specific code. The thing to watch is
+that a *fourth* decision path added later gets the same re-read; there is no
+mechanism enforcing it, only this entry and the shared helper's own doc
+comment.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
