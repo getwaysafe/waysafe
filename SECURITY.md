@@ -137,6 +137,161 @@ closing them turned up eight more, each with its own decision-log entry:
   scheme, the demo's over-the-cap DENY would have been served the earlier
   ALLOW. Fixed; see the known issue below.
 
+## Findings from the second independent review, 2026-10
+
+A second independent adversarial review, of commit `1caf39b`, reported eleven
+findings. Ten were real; one was wrong and is named below. All ten are closed,
+each as its own commit, each with the attack written as a passing test against
+the unfixed code before anything was changed, and most with a negative control
+proving the test would catch a regression rather than agreeing with the
+implementation.
+
+The review's own numbering (R-n) is kept alongside this file's, because its
+evidence refers to it.
+
+| # | Finding | Status |
+|---|---|---|
+| R1 | A same-organization agent credential could list, read and execute another agent's authorization, and choose the payment instrument at execution | **Fixed** — D-78 |
+| R2 | A Stripe Issuing **incremental** request replayed the original approval: $10 approved, then the same authorization id re-presented at $10,000, approved | **Fixed** — D-79 |
+| R3 | A revocation committed between the unlocked gate read and the money lock was still approved | **Fixed** — D-80 |
+| R4 | A provider event was marked consumed before its ledger effect committed, so a failed refund credit was never retried and the budget stayed uncredited | **Fixed** — D-81 |
+| R5 | Stripe's **cumulative** `amount_refunded` was applied as a delta: $40 then $100 of one $100 charge produced a net ledger amount of **minus $40**, i.e. $140 of fresh budget | **Fixed** — D-82 |
+| R6 | Reversed and expired Issuing authorizations kept their reservation forever, and a partial capture recorded the authorized amount rather than the settled one | **Fixed** — D-83 |
+| R7 | `max_count` was reservations minus releases, so every **settled** payment handed its slot back: under `max_count: 1`, unlimited payments by letting each settle first | **Fixed** — D-87 |
+| R8 | A policy-activation signature could be redeemed as a passkey **re-enrollment grant**, enrolling an attacker's authenticator | **Fixed** — D-86 |
+| R9 | Multiple non-reserving step-ups were each invisible to the others: three $90 step-ups on a $100 mandate, all three approved, $270 spent | **Fixed** — D-85 |
+| R10 | Sub-cent x402 transfers rounded to **zero cents**: 14,997 atomic USDC co-signed across three requests, $0.00 on the ledger and the receipt | **Fixed** — D-88 |
+| R11 | A slow-drip response body defeated the fetch deadline, because the only timer was an idle timer every byte reset | **Fixed** — D-89 |
+
+**Refuted: "real Postgres mandate activation swaps `ip` and `now`".** The
+review listed this as Critical and it is wrong. `activateMandate(mandateId,
+mandateVersionId, ip, now)` is declared in that order, called in that order,
+and writes `authenticatedAt: now, authenticationIp: ip`. The review's own
+probe constructed the call by hand with the arguments transposed and then
+reported Prisma's resulting validation error as the product's behaviour. It
+was reproduced before being believed, which is why it is listed here as
+refuted rather than as a twelfth D-number. A real Postgres activation test
+now pins both fields, so the claim cannot be made again without failing.
+
+Two further findings the review raised are **not** vulnerabilities and were
+not treated as such: that evidence proves authorship and the integrity of
+the chain it shows rather than completeness (true, stated in
+`docs/THREAT-MODEL.md` §7 and in OQ-8 below), and that there is no rate
+limiter (true, and tracked as a hardening gap rather than a defect).
+
+### Self-found extensions
+
+Closing the eleven turned up four more, each with its own decision-log entry:
+
+- **Force capture and overcapture were silently ignored (D-84).** Raised as a
+  question while modelling the card lifecycle for R6, and the answer was a
+  hole: `issuing_transaction.created` was not handled at all, so a settlement
+  the network cleared without asking — or one above what was approved — moved
+  money and nothing in Waysafe recorded it. Both are now written to the
+  ledger, charged against the cap, and flagged on the receipt with two new
+  reason codes (`DENY_SETTLED_WITHOUT_AUTHORIZATION`,
+  `DENY_SETTLED_ABOVE_AUTHORIZATION`), the raw rail payload a dispute needs,
+  and what the engine *would* have decided had it been asked.
+- **Ordinary agent decisions wrote no evidence (D-90).** The review found this
+  at the service layer; it was reproduced here through the real HTTP route,
+  because `POST /v1/authorizations` is the path the public claim is about.
+  The rail-initiated paths each append decision evidence; the agent path
+  predates them and never did, so "every decision produces a signed receipt"
+  was false on the primary API path. ALLOW, DENY and STEP_UP now each append a
+  signed `authorization.decided` event in the same transaction as the decision
+  and its hold.
+- **x402 never checked policy expiry at all (D-80).** Found while fixing R3.
+  That file kept its own copy of the mandate status gate and had no expiry
+  check, so an expired policy was enforceable on the x402 rail indefinitely.
+  Both rails now obtain their policy through one gated helper, and a
+  structural test asserts that every file calling `evaluate()` goes through
+  it.
+- **An increment consumed two `max_count` slots (D-87).** A defect introduced
+  by this remediation's own D-79, which gives each incremental request its own
+  authorization row: counting rows made one incremented card payment consume
+  two slots, and the increment was declined by the count rule. The counting
+  unit is now the transaction, not the row.
+
+### What the remediation itself got wrong
+
+Recorded because a remediation that only reports its successes is not
+evidence of anything:
+
+- **D-79's first version was still exploitable**, by a different route. It
+  keyed the revision on the payload's `request_history.length`, which the
+  review's increment payload leaves untouched — so the increment collided on
+  the uniqueness key, the insert was refused, and D-74's own conflict handler
+  replayed the winner. The attack still passed. Fixed to a decision sequence.
+- **D-78's first version broke D-62.** The ownership check landed on the
+  step-up route too, where the resolver must be a *different* agent. Caught by
+  R1's own test failing with the wrong status code; that route now carries a
+  comment saying why it deliberately has none.
+- **D-85's first version declined legitimate approvals.** It evaluated the
+  step-up's full amount against a snapshot that already contained its hold,
+  so $90 + $90 read as $180 on a $100 cap. Caught by D-72's existing test.
+- **D-80's helper read wall-clock time** for its expiry check, which two
+  existing D-73 tests caught: a repository must never invent the time a
+  decision is made.
+- **One negative control was vacuous and looked like a pass.**
+  `@waysafe/core` resolves to its built output, so editing its source and
+  re-running vitest tests the previous build. D-87's first control reported
+  every case still passing; re-run with `tsc -b` in between, four of six
+  failed. Recorded in D-87, because a control that proves nothing while
+  looking like it proved something is the exact failure mode these controls
+  exist to prevent.
+
+Across the whole remediation, **three** existing expectations encoded a bug
+and had to be updated (D-71's, D-81's, and two of D-66's purpose-name
+assertions), **four** caught regressions in the fixes themselves, and **four**
+hung rather than failed on a deadlock in the in-memory repository's lock,
+which had never been re-entrant while Postgres's always was.
+
+### Where these attack tests live
+
+| File | Findings | Tests |
+|---|---|---|
+| `apps/api/src/review2.adversarial.test.ts` | all eleven, plus D-84 and D-90 — Postgres-gated | 52 |
+| `packages/core/src/engine/window-rollup.test.ts` | D-87's counting rule, offline | 9 |
+
+The earlier review's files are unchanged and still listed above. The full
+suite is **683 passing offline, 107 in the serial Postgres pass, 1 skipped**,
+with the one standing testnet-funding failure documented in `DECISIONS.md`
+D-42.
+
+### What remains open after both reviews
+
+Nothing here is a live hole; all are written up with candidate fixes, and
+what has not been built, in `DECISIONS.md`.
+
+- **OQ-8 — no external transparency anchor.** The evidence chain proves
+  authorship and the integrity of the slice it shows. An operator with both
+  database and signing-key access can present an incomplete slice, and
+  nothing outside Waysafe would contradict it. The review is right about
+  this, and the claim in `docs/THREAT-MODEL.md` §7 is scoped to match.
+- **OQ-12 — the mandate-authentication challenge is predictable**, derived
+  from the public `policy_hash`. **Narrowed by D-86**: the re-enrollment
+  ceremony's challenge is random, and after D-86 is the only value its own
+  completion path accepts, so a predictable challenge is a concern for
+  mandate activation only. Before D-86 it was worse than OQ-12 described,
+  because one purpose covered two operations.
+- **OQ-13 — x402 "VERIFIED" is weaker than card "VERIFIED".** Unchanged; see
+  the full statement above.
+- **OQ-14 — a step-up expiry writes no evidence.** Found while closing D-90.
+  An expiry releases a reservation with nothing in the signed chain to say
+  so. Not a decision, which is why D-90 did not fold it in; recorded rather
+  than rushed because the fix changes a signature the expiry worker calls in
+  a loop.
+- **Cosigner-key custody (D-56/D-59).** The 2-of-2 Safe proves a session key
+  alone cannot settle. It proves nothing about the Waysafe co-signer key,
+  which is a single secp256k1 key in an environment variable, with no
+  rotation plan and no kill switch. The review states this correctly.
+- **Database-write authority (D-54).** Anything that can write the database
+  can alter a policy, and the signed chain records the decision that *was*
+  made, not whether the policy it cited was the one the principal approved.
+- **A dependency can alter `evaluate()` (D-43).** The authorization path is
+  deterministic TypeScript, which means it is as trustworthy as the supply
+  chain it is installed from.
+
 ## Open questions raised
 
 Neither is a live hole. Both are written up in full, with candidate fixes and
