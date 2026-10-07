@@ -8302,6 +8302,45 @@ that a *fourth* decision path added later gets the same re-read; there is no
 mechanism enforcing it, only this entry and the shared helper's own doc
 comment.
 
+**D-80 follow-up: the re-read is no longer something a call site can
+forget.** D-80 fixed three decision paths that trusted a pre-lock gate read.
+Fixing each one left the mistake available to the fourth path someone writes
+next, which is the shape of defect this project has now hit twice (D-64 fixed
+one route and D-65 found four more; D-80 fixed one path and found two more).
+
+`AuthorizationRepository.withAuthorizedMandate(mandateId, now, fn)` takes the row
+lock, re-reads the mandate, runs `gateMandateStatus` and `gateMandateExpiry`,
+and hands the callback either a validated `MandateDetail` or the reasons to
+deny. There is deliberately no third shape: "I could not tell" is not an
+outcome a money path may have. All three decision paths now obtain their
+policy that way, so reaching a policy under the lock without the gate having
+run is no longer possible by omission.
+
+**The guarantee is narrower than "nothing can hold the lock ungated", and
+saying so matters.** `withMandateLock` remains and must: capture, refund and
+step-up resolution take the lock without making a fresh spend decision. A
+caller could still take a raw lock and read the mandate by hand. What is
+guaranteed is that the *validated policy* has exactly one source, so skipping
+the gate now requires writing that read deliberately rather than omitting a
+line.
+
+**The `now` parameter is not decoration, and two existing tests proved it.**
+The first implementation read wall-clock time for the expiry check. D-73's
+own (e3) and (e3b) cases decide with an injected clock of 2026-08-24 against
+a policy expiring 2026-08-31, and both failed with `expected 'DENY' to be
+'STEP_UP'` -- the repository had decided, against real time, that a policy
+valid at the decision's instant had lapsed. A repository must never invent
+time for a decision, so the clock is now the caller's. This is the one case
+in this session where an existing expectation caught a regression rather than
+encoding a bug.
+
+A structural guard backs it: every file that calls `evaluate({` must also
+call `withAuthorizedMandate(`, asserted over the three real decision files,
+with a count assertion so the loop cannot pass vacuously if `evaluate()`
+moves. Source-level because there is no runtime seam -- a path that skipped
+the gate would simply be a different, correct-looking function.
+
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

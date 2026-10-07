@@ -579,19 +579,16 @@ export async function handleIssuingAuthorizationRequest(
   );
 
   const decideUnderLock = () =>
-    repos.authorization.withMandateLock(mandateId, async () => {
+    // D-80 follow-up: the gate runs inside the lock, handed over by the
+    // repository rather than re-derived here.
+    repos.authorization.withAuthorizedMandate(mandateId, now, async (underLockGate) => {
     let result: EngineResult;
     const ledgerEntries: NewLedgerEntry[] = [];
 
-    // D-80: the mandate's authority, re-read under the lock that takes the
-    // money rather than trusted from the pre-lock read above.
-    const underLock = await repos.authorization.getMandateDetail(mandateId);
-    const gateReasons = gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now);
-
-    if (gateReasons) {
-      result = { decision: Decision.DENY, reasons: gateReasons };
+    if (!underLockGate.ok) {
+      result = { decision: Decision.DENY, reasons: underLockGate.reasons };
     } else {
-      const mandate = underLock as MandateDetail;
+      const mandate = underLockGate.mandate;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
 
       // D-79: on an increment, the engine decides the DELTA, because the

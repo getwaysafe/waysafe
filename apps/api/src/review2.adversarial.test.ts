@@ -1133,6 +1133,34 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
       expect((await spend(f)).mandate.amount).toBe(0);
     });
 
+    it("STRUCTURAL: every decision path obtains its policy through withAuthorizedMandate", async () => {
+      // D-80 follow-up. D-80 fixed three call sites; this asserts the fourth
+      // one cannot be written wrong by omission. A decision path is one that
+      // calls `evaluate()`; each must get its policy from the gated helper,
+      // not from a bare `getMandateDetail` inside a raw lock.
+      //
+      // Source-level because there is no runtime seam: a path that skipped
+      // the gate would simply be a different, correct-looking function.
+      const { readFileSync } = await import("node:fs");
+      const paths = [
+        "apps/api/src/authorization/service.ts",
+        "apps/api/src/enforcement/stripe-issuing.ts",
+        "apps/api/src/enforcement/x402.ts",
+      ];
+      let evaluators = 0;
+      for (const path of paths) {
+        const source = readFileSync(path, "utf8");
+        if (!source.includes("evaluate({")) continue;
+        evaluators += 1;
+        expect(source, `${path} calls evaluate() without withAuthorizedMandate`).toContain(
+          "withAuthorizedMandate(",
+        );
+      }
+      // Guards the guard: if evaluate() moved, the loop above would assert
+      // nothing at all.
+      expect(evaluators).toBe(3);
+    });
+
     it("an expired POLICY is caught under the lock as well, not only a revoked row", async () => {
       // gateMandateExpiry, which x402 never consulted at all before D-80
       // because that file kept its own copy of the status gate and no

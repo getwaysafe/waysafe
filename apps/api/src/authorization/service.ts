@@ -168,7 +168,10 @@ export async function authorize(
     });
   }
 
-  return repo.withMandateLock(gate.mandateId, async () => {
+  // D-80 follow-up: the gate is re-run inside the lock by
+  // `withAuthorizedMandate`, not by this call site remembering to -- there is
+  // no way to reach a policy here without it having run.
+  return repo.withAuthorizedMandate(gate.mandateId, now, async (underLockGate) => {
     // Idempotency is checked once more inside the lock: two concurrent requests
     // with the same key for the same mandate must not both win the race above.
     if (request.idempotency_key) {
@@ -183,24 +186,9 @@ export async function authorize(
 
     const merchant = resolveMerchant(request.action.merchant, repo.getMerchantDirectory(), "agent");
 
-    /**
-     * D-80: the mandate's authority is re-read HERE, under the lock that
-     * takes the money.
-     *
-     * `resolveMandateGate` above runs before the lock, so a revocation that
-     * commits in between was invisible: the second independent review (R10)
-     * revoked a mandate between the gate read and the lock and still got an
-     * ALLOW. This is the same rule D-73 applied to approvals, now applied to
-     * every decision path -- a gate read outside a lock is a cache, and a
-     * cached "this mandate may spend" is the one thing that must never be.
-     */
-    const underLock = await repo.getMandateDetail(gate.mandateId);
-    const staleReasons =
-      gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now);
-
     let result: EngineResult;
-    if (staleReasons) {
-      result = { decision: Decision.DENY, reasons: staleReasons };
+    if (!underLockGate.ok) {
+      result = { decision: Decision.DENY, reasons: underLockGate.reasons };
     } else {
       const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);
       result = evaluate({ policy: gate.policy, action: request.action, merchant, spend, now });

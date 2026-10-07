@@ -202,6 +202,17 @@ export interface MandateListItem {
   createdAt: string;
 }
 
+/**
+ * What `withAuthorizedMandate` hands its callback -- D-80 follow-up.
+ *
+ * Either a mandate whose status and policy expiry were checked inside the
+ * lock, or the reasons a decision must deny. There is deliberately no third
+ * shape: "I could not tell" is not an outcome a money path may have.
+ */
+export type AuthorizedMandateGate =
+  | { ok: true; mandate: MandateDetail }
+  | { ok: false; reasons: Reason[] };
+
 export interface MandateDetail extends MandateListItem {
   mandateVersionId: string;
   policy: Policy;
@@ -334,6 +345,36 @@ export interface AuthorizationRepository {
    * already decided, and allocating the next revision number if it is new.
    */
   listByExternalRef(mandateId: string, externalRef: string): Promise<StoredAuthorization[]>;
+
+  /**
+   * The only way to obtain a gate-validated mandate while holding its row
+   * lock -- D-80 follow-up.
+   *
+   * D-80 fixed three decision paths that read the mandate's status *before*
+   * taking the lock and then trusted it, which let a revocation committing
+   * in between produce an ALLOW. Fixing each call site left the mistake
+   * available to the fourth path someone writes next. This method removes
+   * that option: it takes the lock, re-reads the mandate, runs the status
+   * and expiry gates, and hands the caller either a validated mandate or the
+   * reasons to deny.
+   *
+   * `withMandateLock` remains, and must: capture, refund and step-up
+   * resolution take the lock without making a fresh spend decision. The
+   * guarantee here is narrower than "nothing can hold the lock ungated" -- a
+   * caller could still take a raw lock and read the mandate itself. What it
+   * does guarantee is that the *validated policy* has one source, so
+   * skipping the gate requires writing the read by hand rather than merely
+   * forgetting a line.
+   */
+  withAuthorizedMandate<T>(
+    mandateId: string,
+    /** The decision's own clock. The repository never reads wall-clock time
+     * for this: a caller deciding with an injected `now` must have its
+     * expiry checked against that same instant, or a test clock and a
+     * production clock disagree about whether a policy has lapsed. */
+    now: Date,
+    fn: (gate: AuthorizedMandateGate) => Promise<T>,
+  ): Promise<T>;
 
   /**
    * D-79: net amount currently held for one external authorization, across

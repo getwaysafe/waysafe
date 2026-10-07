@@ -30,6 +30,7 @@ import {
 import {
   ExternalRefConflictError,
   MandateCreationError,
+  type AuthorizedMandateGate,
   type AgentListItem,
   type AuthorizationRepository,
   type CreatedAgent,
@@ -49,6 +50,7 @@ import {
 } from "./types.js";
 import { Mutex } from "../util/mutex.js";
 import { assertValidActor } from "./actor.js";
+import { gateMandateExpiry, gateMandateStatus } from "./mandate-gate.js";
 
 interface AgentRow {
   id: string;
@@ -407,6 +409,19 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       this.locks.set(mandateId, mutex);
     }
     return mutex.run(fn);
+  }
+
+  /** D-80 follow-up. See `AuthorizationRepository.withAuthorizedMandate`. */
+  async withAuthorizedMandate<T>(
+    mandateId: string,
+    now: Date,
+    fn: (gate: AuthorizedMandateGate) => Promise<T>,
+  ): Promise<T> {
+    return this.withMandateLock(mandateId, async () => {
+      const mandate = await this.getMandateDetail(mandateId);
+      const reasons = gateMandateStatus(mandate) ?? gateMandateExpiry(mandate, now);
+      return fn(reasons ? { ok: false, reasons } : { ok: true, mandate: mandate as MandateDetail });
+    });
   }
 
   async saveAuthorization(input: SaveAuthorizationInput): Promise<StoredAuthorization> {

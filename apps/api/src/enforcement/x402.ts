@@ -666,21 +666,19 @@ export async function handleX402PaymentRequest(
   const merchantAssertion = parsed?.action.merchant ?? merchantAssertionFromRequirement(callback);
   const merchant = resolveMerchant(merchantAssertion, repos.authorization.getMerchantDirectory(), "rail");
 
-  const stored = await repos.authorization.withMandateLock(mandateId, async () => {
+  const stored = await repos.authorization.withAuthorizedMandate(mandateId, now, async (underLockGate) => {
     let result: EngineResult;
     const ledgerEntries: NewLedgerEntry[] = [];
 
-    // D-80: the mandate's authority, re-read under the lock that takes the
-    // money. The second independent review revoked a mandate between a
-    // pre-lock gate read and the lock and still got an ALLOW (R10).
-    const underLock = await repos.authorization.getMandateDetail(mandateId);
-    const gateReasons =
-      preLockReasons ?? (gateMandateStatus(underLock) ?? gateMandateExpiry(underLock, now));
+    // D-80 follow-up: the gate runs inside the lock, handed over by the
+    // repository. `preLockReasons` is only the fetch/parse outcome, which is
+    // genuinely about the request rather than the mandate's authority.
+    const gateReasons = preLockReasons ?? (underLockGate.ok ? null : underLockGate.reasons);
 
     if (gateReasons) {
       result = { decision: Decision.DENY, reasons: gateReasons };
     } else {
-      const mandate = underLock as MandateDetail;
+      const mandate = (underLockGate as { ok: true; mandate: MandateDetail }).mandate;
       const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
       result = evaluate({ policy: mandate.policy, action: parsed!.action, merchant, spend, now });
       if (result.decision === Decision.ALLOW) {
