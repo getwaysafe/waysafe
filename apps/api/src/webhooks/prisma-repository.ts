@@ -1,8 +1,23 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import type { ProviderEventRepository } from "./types.js";
+import { activeTransaction } from "../db/transaction-context.js";
 
 export class PrismaProviderEventRepository implements ProviderEventRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  /**
+   * D-81: joins an already-open transaction when there is one.
+   *
+   * Recording the event and applying its financial effect have to commit or
+   * roll back together. Before D-81 this always wrote on its own connection,
+   * so a failed effect left the event marked processed and the retry was
+   * classified duplicate -- the second review injected a ledger failure and
+   * the budget was never credited. Same mechanism as D-76 used for the
+   * evidence repository.
+   */
+  private get client(): PrismaClient | Prisma.TransactionClient {
+    return activeTransaction.getStore() ?? this.prisma;
+  }
 
   async recordIfNew(
     provider: string,
@@ -12,7 +27,7 @@ export class PrismaProviderEventRepository implements ProviderEventRepository {
     now: Date,
   ): Promise<boolean> {
     try {
-      await this.prisma.providerEvent.create({
+      await this.client.providerEvent.create({
         data: {
           id: `${provider}_${externalId}`,
           provider,

@@ -823,8 +823,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R6 — a webhook is consumed before its ledger effect commits (review: R8/High)", () => {
-    it("an injected refund failure leaves the retry classified duplicate and the budget uncredited", async () => {
+  describe("R6 — closed by D-81: the event and its effect commit together (review: R8/High)", () => {
+    it("an injected refund failure rolls the event back, so the retry applies it", async () => {
       const f = await fixture();
       const auth = await decided(f, 100);
       await f.authorization.withMandateLock(f.mandateId, () =>
@@ -847,7 +847,6 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         amount_refunded: toMinorUnits(100, "USD"),
       });
 
-      // `recordIfNew` marks the event consumed before the effect is applied.
       const original = f.authorization.recordRefund.bind(f.authorization);
       (f.authorization as { recordRefund: unknown }).recordRefund = async () => {
         throw new Error("review 2 injected ledger outage");
@@ -857,12 +856,92 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
       );
       (f.authorization as { recordRefund: unknown }).recordRefund = original;
 
-      // Stripe retries. The event is already recorded, so the retry is a no-op.
-      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("duplicate");
+      // The event record rolled back with the failed effect, so Stripe's
+      // retry is a genuine first attempt. Before D-81 it was "duplicate".
+      const retry = await handleStripeWebhook(f.repos, event, NOW);
+      expect(retry.kind).toBe("applied"); // was "duplicate"
 
-      // The $100 refund is never credited. The customer's money came back and
-      // the mandate's budget did not.
-      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(100, "USD"));
+      // And the refund is credited: $100 captured, $100 back.
+      expect((await spend(f)).mandate.amount).toBe(0);
+    });
+
+    it("CONTROL: a healthy delivery still deduplicates on redelivery", async () => {
+      // D-81 must not break idempotency, which is the property the original
+      // ordering existed to provide.
+      const f = await fixture();
+      const auth = await decided(f, 100);
+      await f.authorization.withMandateLock(f.mandateId, () =>
+        f.authorization.recordExecution(
+          {
+            authorizationId: auth.id,
+            mandateId: f.mandateId,
+            provider: "stripe",
+            providerReference: "pi_r6b",
+            providerFee: 0,
+          },
+          NOW,
+        ),
+      );
+      const event = stripeEvent("charge.refunded", {
+        id: `ch_r2_${randomUUID()}`,
+        metadata: { waysafe_authorization_id: auth.id },
+        amount_refunded: toMinorUnits(40, "USD"),
+      });
+      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("applied");
+      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("duplicate");
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(60, "USD"));
+    });
+
+    it("a transient miss is NOT recorded, so a later retry can still apply it", async () => {
+      // The other half of D-81: an event ignored because its target does not
+      // exist yet must stay retryable. Marking it seen is how a real refund
+      // disappears permanently.
+      const f = await fixture();
+      const auth = await decided(f, 100);
+      await f.authorization.withMandateLock(f.mandateId, () =>
+        f.authorization.recordExecution(
+          {
+            authorizationId: auth.id,
+            mandateId: f.mandateId,
+            provider: "stripe",
+            providerReference: "pi_r6c",
+            providerFee: 0,
+          },
+          NOW,
+        ),
+      );
+
+      const event = stripeEvent("charge.refunded", {
+        id: `ch_r2_${randomUUID()}`,
+        metadata: { waysafe_authorization_id: "auth_does_not_exist_yet" },
+        amount_refunded: toMinorUnits(40, "USD"),
+      });
+      const missed = await handleStripeWebhook(f.repos, event, NOW);
+      expect(missed.kind).toBe("ignored");
+      expect(missed).toMatchObject({ retryable: true });
+
+      // The same event id, now resolvable, applies rather than deduplicating.
+      const resolvable = {
+        ...event,
+        data: {
+          object: {
+            id: `ch_r2_${randomUUID()}`,
+            metadata: { waysafe_authorization_id: auth.id },
+            amount_refunded: toMinorUnits(40, "USD"),
+          },
+        },
+      } as never;
+      expect((await handleStripeWebhook(f.repos, resolvable, NOW)).kind).toBe("applied");
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(60, "USD"));
+    });
+
+    it("a permanently irrelevant event IS recorded, so the provider stops retrying", async () => {
+      const f = await fixture();
+      const event = stripeEvent("customer.created", { id: "cus_whatever" });
+      const first = await handleStripeWebhook(f.repos, event, NOW);
+      expect(first.kind).toBe("ignored");
+      expect(first).toMatchObject({ retryable: false });
+      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("duplicate");
     });
   });
 

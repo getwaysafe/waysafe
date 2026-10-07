@@ -8341,6 +8341,68 @@ moves. Source-level because there is no runtime seam -- a path that skipped
 the gate would simply be a different, correct-looking function.
 
 
+## D-81 — A provider event and its financial effect commit together (review 2, R6)
+
+**Decision:** the `ProviderEvent` row that makes a webhook idempotent is
+written **inside** the transaction that applies the event's effect. An event
+ignored for a reason that might not hold next time is not recorded at all.
+
+Finding R6 of the second independent review. `recordIfNew` committed on its
+own connection *before* the effect ran, so a failed effect left the event
+marked processed and Stripe's retry was classified `duplicate`. The review
+injected a ledger outage on a $100 refund: the customer's money came back and
+the mandate's budget never did. The refund was gone, permanently, with no
+error anywhere afterwards.
+
+**Two changes, and the second is the one that is easy to miss.**
+
+`PrismaProviderEventRepository` joins an already-open transaction through the
+shared store D-76 introduced, and both webhook paths now open the mandate
+lock first and record the event inside it. A failed effect rolls the record
+back, so the retry is a genuine first attempt.
+
+That alone would not be enough, because an event can be *ignored* rather than
+failing. `WebhookResult`'s `ignored` variant gains `retryable`:
+
+| Ignored because | Recorded? | Why |
+|---|---|---|
+| unhandled event type | yes | will never have an effect |
+| charge has no Waysafe metadata | yes | will never have an effect |
+| no such authorization | **no** | may not be written yet |
+| issuing authorization not yet closed | **no** | may close later |
+| authorization not in a capturable state | yes | already settled or dead |
+
+Marking a transient miss as seen is the same defect as the one above wearing
+different clothes: the event is consumed and the effect never happens. The
+"no such authorization" case is also where a **force capture** arrives, which
+D-84 handles; until then it stays retryable rather than silently dropped.
+
+**Tests.** `review2.adversarial.test.ts`'s R6 block, four cases. The attack
+flipped: the retry after an injected outage now reports `applied` and the
+budget reaches $0. A control that a healthy redelivery still deduplicates --
+idempotency is the property the original ordering existed to provide, and
+breaking it while fixing durability would be a poor trade. A transient miss
+staying retryable, proven by the same event id applying once its target
+exists. And a permanently irrelevant event being recorded so the provider
+stops retrying.
+
+Verified by negative control: making the provider-event repository ignore the
+active transaction again fails the first case at `expected 'duplicate' to be
+'applied'`.
+
+**Existing expectations that encoded the bug: one, and it was a good test.**
+`webhooks/service.test.ts`'s "ignores a refund with no matching authorization"
+asserted the exact result object with `toEqual`, so the additive `retryable`
+field broke it. Updated to assert `retryable: true` explicitly rather than
+merely accommodate the new shape -- the test now pins the D-81 property it
+happened to be standing next to.
+
+**Change cost if wrong:** a transient `ignored` that should have been
+permanent means a provider retries an event forever. That is noisy rather
+than lossy, and the opposite mistake loses money. The transaction nesting is
+the same mechanism D-76 proved, including the `P2028` hazard D-62 hit, so the
+risk there is already characterised.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

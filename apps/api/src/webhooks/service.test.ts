@@ -158,7 +158,14 @@ describe("handleStripeWebhook", () => {
       refundEvent("evt_4", "auth_does_not_exist", 1000),
       NOW,
     );
-    expect(result).toEqual({ kind: "ignored", reason: "no such authorization: auth_does_not_exist" });
+    // D-81: and it is RETRYABLE, which is the property that matters. The
+    // authorization may simply not be written yet; recording this delivery as
+    // seen is how a real refund disappears permanently.
+    expect(result).toEqual({
+      kind: "ignored",
+      reason: "no such authorization: auth_does_not_exist",
+      retryable: true,
+    });
   });
 });
 
