@@ -185,7 +185,10 @@ export async function beginMandateAuthentication(
     {
       principalId,
       challenge,
-      purpose: "AUTHENTICATION",
+      // D-86: a purpose for THIS operation only. The re-enrollment
+      // completion no longer accepts it, so a signature produced to confirm
+      // a policy can never mint a passkey-enrolment grant.
+      purpose: "MANDATE_AUTHENTICATION",
       expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
     },
     now,
@@ -234,7 +237,7 @@ export async function completeMandateAuthentication(
 
   if (!consumed) {
     result = { kind: "rejected", reason: "challenge not found, already used, or expired" };
-  } else if (consumed.purpose !== "AUTHENTICATION") {
+  } else if (consumed.purpose !== "MANDATE_AUTHENTICATION") {
     // D-66 (fix 1), the mirror of the registration check. Previously the
     // only thing stopping a REGISTRATION challenge being answered with an
     // authentication response was that a random registration challenge
@@ -319,11 +322,12 @@ export async function beginReenrollmentAuthentication(
     {
       principalId,
       challenge,
-      // AUTHENTICATION purpose, so `completeRegistration` refuses it as a
-      // registration challenge (fix 1) -- and `completeMandateAuthentication`
-      // cannot consume it either, since that path only ever looks up
-      // policyHashToChallenge(policyHash), never a random value.
-      purpose: "AUTHENTICATION",
+      // D-86: its own purpose. D-66 used `AUTHENTICATION` here and relied on
+      // `completeMandateAuthentication` only ever looking up
+      // policyHashToChallenge(policyHash) -- which protected this direction
+      // and not the other: the mandate path's own AUTHENTICATION challenge
+      // was redeemable HERE. A distinct purpose closes both directions.
+      purpose: "REENROLLMENT_AUTHENTICATION",
       expiresAt: new Date(now.getTime() + CHALLENGE_TTL_MS),
     },
     now,
@@ -351,8 +355,8 @@ export async function completeReenrollmentAuthentication(
   let result: CompleteReenrollmentAuthenticationResult;
   if (!consumed) {
     result = { kind: "rejected", reason: "challenge not found, already used, or expired" };
-  } else if (consumed.purpose !== "AUTHENTICATION") {
-    result = { kind: "rejected", reason: `challenge was issued for ${consumed.purpose}, not AUTHENTICATION` };
+  } else if (consumed.purpose !== "REENROLLMENT_AUTHENTICATION") {
+    result = { kind: "rejected", reason: `challenge was issued for ${consumed.purpose}, not REENROLLMENT_AUTHENTICATION` };
   } else {
     const credential = await repos.webauthn.getCredentialByCredentialId(input.response.id);
     if (!credential || credential.principalId !== input.principalId) {

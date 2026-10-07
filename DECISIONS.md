@@ -6826,6 +6826,16 @@ in) but it is a gap, not a non-issue, and it belongs on the roadmap. The
 purpose check itself is close to free: it compares a value the system was
 already storing.
 
+**Amended by D-86.** This entry made the purpose authoritative, which closed
+the attack it was written for. It left `AUTHENTICATION` covering two
+operations -- activating a mandate and authorizing an additional passkey --
+and both completion paths accepted it. The comment here argued that pairing
+was safe because `completeMandateAuthentication` only looks up
+`policyHashToChallenge(policyHash)`; that protects one direction only. The
+other was open, and the second independent review redeemed a
+policy-activation signature as an enrolment grant. D-86 gives each operation
+its own purpose.
+
 ## D-67 — Mandate creation validates the principal's tenancy (review finding 2, sub-finding)
 
 Reported alongside finding 2 but independent of WebAuthn, so it gets its own
@@ -8750,6 +8760,79 @@ a test that relied on blocking to prove serialization would quietly stop
 proving it. `prisma-repository.test.ts` holds the real serialization proofs
 against Postgres, and they pass unchanged.
 
+## D-86 — One challenge purpose per operation (review 2, R5)
+
+**Decision:** `MANDATE_AUTHENTICATION` and `REENROLLMENT_AUTHENTICATION` are
+distinct stored purposes. `completeMandateAuthentication` accepts only the
+first; the re-enrollment grant path accepts only the second. A
+policy-activation assertion can never mint a passkey-enrolment grant.
+
+**This is a correction to D-66.** D-66 made a challenge's purpose
+authoritative, which closed the attack it was written for: an authentication
+challenge answered with a registration response. It left `AUTHENTICATION`
+covering **two different operations** -- activating a mandate, and proving
+control of an existing passkey in order to enrol another -- and both
+completion paths accepted that one value.
+
+D-66's own comment argued the pairing was safe, and the argument was half
+right: `completeMandateAuthentication` only ever looks up
+`policyHashToChallenge(policyHash)`, so a *random* re-enrollment challenge
+could not be consumed there. That protects one direction. The other was open.
+`completeReenrollmentAuthentication` consumed **any** `AUTHENTICATION`
+challenge, so the challenge the principal signs to confirm a policy -- the
+one ceremony a real principal is actually shown -- was redeemable at
+`POST /v1/principals/:id/passkeys/verify` to mint an enrolment grant, and the
+grant enrols an authenticator of the attacker's choosing.
+
+The second independent review did exactly that. Reproduced here through real
+HTTP routes and Postgres, not the service layer and an in-memory fake.
+
+A purpose per operation closes both directions, and does not depend on an
+argument about which challenge values happen to be unguessable.
+
+**`AUTHENTICATION` stays in the enum and is accepted nowhere.** An enum value
+cannot be removed while rows may reference it. Neither completion path takes
+it, so a challenge issued before this deploy cannot be redeemed after it --
+a window bounded by the 5-minute challenge TTL, in which an in-flight
+ceremony must be restarted. That is the correct trade: accepting the legacy
+value on the mandate path would have preserved the hole for exactly those
+rows.
+
+**This narrows OQ-12, and OQ-12 now says so.** OQ-12 is that the
+mandate-authentication challenge is derived from the public `policy_hash` and
+so is predictable. The re-enrollment ceremony's challenge is random
+(`randomChallenge()`, bound to no policy), and after D-86 it is also the only
+thing its own completion path will accept. So a predictable challenge is a
+concern for **mandate activation only**. Before D-86 it was worse than OQ-12
+described: a predictable value could be presented to a second, unrelated
+operation.
+
+**Tests.** `review2.adversarial.test.ts`'s R5 block, three cases. The attack
+flipped: the policy signature now gets `401` with
+`not REENROLLMENT_AUTHENTICATION`, and the challenge is still consumed so it
+cannot be retried. A **control** that the proper re-enrollment ceremony still
+works end to end over HTTP, without which the fix would look correct while
+breaking the only legitimate way to add a second passkey. And an assertion
+that the re-enrollment challenge is random and differs from
+`policyHashToChallenge`, which is the OQ-12 narrowing stated as a test rather
+than a claim.
+
+Verified by negative control: collapsing both purposes back to
+`AUTHENTICATION` fails the first case at `expected 200 to be 401`.
+
+**Existing expectations that encoded the bug: two, both in D-66's own
+suite.** `server.adversarial.test.ts`'s (a) and (e2) asserted
+`actual_purpose`/`expected_purpose` was the string `"AUTHENTICATION"`. They
+pinned the purpose *name*, which D-86 changes, and both now assert
+`MANDATE_AUTHENTICATION`. The route's `mode → purpose` mapping changed with
+them: `"authenticate"` on the mandate route means
+`MANDATE_AUTHENTICATION` specifically, so a re-enrollment challenge presented
+there is a purpose mismatch rather than something that route could consume.
+
+**Change cost if wrong:** a legitimate ceremony is refused with a specific
+400 or 401 naming both purposes, which is diagnosable. The deploy window
+above is the real cost, and it is five minutes of restartable ceremonies.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -9097,6 +9180,13 @@ but it changes what the principal signs, which is D-20's own territory and
 not a call to make inside a security-fix commit.
 
 Flagged in SECURITY.md's review section rather than left only here.
+
+**Narrowed by D-86.** The re-enrollment ceremony's challenge is random, bound
+to no policy, and after D-86 is the only value its own completion path
+accepts. So a predictable challenge is a concern for **mandate activation
+only**. Before D-86 this was worse than described above: because one purpose
+covered two operations, the predictable policy-hash challenge could be
+presented to a second, unrelated operation and redeemed there.
 
 ## OQ-13 — On x402, "VERIFIED" means the host asked, not that the host is who it says
 

@@ -68,8 +68,12 @@ import {
 import { buildServer } from "./server.js";
 import {
   beginMandateAuthentication,
+  beginRegistration,
+  beginReenrollmentAuthentication,
+  completeRegistration,
   completeReenrollmentAuthentication,
 } from "./webauthn/service.js";
+import { policyHashToChallenge } from "./webauthn/webauthn.js";
 import {
   buildAuthenticationResponse,
   buildRegistrationResponse,
@@ -769,8 +773,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R5 — a policy-activation signature mints a re-enrollment grant (review: R4/High)", () => {
-    it("through HTTP and Postgres: an AUTHENTICATION challenge issued for a policy is redeemed at the passkey route", async () => {
+  describe("R5 — closed by D-86: a purpose per operation (review: R4/High)", () => {
+    it("through HTTP and Postgres: a policy-activation signature is REFUSED at the passkey route", async () => {
       // D-66 gave challenges an authoritative purpose, and left TWO
       // operations sharing `AUTHENTICATION`: activating a mandate
       // (`beginMandateAuthentication`) and authorizing a second passkey
@@ -846,32 +850,23 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           challenge: policyChallenge.challenge,
         });
 
-        // That same signature is redeemed at the passkey route instead.
+        // That same signature, offered at the passkey route, is refused:
+        // the challenge was issued for MANDATE_AUTHENTICATION and only
+        // completeMandateAuthentication accepts that purpose.
         const granted = await app.inject({
           method: "POST",
           url: `/v1/principals/${f.principalId}/passkeys/verify`,
           headers,
           payload: { challenge: policyChallenge.challenge, response: policySignature },
         });
-        expect(granted.statusCode).toBe(200);
-        const grant = (granted.json() as { kind: string; grant: string }).grant;
-        expect(grant).toBeTruthy();
+        expect(granted.statusCode).toBe(401); // was 200
+        expect((granted.json() as { reason: string }).reason).toContain(
+          "not REENROLLMENT_AUTHENTICATION",
+        );
 
-        // And the grant enrolls a DIFFERENT authenticator: an attacker's.
-        const attacker = createVirtualAuthenticator();
-        const enrollOptions = await app.inject({
-          method: "POST",
-          url: `/v1/mandates/${f.mandateId}/authenticate/options`,
-          headers,
-        });
-        const enroll = enrollOptions.json() as { mode: string; challenge: string };
-        // The principal already has a passkey, so this is an authentication
-        // challenge; the registration challenge has to be requested through
-        // the grant path. Assert what the route actually returns.
-        expect(enroll.mode).toBe("authenticate");
-
-        // The service-level redemption, which is what the grant is for.
-        const reenrolled = await completeReenrollmentAuthentication(
+        // The policy challenge is still consumed (single-use), so the
+        // attacker cannot retry it either.
+        const retried = await completeReenrollmentAuthentication(
           webauthnRepos,
           WEBAUTHN_CONFIG,
           {
@@ -882,14 +877,114 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           },
           realNow,
         );
-        // Already consumed above, so this second attempt is rejected --
-        // single-use holds. The hole is that the FIRST redemption succeeded
-        // with a policy-activation signature at all.
-        expect(reenrolled.kind).toBe("rejected");
-        void attacker;
+        expect(retried.kind).toBe("rejected");
       } finally {
         await app.close();
       }
+    });
+
+    it("CONTROL: the proper re-enrollment ceremony still works end to end", async () => {
+      // Without this, the fix would look correct while breaking the only
+      // legitimate way to add a second passkey (D-66).
+      const f = await fixture();
+      const authenticator = createVirtualAuthenticator();
+      const app = buildServer({
+        repos: f.repos as never,
+        logger: false,
+        compiler: new FixtureIntentCompiler([]),
+        webauthnConfig: WEBAUTHN_CONFIG,
+      });
+      await app.ready();
+      const orgKey = await f.repos.agentKeys.createKey(
+        { organizationId: f.org, name: "org admin" },
+        NOW,
+      );
+      const headers = { authorization: `Bearer ${orgKey.fullKey}` };
+      try {
+        // First passkey.
+        const reg = (
+          await app.inject({
+            method: "POST",
+            url: `/v1/mandates/${f.mandateId}/authenticate/options`,
+            headers,
+          })
+        ).json() as { challenge: string };
+        await app.inject({
+          method: "POST",
+          url: `/v1/mandates/${f.mandateId}/authenticate/verify`,
+          headers,
+          payload: {
+            mode: "register",
+            challenge: reg.challenge,
+            response: buildRegistrationResponse({
+              authenticator,
+              ...WEBAUTHN_CONFIG,
+              challenge: reg.challenge,
+            }),
+          },
+        });
+
+        // The re-enrollment ceremony: its own challenge, its own purpose.
+        const options = await app.inject({
+          method: "POST",
+          url: `/v1/principals/${f.principalId}/passkeys/options`,
+          headers,
+        });
+        expect(options.statusCode).toBe(200);
+        const challenge = (options.json() as { challenge: string }).challenge;
+
+        const verified = await app.inject({
+          method: "POST",
+          url: `/v1/principals/${f.principalId}/passkeys/verify`,
+          headers,
+          payload: {
+            challenge,
+            response: buildAuthenticationResponse({
+              authenticator,
+              ...WEBAUTHN_CONFIG,
+              challenge,
+            }),
+          },
+        });
+        expect(verified.statusCode).toBe(200);
+        expect((verified.json() as { grant: string }).grant).toBeTruthy();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("the re-enrollment challenge is random, not derived from a policy hash", async () => {
+      // Which is what narrows OQ-12: a predictable challenge is now only a
+      // concern for mandate activation, because this path no longer has one.
+      const f = await fixture();
+      const webauthnRepos = {
+        authorization: f.authorization,
+        evidence: f.evidence,
+        webauthn: f.repos.webauthn,
+      };
+      const authenticator = createVirtualAuthenticator();
+      const reg = await beginRegistration(webauthnRepos, f.principalId, new Date());
+      await completeRegistration(
+        webauthnRepos,
+        WEBAUTHN_CONFIG,
+        {
+          organizationId: f.org,
+          principalId: f.principalId,
+          claimedChallenge: reg.challenge,
+          response: buildRegistrationResponse({
+            authenticator,
+            ...WEBAUTHN_CONFIG,
+            challenge: reg.challenge,
+          }),
+        },
+        new Date(),
+      );
+
+      const a = await beginReenrollmentAuthentication(webauthnRepos, f.principalId, new Date());
+      const b = await beginReenrollmentAuthentication(webauthnRepos, f.principalId, new Date());
+      expect(a.challenge).not.toBe(b.challenge);
+      // And neither equals the deterministic policy-hash challenge.
+      expect(a.challenge).not.toBe(policyHashToChallenge(hashPolicy(f.policy)));
     });
   });
 

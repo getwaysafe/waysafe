@@ -9,11 +9,29 @@
  * challenge can't both succeed.
  */
 
-export type ChallengePurpose = "REGISTRATION" | "AUTHENTICATION" | "REENROLLMENT_GRANT";
+/**
+ * What a stored challenge may be redeemed for -- D-86.
+ *
+ * One purpose per operation, deliberately. `AUTHENTICATION` used to cover
+ * two: activating a mandate and authorizing an additional passkey. Both
+ * completion paths accepted it, so a signature the principal produced to
+ * confirm a policy could be redeemed at the passkey route to mint an
+ * enrolment grant -- the second independent review did exactly that, through
+ * HTTP and Postgres. It is retained only because rows may still reference
+ * it, and neither completion path accepts it any more.
+ */
+export type ChallengePurpose =
+  | "REGISTRATION"
+  | "AUTHENTICATION"
+  | "MANDATE_AUTHENTICATION"
+  | "REENROLLMENT_AUTHENTICATION"
+  | "REENROLLMENT_GRANT";
 
 export interface NewChallenge {
   principalId: string;
-  /** base64url. For AUTHENTICATION, this is base64url(policyHash) -- see D-20. */
+  /** base64url. For MANDATE_AUTHENTICATION this is base64url(policyHash)
+   * (D-20); for REENROLLMENT_AUTHENTICATION it is random, bound to no
+   * policy (D-86). */
   challenge: string;
   purpose: ChallengePurpose;
   expiresAt: Date;

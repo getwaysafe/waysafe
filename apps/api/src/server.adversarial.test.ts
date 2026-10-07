@@ -645,7 +645,10 @@ describe("FINDING 2: an auth challenge enrolls an attacker's passkey (breaks §2
     // decides anything.
     expect(enrolled.statusCode).toBe(400);
     expect(enrolled.json().error).toBe("challenge_purpose_mismatch");
-    expect(enrolled.json().actual_purpose).toBe("AUTHENTICATION");
+    // D-86 renamed this purpose: one value used to cover both activating a
+    // mandate and authorizing a second passkey, which is what let a
+    // policy-activation signature mint an enrolment grant (review 2, R5).
+    expect(enrolled.json().actual_purpose).toBe("MANDATE_AUTHENTICATION");
     expect(enrolled.json().expected_purpose).toBe("REGISTRATION");
 
     // The only passkey on this principal is still the legitimate one.
@@ -836,7 +839,7 @@ describe("FINDING 2: an auth challenge enrolls an attacker's passkey (breaks §2
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json().error).toBe("challenge_purpose_mismatch");
     expect(rejected.json().actual_purpose).toBe("REGISTRATION");
-    expect(rejected.json().expected_purpose).toBe("AUTHENTICATION");
+    expect(rejected.json().expected_purpose).toBe("MANDATE_AUTHENTICATION"); // D-86
   });
 
   it("the legitimate first enrollment and the legitimate authentication both work -- the control case", async () => {

@@ -64,7 +64,20 @@ model Principal {
 
 enum WebauthnChallengePurpose {
   REGISTRATION
+  /// D-86: retired. One value covered two operations -- activating a mandate
+  /// and authorizing a second passkey -- so a signature produced for one was
+  /// redeemable for the other. Kept in the enum because an enum value cannot
+  /// be removed while rows may reference it; neither completion path accepts
+  /// it any more.
   AUTHENTICATION
+  /// D-86: authorizing a specific policy. The challenge is
+  /// base64url(policyHash) (D-20), and only `completeMandateAuthentication`
+  /// accepts it.
+  MANDATE_AUTHENTICATION
+  /// D-86: proving control of an existing passkey in order to enrol another.
+  /// A random challenge, bound to no policy, and only
+  /// `completeReenrollmentAuthentication` accepts it.
+  REENROLLMENT_AUTHENTICATION
   /// D-66: a single-use, short-lived grant minted only by a successful
   /// authentication with a credential this principal already has. Required
   /// to enroll an ADDITIONAL passkey. Stored here rather than in its own

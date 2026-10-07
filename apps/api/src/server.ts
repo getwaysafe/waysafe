@@ -942,7 +942,12 @@ export function buildServer(options: BuildServerOptions = {}) {
     // than having its claim quietly discarded.
     const claimed = await repos.webauthn.peekChallenge(summary.principalId, body.data.challenge, now);
     if (claimed) {
-      const expected = body.data.mode === "register" ? "REGISTRATION" : "AUTHENTICATION";
+      // D-86: this route only ever activates a mandate, so "authenticate"
+      // means MANDATE_AUTHENTICATION specifically. A re-enrollment
+      // challenge presented here is now a purpose mismatch rather than
+      // something this route could consume.
+      const expected =
+        body.data.mode === "register" ? "REGISTRATION" : "MANDATE_AUTHENTICATION";
       if (claimed.purpose !== expected) {
         return reply.code(400).send({
           error: "challenge_purpose_mismatch",
