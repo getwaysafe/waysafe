@@ -784,12 +784,26 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     const keys = this.windowKeysFor(auth, undefined);
 
     const entries = this.ledgerByMandate.get(auth.mandate_id) ?? [];
+
+    // D-82: credit the DELTA over what is already credited, clamped to what
+    // was captured. Same rule as the Prisma repository, which carries the
+    // full reasoning.
+    const mine = entries.filter((e) => e.authorizationId === input.authorizationId);
+    const alreadyCredited = mine
+      .filter((e) => e.type === "CREDIT")
+      .reduce((sum, e) => sum - e.amount, 0);
+    const captured = mine
+      .filter((e) => e.type === "CAPTURE")
+      .reduce((sum, e) => sum + e.amount, 0);
+    const delta = Math.max(0, Math.min(input.amount - alreadyCredited, captured - alreadyCredited));
+    if (delta === 0) return;
+
     entries.push({
       id: generateId(ID_PREFIX.evidence),
       mandateId: auth.mandate_id,
       authorizationId: input.authorizationId,
       type: "CREDIT",
-      amount: -input.amount,
+      amount: -delta,
       provider: input.provider,
       dayKey: keys.day,
       weekKey: keys.week,

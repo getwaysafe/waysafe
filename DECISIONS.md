@@ -8403,6 +8403,62 @@ than lossy, and the opposite mistake loses money. The transaction nesting is
 the same mechanism D-76 proved, including the `P2028` hazard D-62 hit, so the
 risk there is already characterised.
 
+## D-82 — A cumulative refund total credits only the delta (review 2, R2)
+
+**Decision:** `recordRefund` takes the provider's **cumulative** refunded
+total and credits the difference over what it has already credited for that
+authorization, under the mandate lock. The total credited can never exceed
+what was captured.
+
+Finding R2 of the second independent review. Stripe's
+`charge.amount_refunded` is a running total, not the amount of one refund.
+Every distinct `charge.refunded` event was written as a fresh `CREDIT` of
+that full figure, so a $100 charge refunded $40 and then in full produced
+credits of $40 and $100 against a $100 capture: **a ledger reading minus
+$40**, which is $140 of spendable budget conjured from a $100 purchase that
+was entirely reversed.
+
+The event-id deduplication D-74 and D-81 provide does not help here, because
+these are genuinely different events. Two deliveries of *one* event were
+already handled; two *events* about one charge were the gap.
+
+**The rule.** Credit `cumulative − alreadyCredited`, where
+`alreadyCredited` is the sum of this authorization's existing `CREDIT` rows.
+A third event reporting no further refund credits nothing. The computation
+runs inside the mandate lock -- both callers hold it -- because two
+concurrent refund events for one charge would otherwise read the same
+"already credited" figure and both write a full delta.
+
+**And it is clamped to what was captured, which is not merely defensive.** A
+provider can refund more than it captured; a goodwill credit beyond the
+charge is a real thing. The honest ledger answer is that this authorization's
+spend is zero, not that the mandate gained budget -- and an unclamped credit
+would drive a window SUM negative, which non-negotiable #6 forbids and D-72
+spent an entire entry establishing. The excess belongs on the receipt rather
+than in the budget.
+
+**Tests.** `review2.adversarial.test.ts`'s R2 block, four cases: the attack
+flipped to $0 with credits summing to exactly the capture in two rows, a
+third no-op event crediting nothing, an over-refund clamped with the window
+SUM asserted non-negative, and the pre-existing control that an identical
+event id still deduplicates.
+
+Verified by negative control: treating the field as a delta again fails three
+of the four, at `expected -4000 to be +0`.
+
+**Existing expectations that encoded the bug: none.** No test had ever sent
+two *different* refund events for one charge. `webhooks/service.test.ts`
+covers a single refund and a redelivery of the same event, both of which
+behave identically before and after.
+
+**Change cost if wrong:** a refund credits less than it should, which
+understates the mandate's remaining budget and is visible on the receipt as a
+credit smaller than the provider's figure. The clamp is the part to watch: if
+`CAPTURE` rows for an authorization were ever written in a currency other
+than the authorization's, the comparison would be across units -- today they
+never are, because `recordExecution` takes the currency from the
+authorization row itself.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

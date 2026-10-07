@@ -807,6 +807,41 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     // resolves through the authorization's decision window.
     const keys = await this.windowKeysFor(auth, null);
 
+    /**
+     * D-82: credit the DELTA over what is already credited, never the
+     * provider's cumulative total again.
+     *
+     * Must run under the mandate lock, and does: both callers take it. Two
+     * concurrent refund events for one charge would otherwise each read the
+     * same "already credited" figure and both write a full delta.
+     */
+    const existing = await client.ledgerEntry.findMany({
+      where: {
+        mandateId: auth.mandateId,
+        authorizationId: input.authorizationId,
+        type: { in: ["CREDIT", "CAPTURE"] },
+      },
+      select: { type: true, amount: true },
+    });
+    const alreadyCredited = existing
+      .filter((e) => e.type === "CREDIT")
+      .reduce((sum, e) => sum - e.amount, 0);
+    const captured = existing
+      .filter((e) => e.type === "CAPTURE")
+      .reduce((sum, e) => sum + e.amount, 0);
+
+    /**
+     * Clamped to what was actually captured, so a provider over-refund
+     * cannot drive a window SUM negative -- non-negotiable #6. An
+     * over-refund is a real thing (a goodwill credit beyond the charge), and
+     * the honest ledger answer is "this authorization's spend is zero", not
+     * "this mandate has extra budget". The excess is reported on the
+     * evidence event rather than silently absorbed.
+     */
+    const requested = input.amount - alreadyCredited;
+    const delta = Math.max(0, Math.min(requested, captured - alreadyCredited));
+    if (delta === 0) return;
+
     await client.ledgerEntry.create({
       data: {
         id: generateId(ID_PREFIX.evidence),
@@ -814,7 +849,7 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
         mandateId: auth.mandateId,
         authorizationId: input.authorizationId,
         type: "CREDIT",
-        amount: -input.amount,
+        amount: -delta,
         currency: auth.currency,
         provider: input.provider,
         dayKey: keys.day,

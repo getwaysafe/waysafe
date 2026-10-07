@@ -408,8 +408,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R2 — cumulative refund totals are applied as deltas (review: R7/High)", () => {
-    it("a $100 capture refunded $40 then $100 nets to minus $40", async () => {
+  describe("R2 — closed by D-82: a cumulative refund total credits only the delta (review: R7/High)", () => {
+    it("a $100 capture refunded $40 then $100 nets to zero, not minus $40", async () => {
       const f = await fixture();
       const auth = await decided(f, 100);
       expect(auth.decision).toBe(Decision.ALLOW);
@@ -446,8 +446,79 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
       );
       expect(full.kind).toBe("applied");
 
-      // $100 captured, $100 refunded in total, and the ledger says minus $40.
-      expect((await spend(f)).mandate.amount).toBe(-toMinorUnits(40, "USD"));
+      // $100 captured, $100 refunded in total, so the ledger says $0.
+      // Before D-82 it said minus $40 -- $140 of fresh budget.
+      expect((await spend(f)).mandate.amount).toBe(0);
+
+      // And the credits sum to exactly the capture, in two rows.
+      const credits = await prisma.ledgerEntry.findMany({
+        where: { mandateId: f.mandateId, type: "CREDIT" },
+      });
+      expect(credits.map((c) => c.amount).sort((a, b) => a - b)).toEqual([
+        -toMinorUnits(60, "USD"),
+        -toMinorUnits(40, "USD"),
+      ]);
+    });
+
+    it("a third event with no further refund credits nothing", async () => {
+      const f = await fixture();
+      const auth = await decided(f, 100);
+      await f.authorization.withMandateLock(f.mandateId, () =>
+        f.authorization.recordExecution(
+          {
+            authorizationId: auth.id,
+            mandateId: f.mandateId,
+            provider: "stripe",
+            providerReference: "pi_r2c",
+            providerFee: 0,
+          },
+          NOW,
+        ),
+      );
+      const charge = { id: `ch_r2_${randomUUID()}`, metadata: { waysafe_authorization_id: auth.id } };
+      for (const total of [40, 100, 100]) {
+        await handleStripeWebhook(
+          f.repos,
+          stripeEvent("charge.refunded", { ...charge, amount_refunded: toMinorUnits(total, "USD") }),
+          NOW,
+        );
+      }
+      expect((await spend(f)).mandate.amount).toBe(0);
+      const credits = await prisma.ledgerEntry.findMany({
+        where: { mandateId: f.mandateId, type: "CREDIT" },
+      });
+      expect(credits).toHaveLength(2); // the third event added nothing
+    });
+
+    it("an over-refund is clamped, so no window SUM goes negative", async () => {
+      // Non-negotiable #6. A provider can refund more than it captured (a
+      // goodwill credit); the honest ledger answer is that this
+      // authorization's spend is zero, not that the mandate gained budget.
+      const f = await fixture();
+      const auth = await decided(f, 100);
+      await f.authorization.withMandateLock(f.mandateId, () =>
+        f.authorization.recordExecution(
+          {
+            authorizationId: auth.id,
+            mandateId: f.mandateId,
+            provider: "stripe",
+            providerReference: "pi_r2d",
+            providerFee: 0,
+          },
+          NOW,
+        ),
+      );
+      await handleStripeWebhook(
+        f.repos,
+        stripeEvent("charge.refunded", {
+          id: `ch_r2_${randomUUID()}`,
+          metadata: { waysafe_authorization_id: auth.id },
+          amount_refunded: toMinorUnits(250, "USD"),
+        }),
+        NOW,
+      );
+      expect((await spend(f)).mandate.amount).toBe(0);
+      expect((await spend(f)).mandate.amount).toBeGreaterThanOrEqual(0);
     });
 
     it("CONTROL: the identical event id replayed is correctly a duplicate", async () => {

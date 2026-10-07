@@ -285,7 +285,17 @@ export interface RecordExecutionInput {
 
 export interface RecordRefundInput {
   authorizationId: string;
-  /** Positive integer minor units -- stored as a negative CREDIT entry. */
+  /**
+   * The provider's **cumulative** refunded total for this charge, in
+   * positive integer minor units -- D-82.
+   *
+   * Stripe's `charge.amount_refunded` is a running total, not the amount of
+   * one refund. Treating it as a delta double-credited: the second
+   * independent review refunded $40 and then $100 of a $100 charge and the
+   * ledger reported minus $40, i.e. $140 of fresh budget. The repository now
+   * credits only the difference over what it has already credited for this
+   * authorization, so passing the provider's field directly is correct.
+   */
   amount: number;
   provider: string;
   providerReference: string;
