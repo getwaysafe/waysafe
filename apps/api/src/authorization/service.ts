@@ -470,17 +470,74 @@ export async function resolveStepUpAsApprover(
       // EXPIRED or SUPERSEDED, and for a policy whose own `expires_at` had
       // passed (a fresh authorize() denies that; the approval did not).
       //
-      // Read inside the lock, not reused from the copy fetched above for
-      // the approvers check: the point is the state *now*.
-      const originalUnderLock = await repo.getMandateDetail(stepUp.mandate_id);
-      const originalGate =
-        gateMandateStatus(originalUnderLock) ?? gateMandateExpiry(originalUnderLock, now);
-      if (originalGate) {
+      // Read inside the lock through D-80's helper, so the gate cannot be
+      // skipped here any more than it can on a decision path.
+      const originalGated = await repo.withAuthorizedMandate(
+        stepUp.mandate_id,
+        now,
+        async (g) => g,
+      );
+      if (!originalGated.ok) {
         // Declined, not "rejected": the step-up is genuinely dead rather
         // than this attempt being refused, so it must be consumed and any
         // reservation released instead of left open for a retry.
         const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "declined", now);
-        return { kind: "declined" as const, authorization: updated, reasons: originalGate };
+        return { kind: "declined" as const, authorization: updated, reasons: originalGated.reasons };
+      }
+
+      /**
+       * D-85: would this approval put the SPENDING mandate over its own
+       * cumulative cap, given the holds already placed?
+       *
+       * D-71 made an approval take a hold on the spending mandate, which is
+       * what makes its cap mean anything. It did not re-check that cap at
+       * approval time, because `evaluate()` below runs against the
+       * *approver's* policy. So several non-reserving step-ups could each be
+       * approved in turn and each take a hold: two $80 approvals placed $160
+       * on a $100 cap. This completes D-71.
+       *
+       * The spender's own policy is re-evaluated against the step-up's
+       * action, and only a CUMULATIVE denial is acted on. Everything else
+       * the spender's policy says was already decided when the step-up was
+       * raised; re-deciding it here would either loop (STEP_UP again) or
+       * override a decision the principal's own approver is entitled to
+       * make.
+       */
+      /**
+       * The question is how much MORE this approval will hold, not what the
+       * step-up is worth. With `reserve_on_step_up: true` the hold was taken
+       * when the step-up was raised and the cap was checked then, so the
+       * incremental amount is zero and there is nothing to re-check. Asking
+       * the wrong question here double-counted: an existing $90 hold plus a
+       * $90 action read as $180 against a $100 cap and declined a legitimate
+       * approval. D-72's own `(b)` case caught that.
+       */
+      const existingHold = await repo.getAuthorizationHold(stepUp.mandate_id, stepUp.id);
+      const incrementalHold = stepUp.action.amount - existingHold;
+
+      const cumulativeDenial: Reason[] = [];
+      if (incrementalHold > 0) {
+        const spenderSpend = await repo.getSpendSnapshot(
+          stepUp.mandate_id,
+          originalGated.mandate.policy.accounting,
+          now,
+        );
+        const spenderView = evaluate({
+          policy: originalGated.mandate.policy,
+          action: { ...stepUp.action, amount: incrementalHold },
+          merchant: stepUp.merchant,
+          spend: spenderSpend,
+          now,
+        });
+        cumulativeDenial.push(
+          ...spenderView.reasons.filter(
+            (r) => r.code === ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED,
+          ),
+        );
+      }
+      if (cumulativeDenial.length > 0) {
+        const updated = await repo.resolveStepUp(stepUp.mandate_id, stepUp.id, "declined", now);
+        return { kind: "declined" as const, authorization: updated, reasons: cumulativeDenial };
       }
 
       const spend = await repo.getSpendSnapshot(gate.mandateId, gate.policy.accounting, now);

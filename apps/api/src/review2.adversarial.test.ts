@@ -1603,8 +1603,8 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R11 — HYPOTHESIS: several non-reserving step-ups approved against one cap", () => {
-    it("two step-ups approved back to back place $160 of holds on a $100 cap", async () => {
+  describe("R11 — closed by D-85: an approval re-checks the spender's cumulative cap", () => {
+    it("two $80 step-ups on a $100 cap: the first approves, the second is denied", async () => {
       // Not from the review. D-73's entry already records this as open: the
       // approval re-validates the spending mandate's AUTHORITY but does not
       // re-evaluate its LIMITS, because `evaluate()` there runs against the
@@ -1669,6 +1669,7 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
               currency: "USD" as const,
               merchant: { domain: "staples.com" },
               attestations: {},
+              payment_method_ref: "pm_spender",
             },
           } as never,
           apiKey: spenderKey.fullKey,
@@ -1695,19 +1696,135 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
           now: NOW,
         });
 
-      expect((await approve(one)).kind).toBe("resolved");
-      expect((await approve(two)).kind).toBe("resolved");
+      const first = await approve(one);
+      expect(first.kind).toBe("resolved");
+      if (first.kind !== "resolved") throw new Error("unreachable");
+      expect(first.authorization.status).toBe("STEP_UP_APPROVED");
 
-      // D-71 holds each approval on the spender's ledger, which is the fix it
-      // shipped. What it does not do is re-evaluate the spender's own cap at
-      // approval time, so two approvals exceed it.
+      // The second approval would put $160 on a $100 cap. Denied.
+      const second = await approve(two);
+      expect(second.kind).toBe("resolved");
+      if (second.kind !== "resolved") throw new Error("unreachable");
+      expect(second.authorization.status).toBe("STEP_UP_DECLINED"); // was STEP_UP_APPROVED
+
+      // The decline REASON lands on the evidence chain, not on the
+      // authorization row: `resolveStepUp` changes status only, so the row
+      // still carries the reasons it was raised with. Named as a known gap
+      // in D-85 rather than papered over here.
+      const events = await approver.evidence.listForOrganization(approver.org);
+      const declined = events.filter((e) => e.type === "step_up.declined");
+      expect(declined.length).toBeGreaterThan(0);
+      expect(JSON.stringify(declined.at(-1)?.payload)).toContain(
+        ReasonCode.DENY_CUMULATIVE_LIMIT_EXCEEDED,
+      );
+
+      // $80 held, not $160. Before D-85 this read $160 against a $100 cap.
       const snapshot = await approver.authorization.getSpendSnapshot(
         created.mandateId,
         spenderPolicy.accounting,
         NOW,
       );
-      expect(snapshot.mandate.amount).toBe(toMinorUnits(160, "USD"));
-      expect(snapshot.mandate.amount).toBeGreaterThan(toMinorUnits(100, "USD"));
+      expect(snapshot.mandate.amount).toBe(toMinorUnits(80, "USD"));
+      expect(snapshot.mandate.amount).toBeLessThanOrEqual(toMinorUnits(100, "USD"));
+    });
+
+    it("CONTROL: two $40 step-ups on a $100 cap both approve", async () => {
+      // Without this, the fix would look correct while refusing every second
+      // approval regardless of the arithmetic.
+      const approver = await fixture(
+        policyFrom({
+          cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(100_000, "USD") }],
+          per_transaction_max: toMinorUnits(100_000, "USD"),
+        }),
+      );
+      const suffix = randomUUID().slice(0, 12);
+      const spenderPrincipal = `prin_r2c_${suffix}`;
+      const spenderAgent = `agt_r2c_${suffix}`;
+      await prisma.principal.create({
+        data: { id: spenderPrincipal, organizationId: approver.org, displayName: "Spender" },
+      });
+      await prisma.agent.create({
+        data: { id: spenderAgent, organizationId: approver.org, name: "Spender", status: "ACTIVE" },
+      });
+      const spenderPolicy = policyFrom({
+        per_transaction_max: toMinorUnits(100, "USD"),
+        cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(100, "USD") }],
+        step_up: { above_amount: toMinorUnits(20, "USD"), ttl_seconds: 900 },
+        accounting: { timezone: "UTC", reserve_on_step_up: false },
+        escalation: { approvers: [approver.mandateId] },
+      });
+      const created = await approver.authorization.createMandate(
+        {
+          organizationId: approver.org,
+          principalId: spenderPrincipal,
+          agentIds: [spenderAgent],
+          policy: spenderPolicy,
+          policyHash: hashPolicy(spenderPolicy),
+          intentText: "spender",
+          compilerName: "manual",
+          assumptions: [],
+        },
+        NOW,
+      );
+      await approver.authorization.activateMandate(
+        created.mandateId,
+        created.mandateVersionId,
+        "203.0.113.9",
+        NOW,
+      );
+      const spenderKey = await approver.repos.agentKeys.createKey(
+        { organizationId: approver.org, agentId: spenderAgent, name: "spender" },
+        NOW,
+      );
+
+      const raise = async () => {
+        const result = await authorize(approver.repos, {
+          organizationId: approver.org,
+          request: {
+            agent_id: spenderAgent,
+            principal_id: spenderPrincipal,
+            mandate_id: created.mandateId,
+            action: {
+              amount: toMinorUnits(40, "USD"),
+              currency: "USD" as const,
+              merchant: { domain: "staples.com" },
+              attestations: {},
+              payment_method_ref: "pm_spender",
+            },
+          } as never,
+          apiKey: spenderKey.fullKey,
+          now: NOW,
+        });
+        if (result.kind !== "decided") throw new Error(result.kind);
+        expect(result.authorization.decision).toBe(Decision.STEP_UP);
+        return result.authorization;
+      };
+      const one = await raise();
+      const two = await raise();
+
+      const approve = (stepUp: Awaited<ReturnType<typeof raise>>) =>
+        resolveStepUpAsApprover(approver.repos, {
+          organizationId: approver.org,
+          stepUp,
+          approverAgentId: approver.agentId,
+          approverPrincipalId: approver.principalId,
+          approverMandateId: approver.mandateId,
+          apiKey: approver.apiKey,
+          now: NOW,
+        });
+
+      const a = await approve(one);
+      const b = await approve(two);
+      if (a.kind !== "resolved" || b.kind !== "resolved") throw new Error("unreachable");
+      expect(a.authorization.status).toBe("STEP_UP_APPROVED");
+      expect(b.authorization.status).toBe("STEP_UP_APPROVED");
+
+      const snapshot = await approver.authorization.getSpendSnapshot(
+        created.mandateId,
+        spenderPolicy.accounting,
+        NOW,
+      );
+      expect(snapshot.mandate.amount).toBe(toMinorUnits(80, "USD"));
     });
   });
 });

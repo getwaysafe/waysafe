@@ -7328,6 +7328,13 @@ asserting the mechanism. Nothing else in the suite had to change, because
 nothing else ever constructed a step-up on a non-reserving mandate and then
 executed it.
 
+**Completed by D-85.** This entry made an approval take a hold on the
+spending mandate. It did not re-check that mandate's cumulative cap at
+approval time, because the engine call on the approval path runs against the
+approver's policy -- so several non-reserving step-ups could each be approved
+and each take a hold, putting $160 on a $100 cap. D-73 recorded that as
+deliberately out of scope and D-85 closes it.
+
 **Change cost if wrong:** the `mandateId` requirement is compile-enforced, so
 a missed call site is a type error rather than a runtime surprise. The
 riskiest piece is the approval hold on a `reserve_on_step_up: false` mandate,
@@ -8649,6 +8656,99 @@ direction, a genuine force capture misread as authorized, would leave the
 mandate charged correctly but the chain silent about the anomaly, which is
 why the control test pins the exact-match case rather than only the flagged
 ones.
+
+## D-85 — An approval re-checks the spending mandate's cumulative cap (review 2, R11)
+
+**Decision:** before an approver's ALLOW takes effect, the **spending**
+mandate's own cumulative limits are re-evaluated under the lock against the
+holds already placed. A breach declines the step-up with
+`DENY_CUMULATIVE_LIMIT_EXCEEDED`.
+
+**This completes D-71, and D-73 already said it was open.** D-71 made an
+approval take a hold on the spending mandate, which is what makes that
+mandate's cap mean anything at all. It did not re-check the cap at approval
+time, because `evaluate()` on the approval path runs against the *approver's*
+policy. So several non-reserving step-ups could each be approved in turn,
+each taking a hold: **two $80 approvals placed $160 on a $100 cap.** D-73's
+entry recorded this as deliberately out of scope; the second independent
+review's R11 was the hypothesis that confirmed it, and this closes it.
+
+**Only a cumulative denial is acted on.** The spender's policy is
+re-evaluated against the step-up's action, and the reasons are filtered to
+`DENY_CUMULATIVE_LIMIT_EXCEEDED`. Everything else that policy says was
+already decided when the step-up was raised. Re-deciding all of it here would
+either loop -- a STEP_UP policy producing STEP_UP again -- or override a
+judgment the principal's own named approver is entitled to make. The cap is
+different because it is the one thing that can have changed since, precisely
+because approvals now consume it.
+
+No new reason code: `DENY_CUMULATIVE_LIMIT_EXCEEDED` already names this
+exactly, and the spender's own `authorize()` would have returned it.
+
+**The gate is obtained through D-80's helper**, not by calling the gate
+functions again, so the approval path cannot skip it any more than a decision
+path can.
+
+**A real bug this surfaced in the in-memory repository, worth its own
+paragraph.** Calling `withAuthorizedMandate` from inside the approval's
+existing lock deadlocked the fake and **four tests hung rather than failed**.
+The Prisma implementation has always been re-entrant: a nested call reuses
+the open transaction and adds another `FOR UPDATE`, which Postgres allows and
+which D-62 made it do deliberately to avoid the `P2028` pool starvation a
+second transaction caused. The mutex was not re-entrant. A divergence between
+the two repositories on *lock semantics* is the same class of defect as D-71's
+cross-mandate lookup and D-80's duplicated gate, so the fake now matches the
+real one rather than the call site avoiding the nesting.
+
+**The question had to be narrowed, and an existing test is what narrowed
+it.** The first implementation evaluated the step-up's full amount against
+the spender's snapshot. That double-counts whenever
+`reserve_on_step_up: true`, because the hold is already in the snapshot: an
+existing $90 hold plus a $90 action reads as $180 against a $100 cap, and a
+legitimate approval was declined. D-72's own `(b)` case -- reserve in one
+window, execute in the next -- failed with `not executable
+(status=STEP_UP_DECLINED)`.
+
+The well-formed question is **how much more this approval will hold**:
+`amount − existingHold`, via a new `getAuthorizationHold`. With
+`reserve_on_step_up: true` that is zero and there is nothing to re-check,
+because the cap was checked when the step-up was raised. Only the
+non-reserving case, which is the case R11 found, adds anything.
+
+**A gap this names rather than fixes: the decline reason does not reach the
+authorization row.** `resolveStepUp(..., "declined")` changes status only, so
+the row still carries the reasons it was *raised* with
+(`STEP_UP_AMOUNT_THRESHOLD`), and the receipt a client reads cannot say why
+the approval was refused. The real reason reaches the `step_up.declined`
+evidence event, which is where the test asserts it. Surfacing it on the row
+means changing what `resolveStepUp` writes, which is D-62's design and a
+behaviour change with its own receipt-shape questions. Named here, not
+smuggled in.
+
+**Tests.** `review2.adversarial.test.ts`'s R11 block: two $80 step-ups on a
+$100 cap -- the first approves, the second declines with the cumulative code
+on the evidence event, and $80 is held rather than $160. Plus the **control**
+that two $40 step-ups both approve, without which the fix would look correct
+while refusing every second approval regardless of arithmetic.
+
+Verified by negative control: emptying the cumulative filter fails the first
+case at `expected 'STEP_UP_APPROVED' to be 'STEP_UP_DECLINED'`.
+
+**Existing expectations: none encoded the bug, four hung, and one caught a
+regression.** The deadlock broke `server.test.ts`'s two D-62 cases and
+`packages/sdk/src/integration.test.ts`'s approver journey -- a timeout rather
+than an assertion failure, which reads nothing like a wrong answer and is
+easier to misdiagnose. And D-72's `(b)` case caught the double-counting
+above. That is the second time in this review's remediation that an existing
+test caught a regression in a fix rather than encoding a bug, after the
+wall-clock expiry in the D-80 follow-up.
+
+**Change cost if wrong:** an approval is declined that should have been
+allowed, visibly, with a code that names the cap. The re-entrancy change is
+the broader one: a nested in-memory lock now proceeds instead of blocking, so
+a test that relied on blocking to prove serialization would quietly stop
+proving it. `prisma-repository.test.ts` holds the real serialization proofs
+against Postgres, and they pass unchanged.
 
 # Open questions
 

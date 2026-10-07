@@ -53,7 +53,12 @@ import {
   type SaveAuthorizationInput,
   type StoredAuthorization,
 } from "./types.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Mutex } from "../util/mutex.js";
+
+/** Mandate ids whose lock this async context already holds -- D-85. See
+ * `withMandateLock`. */
+const heldMandateLocks = new AsyncLocalStorage<Set<string>>();
 import { assertValidActor } from "./actor.js";
 import { gateMandateExpiry, gateMandateStatus } from "./mandate-gate.js";
 
@@ -387,6 +392,17 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
       .sort((a, b) => (a.external_revision ?? 0) - (b.external_revision ?? 0));
   }
 
+  /** D-85. See `AuthorizationRepository.getAuthorizationHold`. */
+  async getAuthorizationHold(mandateId: string, authorizationId: string): Promise<number> {
+    return (this.ledgerByMandate.get(mandateId) ?? [])
+      .filter(
+        (e) =>
+          e.authorizationId === authorizationId &&
+          (e.type === "RESERVATION" || e.type === "RELEASE"),
+      )
+      .reduce((sum, e) => sum + e.amount, 0);
+  }
+
   /** D-79. See `AuthorizationRepository.getExternalRefHold`. */
   async getExternalRefHold(mandateId: string, externalRef: string): Promise<number> {
     const ids = new Set(
@@ -407,13 +423,32 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     return null;
   }
 
+  /**
+   * Re-entrant for a mandate this async context already holds -- D-85.
+   *
+   * The Prisma implementation has always been re-entrant: a nested call
+   * reuses the open transaction and adds another `FOR UPDATE` to it, which
+   * Postgres allows (D-62 made it do that deliberately, to avoid the
+   * `P2028` pool starvation a second transaction caused). This mutex was
+   * not, so a nested call for the same mandate deadlocked -- which D-85
+   * found by calling `withAuthorizedMandate` from inside the approval's
+   * existing lock. Four tests hung rather than failed.
+   *
+   * A divergence between the two repositories on lock semantics is exactly
+   * the class of thing that has bitten this project before (D-71's
+   * cross-mandate lookup, D-80's duplicated gate), so the fake now matches
+   * the real one instead of the call site avoiding the nesting.
+   */
   async withMandateLock<T>(mandateId: string, fn: () => Promise<T>): Promise<T> {
+    const held = heldMandateLocks.getStore();
+    if (held?.has(mandateId)) return fn();
+
     let mutex = this.locks.get(mandateId);
     if (!mutex) {
       mutex = new Mutex();
       this.locks.set(mandateId, mutex);
     }
-    return mutex.run(fn);
+    return mutex.run(() => heldMandateLocks.run(new Set([...(held ?? []), mandateId]), fn));
   }
 
   /** D-80 follow-up. See `AuthorizationRepository.withAuthorizedMandate`. */

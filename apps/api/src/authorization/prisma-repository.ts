@@ -294,6 +294,15 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     return rows.map(toStoredAuthorization);
   }
 
+  /** D-85. See `AuthorizationRepository.getAuthorizationHold`. */
+  async getAuthorizationHold(mandateId: string, authorizationId: string): Promise<number> {
+    const entries = await this.client.ledgerEntry.findMany({
+      where: { mandateId, authorizationId, type: { in: ["RESERVATION", "RELEASE"] } },
+      select: { amount: true },
+    });
+    return entries.reduce((sum, e) => sum + e.amount, 0);
+  }
+
   /** D-79. See `AuthorizationRepository.getExternalRefHold`. */
   async getExternalRefHold(mandateId: string, externalRef: string): Promise<number> {
     const rows = await this.client.authorization.findMany({

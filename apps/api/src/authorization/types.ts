@@ -498,6 +498,17 @@ export interface AuthorizationRepository {
   getExternalRefHold(mandateId: string, externalRef: string): Promise<number>;
 
   /**
+   * D-85: net amount currently held for ONE authorization -- reservations
+   * minus releases, scoped to one mandate.
+   *
+   * The approval path needs it to ask the only question that is actually
+   * well-formed: how much MORE will this approval hold? With
+   * `reserve_on_step_up: true` the answer is zero, because the hold was
+   * taken when the step-up was raised and the cap was checked then.
+   */
+  getAuthorizationHold(mandateId: string, authorizationId: string): Promise<number>;
+
+  /**
    * Serializes everything the callback does against this mandate: two
    * concurrent authorizations for the same mandate run their spend-snapshot
    * read and ledger write back-to-back, never interleaved. D-4's row lock.
