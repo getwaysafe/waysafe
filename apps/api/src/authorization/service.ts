@@ -39,7 +39,12 @@ import type { AgentKeyRepository } from "../agent-keys/types.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import { hashAuthorizationRequest } from "./idempotency.js";
 import { gateMandateExpiry, gateMandateStatus } from "./mandate-gate.js";
-import type { AuthorizationRepository, NewLedgerEntry, StoredAuthorization } from "./types.js";
+import type {
+  AuthorizationRepository,
+  NewLedgerEntry,
+  SaveAuthorizationInput,
+  StoredAuthorization,
+} from "./types.js";
 
 export type AuthorizeResult =
   | { kind: "decided"; authorization: StoredAuthorization; replayed: boolean }
@@ -63,6 +68,73 @@ export interface AuthorizeParams {
    */
   apiKey: string;
   id?: string; // injectable for deterministic tests
+}
+
+/**
+ * D-90: persist an agent-path decision and its signed evidence event in one
+ * transaction.
+ *
+ * Nothing in `authorize()` calls `saveAuthorization` directly any more, and a
+ * structural test in `service.evidence.test.ts` asserts that. This is the
+ * D-65/D-80 lesson for the third time: fixing one call site leaves the
+ * mistake available to the next one, and this function had three.
+ *
+ * **Why it was missing.** The rail-initiated paths (D-32) append decision
+ * evidence because each was built as its own enforcement adapter with its own
+ * event type. The agent path predates them (D-5) and persisted the
+ * `Authorization` row plus any `RESERVATION`, which *is* durable, auditable
+ * state -- just not signed, hash-linked state. The second independent review
+ * found only `agent_key.verified` events for an ordinary ALLOW, which made
+ * "every decision produces a signed receipt" false on the primary API path.
+ *
+ * **Same transaction, deliberately.** The append happens inside the caller's
+ * mandate lock, so the decision, its reservation and its evidence commit or
+ * roll back together -- the D-76 property, which exists because a hold that
+ * outlives a failed evidence write is a hold no receipt explains.
+ * `withOrganizationLock` nests inside the mandate lock via the shared
+ * transaction context (D-76); it is not a second transaction.
+ *
+ * `authorization.decided` is the type the evidence repositories' own tests
+ * have used since D-5. They were, until now, the only place it appeared.
+ */
+async function recordDecision(
+  repos: Pick<AuthorizeRepos, "authorization" | "evidence">,
+  input: SaveAuthorizationInput,
+): Promise<StoredAuthorization> {
+  const authorization = await repos.authorization.saveAuthorization(input);
+
+  await repos.evidence.withOrganizationLock(input.organizationId, () =>
+    repos.evidence.appendEvent({
+      organizationId: input.organizationId,
+      type: "authorization.decided",
+      subjectType: "authorization",
+      subjectId: authorization.id,
+      payload: {
+        decision: authorization.decision,
+        reason_codes: authorization.reasons.map((r) => r.code),
+        amount: authorization.action.amount,
+        currency: authorization.action.currency,
+        // What it was decided against (non-negotiable #5): a receipt that
+        // cannot name the policy version is not a receipt.
+        mandate_id: input.mandateId,
+        mandate_version_id: input.mandateVersionId,
+        policy_hash: input.policyHash,
+        actor_kind: input.actorKind,
+        agent_id: input.agentId,
+        principal_id: input.principalId,
+        // The merchant as resolved, including who attested the identifier
+        // that conferred trust (D-34/D-69).
+        merchant: authorization.merchant,
+        // Whether this decision moved budget, which is the difference
+        // between a STEP_UP that holds and one that does not (D-4).
+        reserved: input.ledgerEntries.some((entry) => entry.type === "RESERVATION"),
+        step_up_expires_at: input.stepUpExpiresAt?.toISOString() ?? null,
+      },
+      now: input.now,
+    }),
+  );
+
+  return authorization;
 }
 
 export async function authorize(
@@ -111,7 +183,7 @@ export async function authorize(
     // *who* rejected the request matters more than every other reason the
     // mandate itself might also currently be unusable for.
     return repo.withMandateLock(gate.mandateId, async () => {
-      const authorization = await repo.saveAuthorization({
+      const authorization = await recordDecision(repos, {
         id: params.id ?? generateId(ID_PREFIX.authorization),
         organizationId,
         actorKind: "agent",
@@ -143,7 +215,7 @@ export async function authorize(
     // Same treatment as the branch above -- persisted DENY, mandate lock,
     // no ledger entries -- just without a gate failure to also carry.
     return repo.withMandateLock(gate.mandateId, async () => {
-      const authorization = await repo.saveAuthorization({
+      const authorization = await recordDecision(repos, {
         id: params.id ?? generateId(ID_PREFIX.authorization),
         organizationId,
         actorKind: "agent",
@@ -207,7 +279,7 @@ export async function authorize(
         ? new Date(now.getTime() + gate.policy.step_up.ttl_seconds * 1000)
         : null;
 
-    const authorization = await repo.saveAuthorization({
+    const authorization = await recordDecision(repos, {
       id: params.id ?? generateId(ID_PREFIX.authorization),
       organizationId,
       actorKind: "agent",

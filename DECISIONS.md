@@ -9022,6 +9022,83 @@ request options returns to 4,012ms and resolves.
 **Existing expectations that encoded the bug: none.**
 
 
+## D-90 — Every agent-path decision is signed (review 2, R12)
+
+**Decision:** `POST /v1/authorizations` appends a signed, hash-linked
+`authorization.decided` evidence event in the same transaction as the
+decision and any reservation. ALLOW, DENY and STEP_UP alike.
+
+**The defect.** The rail-initiated paths (D-32) append decision evidence
+because each was built as its own enforcement adapter with its own event
+type. The agent path predates them (D-5) and persisted the `Authorization`
+row plus any `RESERVATION` — durable, auditable state, but not signed,
+hash-linked state. The second independent review found only
+`agent_key.verified` events for an ordinary ALLOW. That made "every decision
+produces a signed receipt" false on the primary API path, which is the one
+the public claim is about.
+
+`authorization.decided` is the event type the evidence repositories' own
+tests have used since D-5. Until this commit they were the only place it
+appeared.
+
+**One place, not three.** `authorize()` had three `saveAuthorization` call
+sites: the gate-failure DENY, the credential-failure DENY, and the decided
+path. All three now go through `recordDecision`, which writes the row and the
+event together, and a structural test asserts that `service.ts` contains
+exactly one `.saveAuthorization(` line and that it is inside that helper.
+This is the D-65/D-80 lesson for the third time in this remediation: fixing
+one call site leaves the mistake available to the next.
+
+**Same transaction, deliberately.** The append runs inside the caller's
+mandate lock, joined through the shared transaction context (D-76), so the
+decision, its hold and its receipt commit or roll back together. A hold that
+outlives a failed evidence write is a hold no receipt explains. A test proves
+it: with an evidence repository that throws, `authorize()` rejects, and
+Postgres holds neither an `Authorization` row nor a hold on the budget.
+
+**Payload.** Decision, reason codes, amount, currency, mandate and mandate
+version id, policy hash (non-negotiable #5 — a receipt that cannot name the
+policy version is not a receipt), actor kind, agent and principal id, the
+resolved merchant including who attested the identifier that conferred trust
+(D-34/D-69), whether the decision reserved budget, and the step-up expiry.
+
+**Which paths still write no evidence, after this commit.** Three, and one of
+them is a real gap rather than a deliberate omission:
+
+1. **A step-up expiry writes nothing — this is a gap.** `resolveStepUp` takes
+   no evidence repository, so both the lazy expiry (`expireIfNeeded`, on GET,
+   execute and approve/decline) and the worker sweep (`sweepExpiredStepUps`,
+   D-31) release a reservation and move the row to `STEP_UP_EXPIRED` with no
+   signed record of it. The D-62 approver path does write `step_up.approved`,
+   `step_up.declined` and `step_up.resolution_rejected`. An expiry is not a
+   decision, but it does release money, and the chain should say so. Recorded
+   as **OQ-14** rather than fixed here, because the fix changes the signature
+   of a function the worker also calls, and this commit is already the one
+   that touches every decision site in `authorize()`.
+2. **A request with no mandate row** (`kind: "no_mandate"`) persists nothing,
+   so there is no subject to attach an event to. The attempt is still
+   recorded: `verifyAgentKey` writes `agent_key.verified` or
+   `agent_key.rejected` unconditionally, before any of this.
+3. **An idempotent replay and an idempotency conflict** write no new event by
+   design. The replay returns the original decision, whose event already
+   exists; the conflict makes no decision at all.
+
+Execution is separate from deciding and was already evidenced
+(`execution.completed`, `execution.rejected`), as are refunds
+(`refund.applied`) and the card lifecycle (D-83/D-84's three
+`enforcement.stripe_issuing.*` events).
+
+**Tests.** Four cases in `review2.adversarial.test.ts`'s R12 block, through
+the real HTTP route and real Postgres: three decisions each produce their own
+event with the right payload; the whole chain verifies against the public key
+rather than by asking the server; the rollback property above; and the
+structural guard. Verified by negative control: restoring one direct
+`repo.saveAuthorization` call fails three of the four.
+
+**Existing expectations that encoded the bug: none.** Several suites count
+evidence events, and all of them count by type rather than by total.
+
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction
@@ -9425,3 +9502,24 @@ half-built.
 that x402 merchant verification is weaker than card merchant verification?
 The honest answer is yes, and the shape of that disclosure is a product call
 rather than a code one.
+
+## OQ-14 — Should a step-up expiry write evidence?
+
+Found while closing D-90. `resolveStepUp` takes no evidence repository, so a
+step-up that lapses — whether through the lazy `expireIfNeeded` on GET,
+execute and approve/decline, or through the D-31 worker's
+`sweepExpiredStepUps` — releases its reservation and moves the row to
+`STEP_UP_EXPIRED` with nothing in the signed chain to say it happened. The
+D-62 approver path writes `step_up.approved` / `step_up.declined` /
+`step_up.resolution_rejected`; expiry has no equivalent.
+
+An expiry is not a decision, which is why D-90 did not fold it in. It does
+release money, and "the principal asked for approval and nobody answered" is
+the kind of thing a receipt should be able to show.
+
+The reason it is a question and not a commit: the fix changes
+`resolveStepUp`'s signature, and the worker calls it in a loop where an
+evidence failure would have to either abort the sweep or be swallowed —
+neither of which is obviously right, and D-81 exists precisely because
+swallowing one was wrong elsewhere.
+

@@ -42,6 +42,8 @@ import {
   createStaticDirectory,
   generateId,
   hashPolicy,
+  loadEvidencePublicKey,
+  verifyEvidenceChain,
   parsePolicy,
   POLICY_SCHEMA_VERSION,
   toMinorUnits,
@@ -1923,6 +1925,193 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
+  describe("R12 — closed by D-90: every agent decision is signed (review: R13/High)", () => {
+    // Self-found extension of the review's R13, which looked at the service
+    // layer. Driven here through the real HTTP route, because
+    // `POST /v1/authorizations` is the path the public claim is about.
+    const serverFor = async (f: Fixture) => {
+      const app = buildServer({
+        repos: f.repos as never,
+        logger: false,
+        compiler: new FixtureIntentCompiler([]),
+        webauthnConfig: WEBAUTHN_CONFIG,
+      });
+      await app.ready();
+      return app;
+    };
+
+    const post = async (f: Fixture, app: Awaited<ReturnType<typeof serverFor>>, amountUsd: number) =>
+      app.inject({
+        method: "POST",
+        url: "/v1/authorizations",
+        headers: { authorization: `Bearer ${f.apiKey}` },
+        payload: {
+          agent_id: f.agentId,
+          principal_id: f.principalId,
+          mandate_id: f.mandateId,
+          action: {
+            amount: toMinorUnits(amountUsd, "USD"),
+            currency: "USD",
+            merchant: { domain: "staples.com" },
+            attestations: {},
+            payment_method_ref: "pm_fixture",
+          },
+        },
+      });
+
+    it("ALLOW, DENY and STEP_UP each produce a signed authorization.decided event", async () => {
+      const f = await fixture(
+        policyFrom({
+          per_transaction_max: toMinorUnits(50, "USD"),
+          step_up: { above_amount: toMinorUnits(20, "USD"), ttl_seconds: 900 },
+        }),
+      );
+      const app = await serverFor(f);
+      try {
+        const allow = await post(f, app, 1);
+        const stepUp = await post(f, app, 30);
+        const deny = await post(f, app, 500);
+        expect(allow.json()).toMatchObject({ decision: "ALLOW" });
+        expect(stepUp.json()).toMatchObject({ decision: "STEP_UP" });
+        expect(deny.json()).toMatchObject({ decision: "DENY" });
+
+        const events = await f.evidence.listForOrganization(f.org);
+        // Before D-90 this was three `agent_key.verified` events and nothing
+        // else: three real decisions, two of which moved budget, none of them
+        // in the signed chain.
+        const decided = events.filter((e) => e.type === "authorization.decided");
+        expect(decided).toHaveLength(3); // was 0
+        expect(decided.map((e) => (e.payload as { decision: string }).decision)).toEqual([
+          "ALLOW",
+          "STEP_UP",
+          "DENY",
+        ]);
+
+        // Each event is attached to its own authorization and names the
+        // policy version it was decided against (non-negotiable #5).
+        const allowEvent = decided[0]!;
+        expect(allowEvent.subject_type).toBe("authorization");
+        expect(allowEvent.subject_id).toBe((allow.json() as { id: string }).id);
+        expect(allowEvent.payload).toMatchObject({
+          decision: "ALLOW",
+          amount: toMinorUnits(1, "USD"),
+          currency: "USD",
+          mandate_id: f.mandateId,
+          mandate_version_id: f.mandateVersionId,
+          policy_hash: hashPolicy(f.policy),
+          actor_kind: "agent",
+          agent_id: f.agentId,
+          principal_id: f.principalId,
+          reserved: true,
+        });
+
+        // The STEP_UP says both that it holds budget and when it lapses.
+        // The route decides against real wall-clock time, so the expiry is
+        // compared to the row's own, not to the fixture's NOW.
+        expect(decided[1]!.payload).toMatchObject({ reserved: true });
+        const stepUpRow = await prisma.authorization.findUniqueOrThrow({
+          where: { id: (stepUp.json() as { id: string }).id },
+        });
+        expect((decided[1]!.payload as { step_up_expires_at: string }).step_up_expires_at).toBe(
+          stepUpRow.stepUpExpiresAt!.toISOString(),
+        );
+
+        // The DENY holds nothing, and says which rule refused it.
+        expect(decided[2]!.payload).toMatchObject({ reserved: false });
+        expect((decided[2]!.payload as { reason_codes: string[] }).reason_codes).toContain(
+          ReasonCode.DENY_TRANSACTION_LIMIT_EXCEEDED,
+        );
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("the whole chain verifies independently, decisions included", async () => {
+      // The point of signing them.
+      const f = await fixture();
+      const app = await serverFor(f);
+      try {
+        await post(f, app, 1);
+        await post(f, app, 2);
+        const events = await f.evidence.listForOrganization(f.org);
+        // Verified with the public key, not by asking the server whether it
+        // is happy with its own chain.
+        const publicKey = loadEvidencePublicKey(f.evidence.getPublicKey());
+        expect(verifyEvidenceChain(events, publicKey)).toEqual({ ok: true, signed: true });
+        expect(events.filter((e) => e.type === "authorization.decided")).toHaveLength(2);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("STRUCTURAL: authorize() reaches saveAuthorization only through recordDecision", async () => {
+      // D-90. Three call sites needed this fix, which is the third time in
+      // this remediation that fixing one left the mistake available to the
+      // next (D-65, D-80). A fourth branch added to `authorize()` cannot
+      // persist a decision without a receipt, because the only way to
+      // persist one is the helper that writes both.
+      //
+      // Source-level because there is no runtime seam: a branch that called
+      // the repository directly would simply be a different, correct-looking
+      // function.
+      const { readFileSync } = await import("node:fs");
+      const source = readFileSync("apps/api/src/authorization/service.ts", "utf8");
+
+      // The helper is the one place allowed to call it.
+      const direct = source.split("\n").filter((line) => line.includes(".saveAuthorization("));
+      expect(direct).toHaveLength(1);
+      expect(direct[0]).toContain("repos.authorization.saveAuthorization(input)");
+
+      // Guards the guard: if the helper were renamed or deleted, the
+      // assertion above would pass against a file that persists nothing.
+      const calls = source.split("\n").filter((line) => line.includes("recordDecision(repos, {"));
+      expect(calls.length).toBeGreaterThanOrEqual(3);
+      expect(source).toContain('type: "authorization.decided"');
+    });
+
+    it("a decision whose evidence write fails is not persisted at all", async () => {
+      // The D-76 property, for the agent path: the row, its RESERVATION and
+      // its receipt commit or roll back together. Without this the fix would
+      // be "usually signed", which is not a property.
+      const f = await fixture();
+      const failing = {
+        ...f.repos,
+        evidence: {
+          ...f.evidence,
+          withOrganizationLock: <T,>(_org: string, fn: () => Promise<T>) => fn(),
+          appendEvent: async () => {
+            throw new Error("evidence is down");
+          },
+          listForOrganization: f.evidence.listForOrganization.bind(f.evidence),
+        },
+      };
+
+      await expect(
+        authorize(failing as never, {
+          organizationId: f.org,
+          request: {
+            agent_id: f.agentId,
+            principal_id: f.principalId,
+            mandate_id: f.mandateId,
+            action: {
+              amount: toMinorUnits(5, "USD"),
+              currency: "USD" as const,
+              merchant: { domain: "staples.com" },
+              attestations: {},
+            },
+          } as never,
+          apiKey: f.apiKey,
+          now: NOW,
+        }),
+      ).rejects.toThrow(/evidence is down/);
+
+      // No authorization, and no hold on the budget.
+      const rows = await prisma.authorization.findMany({ where: { mandateId: f.mandateId } });
+      expect(rows).toHaveLength(0);
+      expect((await spend(f)).mandate.amount).toBe(0);
+    });
+  });
+
   describe("R11 — closed by D-85: an approval re-checks the spender's cumulative cap", () => {
     it("two $80 step-ups on a $100 cap: the first approves, the second is denied", async () => {
       // Not from the review. D-73's entry already records this as open: the
