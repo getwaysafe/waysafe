@@ -20,6 +20,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import {
   ID_PREFIX,
   generateId,
+  resolveMerchant,
   verifiedMerchantKeys,
   windowKeys,
   type Accounting,
@@ -51,6 +52,7 @@ import {
   type RecordExecutionInput,
   type RecordRefundInput,
   type SettleExternalInput,
+  type UnauthorizedSettlementInput,
   type SettlementOutcome,
   type ResolveMandateInput,
   type SaveAuthorizationInput,
@@ -942,6 +944,46 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     });
 
     return { released, rows: rows.length };
+  }
+
+  /** D-84. See `AuthorizationRepository.recordUnauthorizedSettlement`. */
+  async recordUnauthorizedSettlement(
+    input: UnauthorizedSettlementInput,
+    now: Date,
+  ): Promise<StoredAuthorization> {
+    const merchant = resolveMerchant(input.merchant, this.directory, "rail");
+    const action: ProposedAction = {
+      amount: input.amount,
+      currency: input.currency as ProposedAction["currency"],
+      merchant: input.merchant,
+      attestations: {},
+    };
+    // decision DENY, status EXECUTED: what Waysafe would have said, and the
+    // fact that the money moved regardless. The ledger CAPTURE rides in the
+    // same transaction via `ledgerEntries`.
+    return this.saveAuthorization({
+      id: generateId(ID_PREFIX.authorization),
+      organizationId: input.organizationId,
+      actorKind: "instrument",
+      agentId: null,
+      instrumentId: input.instrumentId,
+      principalId: input.principalId,
+      mandateId: input.mandateId,
+      mandateVersionId: input.mandateVersionId,
+      policyHash: input.policyHash,
+      decision: "DENY" as Decision,
+      status: "EXECUTED",
+      reasons: input.reasons,
+      action,
+      merchant,
+      idempotencyKey: null,
+      requestHash: null,
+      externalRef: input.externalRef,
+      externalRevision: null,
+      stepUpExpiresAt: null,
+      now,
+      ledgerEntries: [{ type: "CAPTURE", amount: input.amount }],
+    });
   }
 
   async recordRefund(input: RecordRefundInput, now: Date): Promise<void> {

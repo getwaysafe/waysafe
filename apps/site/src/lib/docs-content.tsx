@@ -290,6 +290,18 @@ export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP
       "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction (D-68).",
   },
   {
+    code: "DENY_SETTLED_WITHOUT_AUTHORIZATION",
+    decision: "DENY",
+    description:
+      "The payment rail settled this transaction without ever asking Waysafe to approve it -- a card-network force capture. Recorded as a DENY on a row whose status is EXECUTED: what Waysafe would have said, and the fact that the money moved anyway (D-84).",
+  },
+  {
+    code: "DENY_SETTLED_ABOVE_AUTHORIZATION",
+    decision: "DENY",
+    description:
+      "The settled amount exceeded what Waysafe authorized -- an overcapture, real on amount-controllable categories such as fuel and restaurants. The authorized portion settles normally; the excess carries this code (D-84).",
+  },
+  {
     code: "DENY_DECISION_NOT_RECORDED",
     decision: "DENY",
     description:

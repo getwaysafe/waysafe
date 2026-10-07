@@ -344,7 +344,9 @@ export interface StripeIssuingResponse {
 /** merchant_data.name is deliberately never read (D-3): network_id and
  * category_code are network/acquirer-assigned; name is exactly as
  * unverified on this payload as a name an agent typed. */
-function merchantAssertionFromStripe(
+/** D-84: exported so the transaction path reuses this rather than
+ * growing a second copy -- the drift D-80 removed for the mandate gate. */
+export function merchantAssertionFromStripe(
   merchantData: Stripe.Issuing.Authorization.MerchantData,
 ): MerchantAssertion {
   const mcc = /^\d{4}$/.test(merchantData.category_code) ? merchantData.category_code : undefined;

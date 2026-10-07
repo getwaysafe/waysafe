@@ -12,7 +12,15 @@
  */
 
 import type Stripe from "stripe";
+import {
+  ReasonCode,
+  evaluate,
+  resolveMerchant,
+  type Reason,
+} from "@waysafe/core";
 import type { AuthorizationRepository } from "../authorization/types.js";
+import type { InstrumentRepository } from "../instruments/types.js";
+import { merchantAssertionFromStripe } from "../enforcement/stripe-issuing.js";
 import type { EvidenceRepository } from "../evidence/types.js";
 import type { ProviderEventRepository } from "./types.js";
 
@@ -20,6 +28,10 @@ export interface WebhookRepos {
   providerEvents: ProviderEventRepository;
   authorization: AuthorizationRepository;
   evidence: EvidenceRepository;
+  /** D-84: resolving a card to its mandate, for `issuing_transaction.created`.
+   * Optional so every existing caller still compiles; a transaction event
+   * without it is reported as retryable rather than silently dropped. */
+  instruments?: InstrumentRepository;
 }
 
 export type WebhookResult =
@@ -57,6 +69,15 @@ export async function handleStripeWebhook(
    * attempt. And an event that is ignored for a reason that might not hold
    * next time is not recorded at all.
    */
+  if (event.type === "issuing_transaction.created") {
+    return handleIssuingTransaction(
+      repos,
+      event.data.object as Stripe.Issuing.Transaction,
+      event,
+      now,
+    );
+  }
+
   if (event.type === "issuing_authorization.updated") {
     return handleIssuingCapture(
       repos,
@@ -297,5 +318,205 @@ async function handleIssuingCapture(
     );
 
     return { kind: "applied", effect: "capture" } as const;
+  });
+}
+
+/**
+ * D-84: money that moved without Waysafe approving it.
+ *
+ * Two real Stripe behaviours the code ignored entirely before D-84.
+ *
+ * A **force capture** clears offline: the networks permit certain
+ * transactions (a store-and-forward terminal, some MCCs) to settle with no
+ * real-time authorization request at all. It arrives as a transaction whose
+ * `authorization` is null, or whose authorization Waysafe never saw. Before
+ * D-84 `issuing_transaction.created` was not handled, so the money moved,
+ * the cap was untouched, and the chain held no record of it.
+ *
+ * An **overcapture** settles for more than was authorized -- real on
+ * amount-controllable categories such as fuel and restaurants. The
+ * authorized portion settles normally; the excess was never approved.
+ *
+ * Neither is silently ignored. Both are written to the ledger because they
+ * really happened, charged against the cap because the money is gone, and
+ * evidenced with what a principal needs to dispute them -- including what
+ * Waysafe *would* have decided had it been asked, which is the basis of the
+ * dispute.
+ */
+async function handleIssuingTransaction(
+  repos: WebhookRepos,
+  transaction: Stripe.Issuing.Transaction,
+  event: Stripe.Event,
+  now: Date,
+): Promise<WebhookResult> {
+  // Stripe signs a purchase negative and a refund positive.
+  const moved = Math.abs(transaction.amount);
+  if (transaction.type === "refund") {
+    return recordOnly(
+      repos,
+      event,
+      now,
+      "issuing refund transactions are credited through charge.refunded",
+    );
+  }
+
+  const instrumentRef =
+    typeof transaction.card === "string"
+      ? transaction.card
+      : (transaction.card?.metadata?.waysafe_instrument_id ?? transaction.card?.id);
+  const instrument = instrumentRef ? await repos.instruments?.getInstrument(instrumentRef) : null;
+  if (!instrument) {
+    // Retryable: a card this deployment does not know may simply not be
+    // provisioned yet. A settlement on a card that is genuinely not ours is
+    // not ours to charge against anything.
+    return {
+      kind: "ignored",
+      reason: `no instrument for card on issuing transaction ${transaction.id}`,
+      retryable: true,
+    };
+  }
+
+  const authorizationRef =
+    typeof transaction.authorization === "string"
+      ? transaction.authorization
+      : transaction.authorization?.id;
+
+  return repos.authorization.withMandateLock(instrument.mandate_id, async () => {
+    const isNew = await repos.providerEvents.recordIfNew(
+      "stripe",
+      event.id,
+      event.type,
+      event.data.object as unknown as Record<string, unknown>,
+      now,
+    );
+    if (!isNew) return { kind: "duplicate" } as const;
+
+    const detail = await repos.authorization.getMandateDetail(instrument.mandate_id);
+    const merchant = merchantAssertionFromStripe(transaction.merchant_data);
+
+    const known = authorizationRef
+      ? await repos.authorization.listByExternalRef(instrument.mandate_id, authorizationRef)
+      : [];
+    const authorized = authorizationRef
+      ? await repos.authorization.getExternalRefHold(instrument.mandate_id, authorizationRef)
+      : 0;
+
+    // The authorized portion, if any, settles through the D-83 path.
+    let excess = moved;
+    if (known.length > 0 && authorized > 0) {
+      const settleable = Math.min(moved, authorized);
+      await repos.authorization.settleExternalAuthorization(
+        {
+          mandateId: instrument.mandate_id,
+          externalRef: authorizationRef!,
+          settledAmount: settleable,
+          settledCurrency: transaction.currency,
+          provider: "stripe_issuing",
+          providerReference: transaction.id,
+        },
+        now,
+      );
+      excess = moved - settleable;
+      if (excess === 0) {
+        return { kind: "applied", effect: "capture" } as const;
+      }
+    }
+
+    /**
+     * What is left was never authorized: the whole amount on a force
+     * capture, or the overcapture excess. Recorded with the hypothetical
+     * decision, which is what makes the evidence event disputable rather
+     * than merely alarming.
+     */
+    const overAuthorized = known.length > 0;
+    const hypothetical = detail
+      ? evaluate({
+          policy: detail.policy,
+          action: {
+            amount: excess,
+            currency: transaction.currency.toUpperCase() as "USD",
+            merchant,
+            attestations: {},
+          },
+          merchant: resolveMerchant(merchant, repos.authorization.getMerchantDirectory(), "rail"),
+          spend: await repos.authorization.getSpendSnapshot(
+            instrument.mandate_id,
+            detail.policy.accounting,
+            now,
+          ),
+          now,
+        })
+      : null;
+
+    const reasons: Reason[] = [
+      {
+        code: overAuthorized
+          ? ReasonCode.DENY_SETTLED_ABOVE_AUTHORIZATION
+          : ReasonCode.DENY_SETTLED_WITHOUT_AUTHORIZATION,
+        message: overAuthorized
+          ? `The network settled ${moved} against ${authorized} authorized; ${excess} was never approved.`
+          : `The network settled ${moved} without ever asking Waysafe to approve it.`,
+      },
+      ...(hypothetical?.reasons ?? []),
+    ];
+
+    const stored = await repos.authorization.recordUnauthorizedSettlement(
+      {
+        organizationId: instrument.organization_id,
+        mandateId: instrument.mandate_id,
+        mandateVersionId: detail?.mandateVersionId ?? "",
+        principalId: detail?.principalId ?? "",
+        policyHash: detail?.policyHash ?? "",
+        instrumentId: instrument.id,
+        amount: excess,
+        currency: transaction.currency.toUpperCase(),
+        externalRef: transaction.id,
+        merchant,
+        reasons,
+      },
+      now,
+    );
+
+    await repos.evidence.withOrganizationLock(instrument.organization_id, () =>
+      repos.evidence.appendEvent({
+        organizationId: instrument.organization_id,
+        type: overAuthorized
+          ? "enforcement.stripe_issuing.over_authorized_settlement"
+          : "enforcement.stripe_issuing.unauthorized_settlement",
+        subjectType: "authorization",
+        subjectId: stored.id,
+        payload: {
+          // Everything a principal needs to dispute this with the issuer.
+          stripe_transaction_id: transaction.id,
+          stripe_authorization_id: authorizationRef ?? null,
+          card_id: typeof transaction.card === "string" ? transaction.card : transaction.card?.id,
+          instrument_id: instrument.id,
+          // Two merchant fields, deliberately. `merchant` is the assertion
+          // used for resolution, which excludes the name because a name can
+          // never confer trust (non-negotiable #3). `merchant_data` is the
+          // rail's raw payload, which is what a principal actually needs to
+          // dispute a charge with the issuer -- the trading name, the city,
+          // the terminal id. Recording it as dispute data is not the same as
+          // trusting it for a decision.
+          merchant,
+          merchant_data: transaction.merchant_data,
+          settled: moved,
+          authorized,
+          never_approved: excess,
+          currency: transaction.currency.toUpperCase(),
+          settled_at: now.toISOString(),
+          policy_hash: detail?.policyHash ?? null,
+          // What Waysafe would have said, had the rail asked.
+          would_have_decided: hypothetical?.decision ?? null,
+          would_have_reasoned: (hypothetical?.reasons ?? []).map((r) => r.code),
+        },
+        now,
+      }),
+    );
+
+    return {
+      kind: "applied",
+      effect: overAuthorized ? "over_authorized_settlement" : "unauthorized_settlement",
+    } as const;
   });
 }

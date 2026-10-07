@@ -1222,7 +1222,14 @@ export function buildServer(options: BuildServerOptions = {}) {
     }
 
     const result = await handleStripeWebhook(
-      { providerEvents: repos.providerEvents, authorization: repos.authorization, evidence: repos.evidence },
+      {
+        providerEvents: repos.providerEvents,
+        authorization: repos.authorization,
+        evidence: repos.evidence,
+        // D-84: resolving a card to its mandate for
+        // issuing_transaction.created (force capture, overcapture).
+        instruments: repos.instruments,
+      },
       event,
       new Date(),
     );

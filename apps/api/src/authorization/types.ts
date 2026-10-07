@@ -22,6 +22,7 @@ import type {
   AuthorizationStatus,
   Decision,
   MandateStatus,
+  MerchantAssertion,
   MerchantDirectory,
   Policy,
   ProposedAction,
@@ -307,6 +308,30 @@ export interface SettlementOutcome {
   rows: number;
 }
 
+/**
+ * A settlement Waysafe never approved -- D-84.
+ *
+ * Either a force capture (no authorization at all) or the excess of an
+ * overcapture. Both really moved money, so both are written to the ledger
+ * and charged against the cap; neither is a decision Waysafe made, so both
+ * are recorded as a DENY on a row that is already EXECUTED.
+ */
+export interface UnauthorizedSettlementInput {
+  organizationId: string;
+  mandateId: string;
+  mandateVersionId: string;
+  principalId: string;
+  policyHash: string;
+  instrumentId: string;
+  /** Integer minor units that actually moved. */
+  amount: number;
+  currency: string;
+  /** The rail's own reference for the settlement. */
+  externalRef: string;
+  merchant: MerchantAssertion;
+  reasons: Reason[];
+}
+
 export interface RecordRefundInput {
   authorizationId: string;
   /**
@@ -387,6 +412,24 @@ export interface AuthorizationRepository {
    * Returns what it did, so the caller can evidence it honestly.
    */
   settleExternalAuthorization(input: SettleExternalInput, now: Date): Promise<SettlementOutcome>;
+
+  /**
+   * D-84: record money that moved without Waysafe's approval.
+   *
+   * Writes an `Authorization` row with `decision: DENY` and
+   * `status: EXECUTED` plus a `CAPTURE` for the amount, in one transaction.
+   * The combination is deliberate and is the only honest one available: the
+   * decision field says what Waysafe would have said, the status says the
+   * money moved, and `LedgerEntry` requires an authorization to point at.
+   *
+   * Never silently ignored, which is what happened before D-84: a force
+   * capture found no matching authorization and was dropped, so the money
+   * moved, the cap was untouched, and the chain held no record of it.
+   */
+  recordUnauthorizedSettlement(
+    input: UnauthorizedSettlementInput,
+    now: Date,
+  ): Promise<StoredAuthorization>;
 
   /**
    * D-83: release one external authorization's aggregate hold without

@@ -8533,6 +8533,123 @@ That is the direction worth watching, and it is bounded by the hold: a release
 can never exceed what was reserved, because it is computed as the outstanding
 sum per revision rather than from the payload.
 
+## D-84 — Money that moved without Waysafe approving it (review 2, R7b)
+
+**Decision:** `issuing_transaction.created` is handled. A settlement with no
+matching authorization, or one exceeding its authorization, is written to the
+ledger, charged against the cap, and evidenced with what a principal needs to
+dispute it. Never silently ignored.
+
+Two real Stripe behaviours the code ignored entirely. A **force capture**
+clears offline: the networks permit certain transactions -- a
+store-and-forward terminal, some MCCs -- to settle with **no real-time
+authorization request at all**. An **overcapture** settles for more than was
+authorized, which is routine on amount-controllable categories such as fuel
+and restaurants.
+
+Before D-84, `issuing_transaction.created` was not a handled event type, so
+both fell through to `unhandled event type`. The money moved, the cap was
+untouched, and the chain held no record. That is the single most direct
+contradiction of the public claim in the whole review: a transaction
+completed with no Waysafe decision and nothing anywhere said so.
+
+**Two additive reason codes**, both DENY, both new (#7):
+
+| Code | Means |
+|---|---|
+| `DENY_SETTLED_WITHOUT_AUTHORIZATION` | the rail never asked; the whole amount is unapproved |
+| `DENY_SETTLED_ABOVE_AUTHORIZATION` | it asked and then took more; the excess is unapproved |
+
+**Two additive evidence event types:**
+`enforcement.stripe_issuing.unauthorized_settlement` and
+`enforcement.stripe_issuing.over_authorized_settlement`. A third,
+`enforcement.stripe_issuing.released`, came with D-83.
+
+**The row shape is deliberately contradictory, because the situation is.**
+`decision: DENY` with `status: EXECUTED`. The decision field says what
+Waysafe would have said; the status says the money is gone. No other
+combination is honest: calling it an ALLOW would claim an approval that never
+happened, and leaving it off the ledger would claim the money did not move.
+`LedgerEntry` also requires an authorization to point at, so a row has to
+exist for the `CAPTURE` to hang from.
+
+**The evidence payload is built for a dispute, not for an alarm.** It carries
+the Stripe transaction and authorization ids, the card and instrument ids, the
+settled and authorized figures, the unapproved remainder, the currency, the
+settlement time, the policy hash -- and `would_have_decided` /
+`would_have_reasoned`, from running the real `evaluate()` against the
+transaction as if the rail had asked. That last pair is the basis of the
+dispute: "this merchant is not on my mandate's allowlist and the engine would
+have refused it" is a stronger letter to an issuer than "I did not authorize
+this."
+
+**Two merchant fields, and the distinction matters.** `merchant` is the
+assertion used for resolution, which excludes the trading name because a name
+can never confer trust (non-negotiable #3). `merchant_data` is the rail's raw
+payload -- name, city, terminal id -- which is exactly what a principal needs
+to dispute a charge. A test originally failed because the payload had no
+merchant name at all: `merchantAssertionFromStripe` omits it on purpose.
+Recording it as dispute data is not the same as trusting it for a decision,
+and keeping the two fields separate is what makes both statements true at
+once.
+
+**An overcapture settles its authorized portion first**, through D-83's
+`settleExternalAuthorization`, and only the excess becomes an unauthorized
+settlement. So $26 against a $20 authorization charges $26 in total: $20
+reconciled against the hold, $6 flagged.
+
+### The lifecycle, end to end
+
+Every event this codebase now handles, what it does to the ledger, and what
+it writes to the chain.
+
+| Event | Ledger effect | Evidence event |
+|---|---|---|
+| `issuing_authorization.request` (first) | `RESERVATION` for the requested amount, in the decision's window | `enforcement.stripe_issuing.decision` |
+| `issuing_authorization.request` (redelivery: same ref, revision, amount) | none | none (replays the original) |
+| `issuing_authorization.request` (increment, higher amount) | `RESERVATION` for the **delta**; aggregate = new total (D-79) | `enforcement.stripe_issuing.decision` |
+| `issuing_authorization.request` (increment above the per-transaction cap) | none | `…decision`, `DENY_TRANSACTION_LIMIT_EXCEEDED` |
+| `issuing_authorization.updated` → `pending` | none | none (**retryable**, D-81) |
+| `issuing_authorization.updated` → `reversed` | `RELEASE` of the aggregate hold, each revision in its own window | `…released`, reason `reversed` |
+| `issuing_authorization.updated` → `expired` | same | `…released`, reason `expired` |
+| `issuing_authorization.updated` → `closed`, not approved | same | `…released`, reason `declined` |
+| `issuing_authorization.updated` → `closed`, approved | `RELEASE` of the aggregate + one `CAPTURE` of the **settled** amount | `…captured` with `authorized`, `settled`, `partial` |
+| `issuing_authorization.updated` → `closed` with a mismatched currency | none; throws, hold intact | none (retryable) |
+| `issuing_authorization.updated` → second settlement of a settled authorization | none | none (**not** retryable) |
+| `issuing_transaction.created`, matches its authorization | `RELEASE` + `CAPTURE` of the settled amount | `…captured` |
+| `issuing_transaction.created`, exceeds its authorization | authorized portion settles; **excess** `CAPTURE` on a DENY/EXECUTED row | `…over_authorized_settlement` |
+| `issuing_transaction.created`, no authorization (force capture) | `CAPTURE` of the whole amount on a DENY/EXECUTED row | `…unauthorized_settlement` |
+| `issuing_transaction.created`, card unknown to this deployment | none | none (**retryable**) |
+| `issuing_transaction.created`, type `refund` | none | none (credited via `charge.refunded`) |
+| `charge.refunded` (partial) | `CREDIT` of the delta over what is already credited (D-82) | `refund.applied` |
+| `charge.refunded` (cumulative, later event) | `CREDIT` of the new delta only | `refund.applied` |
+| `charge.refunded` (no further refund) | none | none |
+| `charge.refunded` beyond the capture | `CREDIT` clamped so the window never goes negative | `refund.applied` |
+| any redelivery of any of the above | none | none (`duplicate`, decided by the `ProviderEvent` unique key) |
+| any event whose effect fails | **rolled back with the event record** (D-81) | none; the retry is a first attempt |
+
+**Tests.** `review2.adversarial.test.ts`'s R7b block, five cases: a force
+capture recorded and charged with the full dispute payload; an overcapture
+settling $20 of $26 and flagging $6; a **control** that an exact match is an
+ordinary capture, without which both would pass against a handler that
+flagged everything; a redelivery deduplicating; and an unknown card staying
+retryable.
+
+Verified by negative control: removing the `issuing_transaction.created`
+branch fails four of the five.
+
+**Existing expectations that encoded the bug: none.** No test had ever sent an
+`issuing_transaction.created` event, because nothing handled it.
+
+**Change cost if wrong:** a transaction wrongly classified as unauthorized
+charges the cap twice -- once against the hold and once as the excess. The
+arithmetic that prevents it is `Math.min(moved, authorized)` followed by
+`moved − settleable`, which cannot exceed `moved` in total. The other
+direction, a genuine force capture misread as authorized, would leave the
+mandate charged correctly but the chain silent about the anomaly, which is
+why the control test pins the exact-match case rather than only the flagged
+ones.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

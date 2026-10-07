@@ -57,6 +57,23 @@ export const ReasonCode = {
    * into an approval.
    */
   DENY_DECISION_NOT_RECORDED: "DENY_DECISION_NOT_RECORDED",
+  /**
+   * D-84: the rail settled a transaction Waysafe was never asked to approve
+   * -- a force capture. The card networks permit certain transactions to
+   * clear offline, with no real-time authorization request at all.
+   *
+   * Recorded as a DENY on a row whose status is EXECUTED, which is the
+   * honest shape: this is what Waysafe would have said, and the money moved
+   * anyway. It is not a decision Waysafe made, and the receipt must not
+   * read as though it were.
+   */
+  DENY_SETTLED_WITHOUT_AUTHORIZATION: "DENY_SETTLED_WITHOUT_AUTHORIZATION",
+  /**
+   * D-84: the settled amount exceeded what was authorized -- an overcapture.
+   * Real on amount-controllable categories such as fuel and restaurants.
+   * The authorized portion settles normally; the excess carries this code.
+   */
+  DENY_SETTLED_ABOVE_AUTHORIZATION: "DENY_SETTLED_ABOVE_AUTHORIZATION",
   DENY_MANDATE_SUPERSEDED: "DENY_MANDATE_SUPERSEDED",
   DENY_MANDATE_NOT_AUTHENTICATED: "DENY_MANDATE_NOT_AUTHENTICATED",
 
@@ -171,6 +188,10 @@ export const REASON_CODE_DESCRIPTIONS: Record<ReasonCode, string> = {
     "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read.",
   DENY_DECISION_NOT_RECORDED:
     "The decision could not be durably recorded, so it was not authorized.",
+  DENY_SETTLED_WITHOUT_AUTHORIZATION:
+    "The payment rail settled this transaction without ever asking Waysafe to approve it.",
+  DENY_SETTLED_ABOVE_AUTHORIZATION:
+    "The settled amount exceeded what Waysafe authorized; the excess was never approved.",
   DENY_MANDATE_SUPERSEDED:
     "The mandate version referenced has been replaced by a newer version.",
   DENY_MANDATE_NOT_AUTHENTICATED:

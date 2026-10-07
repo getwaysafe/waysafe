@@ -1207,6 +1207,205 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
+  describe("R7b — closed by D-84: force capture and overcapture are recorded, never ignored", () => {
+    const transaction = (params: {
+      instrumentId: string;
+      amountCents: number;
+      authorizationRef?: string | null;
+    }) =>
+      ({
+        id: `ipi_r2_${randomUUID().slice(0, 12)}`,
+        object: "issuing.transaction",
+        // Stripe signs a purchase negative.
+        amount: -params.amountCents,
+        currency: "usd",
+        type: "capture",
+        authorization: params.authorizationRef ?? null,
+        card: { id: `ic_x`, metadata: { waysafe_instrument_id: params.instrumentId } },
+        merchant_data: {
+          category: "fuel",
+          category_code: "5541",
+          name: "OFFLINE FUEL STOP",
+          network_id: "forced_mid",
+          city: "Nowhere",
+          country: "US",
+          postal_code: null,
+          state: null,
+          tax_id: null,
+          terminal_id: "t_offline_1",
+          url: null,
+        },
+      }) as unknown as Stripe.Issuing.Transaction;
+
+    it("a FORCE CAPTURE with no authorization at all is recorded and charged against the cap", async () => {
+      const f = await fixture();
+      const instrument = await f.repos.instruments.createInstrument(
+        {
+          organizationId: f.org,
+          mandateId: f.mandateId,
+          rail: "stripe_issuing",
+          externalRef: `ic_r2_${randomUUID().slice(0, 8)}`,
+        },
+        NOW,
+      );
+
+      const result = await handleStripeWebhook(
+        f.repos,
+        stripeEvent(
+          "issuing_transaction.created",
+          transaction({ instrumentId: instrument.id, amountCents: toMinorUnits(37, "USD") }),
+        ),
+        NOW,
+      );
+      // Never silently ignored. Before D-84 this event type was not handled
+      // at all: the money moved and nothing recorded it.
+      expect(result).toMatchObject({ kind: "applied", effect: "unauthorized_settlement" });
+
+      // It really moved, so the cap is charged.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(37, "USD"));
+
+      // The row is honest: DENY (what Waysafe would have said) on a row that
+      // is EXECUTED (the money is gone).
+      const rows = await prisma.authorization.findMany({ where: { mandateId: f.mandateId } });
+      const forced = rows.find((r) => r.status === "EXECUTED" && r.decision === "DENY");
+      expect(forced).toBeDefined();
+      expect(forced!.reasonCodes).toContain(ReasonCode.DENY_SETTLED_WITHOUT_AUTHORIZATION);
+
+      // And the evidence event carries what a principal needs to dispute it.
+      const events = await f.evidence.listForOrganization(f.org);
+      const flagged = events.find(
+        (e) => e.type === "enforcement.stripe_issuing.unauthorized_settlement",
+      );
+      expect(flagged).toBeDefined();
+      expect(flagged!.payload).toMatchObject({
+        stripe_authorization_id: null,
+        never_approved: toMinorUnits(37, "USD"),
+        authorized: 0,
+        currency: "USD",
+      });
+      // The dispute basis: what Waysafe would have decided, had it been asked.
+      expect(flagged!.payload).toHaveProperty("would_have_decided");
+      expect(flagged!.payload).toHaveProperty("would_have_reasoned");
+      // The raw rail payload, which is what a dispute actually needs: the
+      // trading name, the city, the terminal id. Kept separate from the
+      // `merchant` assertion, which excludes the name because a name can
+      // never confer trust (non-negotiable #3).
+      const payload = flagged!.payload as {
+        merchant: { name?: string };
+        merchant_data: { name?: string; city?: string; terminal_id?: string };
+      };
+      expect(payload.merchant_data.name).toBe("OFFLINE FUEL STOP");
+      expect(payload.merchant_data.city).toBe("Nowhere");
+      expect(payload.merchant_data.terminal_id).toBe("t_offline_1");
+      // And the assertion used for resolution still has no name in it.
+      expect(payload.merchant.name).toBeUndefined();
+    });
+
+    it("an OVERCAPTURE settles the authorized portion and flags only the excess", async () => {
+      const f = await fixture(
+        policyFrom({
+          per_transaction_max: toMinorUnits(50, "USD"),
+          cumulative_limits: [{ window: "mandate", max_amount: toMinorUnits(100, "USD") }],
+        }),
+      );
+      const { instrument, authorization: card } = await cardFor(f, toMinorUnits(20, "USD"));
+      await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(20, "USD"));
+
+      // The network settles $26 against a $20 authorization -- real on fuel.
+      const result = await handleStripeWebhook(
+        f.repos,
+        stripeEvent(
+          "issuing_transaction.created",
+          transaction({
+            instrumentId: instrument.id,
+            amountCents: toMinorUnits(26, "USD"),
+            authorizationRef: card.id,
+          }),
+        ),
+        NOW,
+      );
+      expect(result).toMatchObject({ kind: "applied", effect: "over_authorized_settlement" });
+
+      // $26 charged in total: $20 settled against the hold, $6 as the excess.
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(26, "USD"));
+
+      const events = await f.evidence.listForOrganization(f.org);
+      const flagged = events.find(
+        (e) => e.type === "enforcement.stripe_issuing.over_authorized_settlement",
+      );
+      expect(flagged!.payload).toMatchObject({
+        settled: toMinorUnits(26, "USD"),
+        authorized: toMinorUnits(20, "USD"),
+        never_approved: toMinorUnits(6, "USD"),
+        stripe_authorization_id: card.id,
+      });
+    });
+
+    it("CONTROL: a transaction that matches its authorization exactly is an ordinary capture", async () => {
+      // Without this, the two cases above would pass against a handler that
+      // flagged everything as unauthorized.
+      const f = await fixture();
+      const { instrument, authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
+
+      const result = await handleStripeWebhook(
+        f.repos,
+        stripeEvent(
+          "issuing_transaction.created",
+          transaction({
+            instrumentId: instrument.id,
+            amountCents: toMinorUnits(10, "USD"),
+            authorizationRef: card.id,
+          }),
+        ),
+        NOW,
+      );
+      expect(result).toMatchObject({ kind: "applied", effect: "capture" });
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(10, "USD"));
+
+      const events = await f.evidence.listForOrganization(f.org);
+      expect(
+        events.some((e) => e.type.includes("unauthorized") || e.type.includes("over_authorized")),
+      ).toBe(false);
+    });
+
+    it("a redelivered transaction event deduplicates rather than charging twice", async () => {
+      const f = await fixture();
+      const instrument = await f.repos.instruments.createInstrument(
+        {
+          organizationId: f.org,
+          mandateId: f.mandateId,
+          rail: "stripe_issuing",
+          externalRef: `ic_r2_${randomUUID().slice(0, 8)}`,
+        },
+        NOW,
+      );
+      const event = stripeEvent(
+        "issuing_transaction.created",
+        transaction({ instrumentId: instrument.id, amountCents: toMinorUnits(12, "USD") }),
+      );
+      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("applied");
+      expect((await handleStripeWebhook(f.repos, event, NOW)).kind).toBe("duplicate");
+      expect((await spend(f)).mandate.amount).toBe(toMinorUnits(12, "USD"));
+    });
+
+    it("a transaction on a card this deployment does not know stays retryable", async () => {
+      const f = await fixture();
+      const result = await handleStripeWebhook(
+        f.repos,
+        stripeEvent(
+          "issuing_transaction.created",
+          transaction({ instrumentId: "inst_not_ours", amountCents: toMinorUnits(5, "USD") }),
+        ),
+        NOW,
+      );
+      expect(result).toMatchObject({ kind: "ignored", retryable: true });
+      expect((await spend(f)).mandate.amount).toBe(0);
+    });
+  });
+
+  // =======================================================================
   describe("R8 — sub-cent x402 transfers record zero cents (review: R1/Medium)", () => {
     it("three nonzero atomic transfers are each recorded as $0.00", async () => {
       const f = await fixture();
