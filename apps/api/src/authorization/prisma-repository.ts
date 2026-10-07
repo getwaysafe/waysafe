@@ -23,6 +23,8 @@ import {
   resolveMerchant,
   verifiedMerchantKeys,
   windowKeys,
+  rollUpWindow,
+  type LedgerRollupEntry,
   type Accounting,
   type ActorKind,
   type AuthorizationStatus,
@@ -57,6 +59,7 @@ import {
   type ResolveMandateInput,
   type SaveAuthorizationInput,
   type StoredAuthorization,
+  type SpendSnapshotOptions,
 } from "./types.js";
 import { assertValidActor } from "./actor.js";
 import { gateMandateExpiry, gateMandateStatus } from "./mandate-gate.js";
@@ -225,24 +228,32 @@ export class PrismaAuthorizationRepository implements AuthorizationRepository {
     mandateId: string,
     accounting: Accounting,
     now: Date,
+    options: SpendSnapshotOptions = {},
   ): Promise<SpendSnapshot> {
     const client = this.client;
     const keys = windowKeys(now, accounting.timezone);
     const entries = await client.ledgerEntry.findMany({ where: { mandateId } });
 
-    const sumWhere = (matches: (e: (typeof entries)[number]) => boolean) => {
-      let amount = 0;
-      let reservations = 0;
-      let releases = 0;
-      for (const entry of entries) {
-        if (!matches(entry)) continue;
-        if (entry.type === "CREDIT" && !accounting.refunds_credit_budget) continue;
-        amount += entry.amount;
-        if (entry.type === "RESERVATION") reservations += 1;
-        if (entry.type === "RELEASE") releases += 1;
-      }
-      return { amount, count: Math.max(0, reservations - releases) };
-    };
+    // D-87: a `max_count` limit counts transactions, and one rail-initiated
+    // transaction can be several Authorization rows (D-79's revisions). The
+    // counting unit is the rail's own reference where there is one.
+    const authorizations = await client.authorization.findMany({
+      where: { mandateId, id: { in: [...new Set(entries.map((e) => e.authorizationId))] } },
+      select: { id: true, externalRef: true },
+    });
+    const transactionKeys = new Map(
+      authorizations.map((a) => [a.id, a.externalRef ?? a.id] as const),
+    );
+    const rollupEntry = (e: (typeof entries)[number]): LedgerRollupEntry => ({
+      transactionKey: transactionKeys.get(e.authorizationId) ?? e.authorizationId,
+      type: e.type,
+      amount: e.amount,
+    });
+
+    const sumWhere = (matches: (e: (typeof entries)[number]) => boolean) =>
+      rollUpWindow(entries.filter(matches).map(rollupEntry), accounting, {
+        excludeFromCount: options.excludeTransactionFromCount,
+      });
 
     return {
       day: sumWhere((e) => e.dayKey === keys.day),

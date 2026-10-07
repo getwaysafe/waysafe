@@ -8833,6 +8833,95 @@ there is a purpose mismatch rather than something that route could consume.
 400 or 401 naming both purposes, which is diagnosable. The deploy window
 above is the real cost, and it is five minutes of restartable ceremonies.
 
+## D-87 — `max_count` counts authorized transactions (review 2, R3)
+
+**Decision:** a window's `count` is the number of **authorized transactions**
+in it: reservations, plus captures that never had a reservation, minus
+reservations released *without* a capture. A settled transaction stays
+counted. One rule, in one function, `rollUpWindow` in
+`packages/core/src/engine/window-rollup.ts`.
+
+**The defect.** `count` was `max(0, reservations - releases)`. Settlement
+writes a `RELEASE` of the hold and a `CAPTURE` of the settled amount (D-71,
+D-83), so every completed payment handed its `max_count` slot back. Under
+`max_count: 1` an agent made unlimited payments by letting each one settle
+first. The amount limits still held, so this was a velocity control that
+worked only while nothing had finished — which is the opposite of what a
+velocity control is for. A **force capture** (D-84) was worse: it writes a
+`CAPTURE` with no `RESERVATION`, so the old rule could not see it at all.
+
+The rule now, per transaction:
+
+| ledger rows for one transaction | counted | why |
+| --- | --- | --- |
+| `RESERVATION` | yes | a pending payment occupies a slot |
+| `RESERVATION` + `RELEASE` | no | reversed, expired, declined, failed — nothing moved |
+| `RESERVATION` + `RELEASE` + `CAPTURE` | yes | settled; money moved |
+| `CAPTURE` alone | yes | force capture (D-84): moved without being asked |
+| any of the above + `CREDIT` | unchanged | a refunded payment still happened |
+
+`CREDIT` never touches the count. `refunds_credit_budget` decides only
+whether a refund returns money to the *amount* budget (D-4).
+
+**Self-found, in the same commit: the counting unit is a transaction, not a
+row.** Not in the review. D-79 — written earlier in this remediation — gives
+each incremental request of one card authorization its own `Authorization`
+row with its own `RESERVATION`. Counting rows would make a single incremented
+card payment consume two slots of a `max_count: 1` policy, and it did: the
+increment was declined by the count rule even though only one transaction
+existed. The key is now the rail's own `externalRef` where there is one, and
+the authorization id otherwise.
+
+That exposed a second half. `evaluate()` adds exactly 1 for the action it is
+deciding, so an increment of an already-counted transaction would still
+project 2. The amount side solves this with a delta (D-79: the engine decides
+the increment, the prior hold stays in the SUM); count cannot, because the +1
+is not a delta. So `getSpendSnapshot` gained an optional
+`excludeTransactionFromCount`, used by `handleIssuingAuthorizationRequest` on
+an increment and nowhere else: the already-counted transaction is dropped
+from the roll-up, and the engine's own +1 puts it back, exactly once. It is
+excluded in whichever window the prior revision actually landed in (D-72),
+rather than by subtracting 1 from the window the increment arrives in — those
+are usually the same window and occasionally are not.
+
+**One implementation, not two.** The eleven lines were previously written out
+twice, identically, in `PrismaAuthorizationRepository.getSpendSnapshot` and
+the in-memory one. Both now call `rollUpWindow`. This is D-85's lesson
+applied before it bites: when the fake and the real implementation each carry
+their own copy of a rule, they drift, and the drift is visible only in
+whichever one a given test exercises.
+
+**Tests.** Six cases in `review2.adversarial.test.ts`'s R3 block, through
+real HTTP and real Postgres: a pending payment consumes the only slot; a
+captured one still consumes it; a reversed one frees it; a settled card
+payment stays counted; a force capture is counted; and an incremented
+authorization is one transaction, not two. Ten more in
+`packages/core/src/engine/window-rollup.test.ts`, offline, pinning the rule
+directly — including that the count can never go negative, which the old rule
+needed a `Math.max` clamp to guarantee and this one gets by construction.
+
+Verified by negative control: restoring `reservations - releases` fails four
+of the six R3 cases.
+
+**Existing expectations that encoded the bug: none.** The R3 reproduction
+asserted `count` returning to 0 after settlement, which was the point of
+Phase A; no other test depended on it.
+
+**A note on how that control was run, because the first attempt was
+vacuous.** `@waysafe/core` resolves to its built `dist/`, not its source, so
+editing `packages/core/src` and running vitest tests the *previous* build.
+The first negative control reported all six cases still passing, which looked
+like a vacuous test and was in fact a stale artefact; re-run with `tsc -b`
+in between, it failed four. Every other negative control in this remediation
+(D-78 through D-86) patched a file under `apps/api/src`, which vitest loads
+from source, so none of them was affected — but this is the kind of thing
+that makes a control prove nothing while looking like it proved something.
+
+**Change cost if wrong:** a `max_count` limit refuses a transaction it should
+have allowed, with `DENY_VELOCITY_LIMIT_EXCEEDED` and a `detail` carrying the
+projected count and the limit. Diagnosable, and the opposite of the failure
+it replaces.
+
 # Open questions
 
 ## OQ-1 — The demo script contradicts the demo instruction

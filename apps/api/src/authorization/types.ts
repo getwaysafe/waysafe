@@ -332,6 +332,20 @@ export interface UnauthorizedSettlementInput {
   reasons: Reason[];
 }
 
+export interface SpendSnapshotOptions {
+  /**
+   * D-87: a transaction key (an `externalRef`, or an authorization id where
+   * there is no external reference) to leave out of every window's `count`.
+   * The `amount` is never affected.
+   *
+   * Only one caller needs it: `handleIssuingAuthorizationRequest` on an
+   * incremental request (D-79), where the transaction being decided is
+   * already in the ledger and already counted. See `rollUpWindow`'s own
+   * `RollUpOptions` for why count cannot use the delta the amount does.
+   */
+  excludeTransactionFromCount?: string;
+}
+
 export interface RecordRefundInput {
   authorizationId: string;
   /**
@@ -367,6 +381,7 @@ export interface AuthorizationRepository {
     mandateId: string,
     accounting: Accounting,
     now: Date,
+    options?: SpendSnapshotOptions,
   ): Promise<SpendSnapshot>;
 
   findByIdempotencyKey(

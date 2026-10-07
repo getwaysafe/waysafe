@@ -552,21 +552,25 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
   });
 
   // =======================================================================
-  describe("R3 — max_count forgets settled transactions (review: R6)", () => {
-    it("a count limit of 1 blocks a second pending payment, then permits one after capture", async () => {
-      const f = await fixture(
-        policyFrom({
-          cumulative_limits: [
-            { window: "mandate", max_amount: toMinorUnits(100, "USD"), max_count: 1 },
-          ],
-        }),
-      );
+  describe("R3 — closed by D-87: max_count counts authorized transactions (review: R6)", () => {
+    const countPolicy = () =>
+      policyFrom({
+        cumulative_limits: [
+          { window: "mandate", max_amount: toMinorUnits(1000, "USD"), max_count: 1 },
+        ],
+      });
 
+    it("a pending payment consumes the only slot", async () => {
+      const f = await fixture(countPolicy());
+      expect((await decided(f, 1)).decision).toBe(Decision.ALLOW);
+      expect((await spend(f)).mandate.count).toBe(1);
+      expect((await decided(f, 1)).decision).toBe(Decision.DENY);
+    });
+
+    it("a CAPTURED payment still consumes it -- settling does not free the slot", async () => {
+      const f = await fixture(countPolicy());
       const first = await decided(f, 1);
       expect(first.decision).toBe(Decision.ALLOW);
-
-      // Positive control: while the first is pending, the count rule bites.
-      expect((await decided(f, 1)).decision).toBe(Decision.DENY);
 
       await f.authorization.withMandateLock(f.mandateId, () =>
         f.authorization.recordExecution(
@@ -581,14 +585,129 @@ describe.skipIf(!reachable)(SUITE, { timeout: 60_000 }, () => {
         ),
       );
 
-      // `count` is computed as reservations minus releases, so settling the
-      // first payment returns the count to zero.
+      // Settlement writes RELEASE(-1) + CAPTURE(+1): the amount is right,
+      // and before D-87 the COUNT went back to zero because it was computed
+      // as reservations minus releases. One settled payment is still one
+      // payment.
       const snapshot = await spend(f);
-      expect(snapshot.mandate.count).toBe(0);
       expect(snapshot.mandate.amount).toBe(toMinorUnits(1, "USD"));
+      expect(snapshot.mandate.count).toBe(1); // was 0
 
-      // So a second payment is allowed, under a limit of one.
+      const second = await decided(f, 1);
+      expect(second.decision).toBe(Decision.DENY); // was ALLOW
+      expect(second.reasons.map((r) => r.code)).toContain(ReasonCode.DENY_VELOCITY_LIMIT_EXCEEDED);
+    });
+
+    it("a REVERSED authorization frees the slot -- released without capture", async () => {
+      const f = await fixture(countPolicy());
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      const approved = await handleIssuingAuthorizationRequest(
+        f.repos,
+        new StripeIssuingAdapter(),
+        card,
+        NOW,
+      );
+      expect(approved.response.approved).toBe(true);
+      expect((await spend(f)).mandate.count).toBe(1);
+
+      await handleStripeWebhook(
+        f.repos,
+        stripeEvent("issuing_authorization.updated", {
+          ...card,
+          status: "reversed",
+          approved: true,
+          amount: 0,
+        }),
+        NOW,
+      );
+
+      // Nothing moved, so nothing is counted.
+      expect((await spend(f)).mandate.count).toBe(0);
       expect((await decided(f, 1)).decision).toBe(Decision.ALLOW);
+    });
+
+    it("a settled card payment stays counted after capture", async () => {
+      const f = await fixture(countPolicy());
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
+
+      await handleStripeWebhook(
+        f.repos,
+        stripeEvent("issuing_authorization.updated", {
+          ...card,
+          status: "closed",
+          approved: true,
+          amount: toMinorUnits(10, "USD"),
+          currency: "usd",
+        }),
+        NOW,
+      );
+
+      expect((await spend(f)).mandate.count).toBe(1);
+      expect((await decided(f, 1)).decision).toBe(Decision.DENY);
+    });
+
+    it("a force capture with no prior reservation is counted (D-84)", async () => {
+      // A capture that never had a hold is still an authorized-transaction
+      // slot consumed: it is the one case "reservations minus releases"
+      // could never see at all, since there is no reservation to count.
+      const f = await fixture(countPolicy());
+      const instrument = await f.repos.instruments.createInstrument(
+        {
+          organizationId: f.org,
+          mandateId: f.mandateId,
+          rail: "stripe_issuing",
+          externalRef: `ic_r3_${randomUUID().slice(0, 8)}`,
+        },
+        NOW,
+      );
+      const forced = await handleStripeWebhook(
+        f.repos,
+        stripeEvent("issuing_transaction.created", {
+          id: `ipi_r3_${randomUUID().slice(0, 12)}`,
+          object: "issuing.transaction",
+          amount: -toMinorUnits(7, "USD"),
+          currency: "usd",
+          type: "capture",
+          authorization: null,
+          card: { id: "ic_x", metadata: { waysafe_instrument_id: instrument.id } },
+          merchant_data: { category: "fuel", category_code: "5541", name: "FORCED", network_id: "f_mid" },
+        } as unknown as Stripe.Issuing.Transaction),
+        NOW,
+      );
+      expect(forced).toMatchObject({ kind: "applied", effect: "unauthorized_settlement" });
+
+      expect((await spend(f)).mandate.count).toBe(1);
+      expect((await decided(f, 1)).decision).toBe(Decision.DENY);
+    });
+
+    it("SELF-FOUND: an INCREMENTED authorization is one transaction, not two", async () => {
+      // Not in the review. D-79 gives each increment of one external
+      // authorization its own Authorization row, each with its own
+      // RESERVATION. Counting rows would make a single incremented card
+      // payment consume two slots of max_count. The counting unit is the
+      // external authorization, so it consumes one.
+      const f = await fixture(countPolicy());
+      const { authorization: card } = await cardFor(f, toMinorUnits(10, "USD"));
+      await handleIssuingAuthorizationRequest(f.repos, new StripeIssuingAdapter(), card, NOW);
+
+      const incremented = await handleIssuingAuthorizationRequest(
+        f.repos,
+        new StripeIssuingAdapter(),
+        {
+          ...card,
+          pending_request: { ...card.pending_request, amount: toMinorUnits(25, "USD") },
+          request_history: [{ amount: toMinorUnits(10, "USD"), approved: true }],
+        } as never,
+        NOW,
+      );
+      expect(incremented.response.approved).toBe(true);
+
+      const rows = await prisma.authorization.findMany({
+        where: { mandateId: f.mandateId, externalRef: card.id },
+      });
+      expect(rows.length).toBe(2); // two revisions...
+      expect((await spend(f)).mandate.count).toBe(1); // ...one transaction
     });
   });
 

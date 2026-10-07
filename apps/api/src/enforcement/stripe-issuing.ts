@@ -591,7 +591,15 @@ export async function handleIssuingAuthorizationRequest(
       result = { decision: Decision.DENY, reasons: underLockGate.reasons };
     } else {
       const mandate = underLockGate.mandate;
-      const spend = await repos.authorization.getSpendSnapshot(mandateId, mandate.policy.accounting, now);
+      // D-87: on an increment, this external authorization is already in
+      // the ledger and already counted, so it must not consume a second
+      // max_count slot -- evaluate()'s own +1 is the one slot it gets.
+      const spend = await repos.authorization.getSpendSnapshot(
+        mandateId,
+        mandate.policy.accounting,
+        now,
+        isIncrement ? { excludeTransactionFromCount: authorization.id } : {},
+      );
 
       // D-79: on an increment, the engine decides the DELTA, because the
       // prior hold is already in the ledger SUM the snapshot reads. The

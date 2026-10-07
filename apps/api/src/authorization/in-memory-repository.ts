@@ -18,6 +18,8 @@ import {
   resolveMerchant,
   verifiedMerchantKeys,
   windowKeys,
+  rollUpWindow,
+  type LedgerRollupEntry,
   type Accounting,
   type Decision,
   type AgentStatus,
@@ -52,6 +54,7 @@ import {
   type ResolveMandateInput,
   type SaveAuthorizationInput,
   type StoredAuthorization,
+  type SpendSnapshotOptions,
 } from "./types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Mutex } from "../util/mutex.js";
@@ -336,23 +339,22 @@ export class InMemoryAuthorizationRepository implements AuthorizationRepository 
     mandateId: string,
     accounting: Accounting,
     now: Date,
+    options: SpendSnapshotOptions = {},
   ): Promise<SpendSnapshot> {
     const keys = windowKeys(now, accounting.timezone);
     const entries = this.ledgerByMandate.get(mandateId) ?? [];
 
-    const sumWhere = (matches: (e: LedgerEntryRow) => boolean) => {
-      let amount = 0;
-      let reservations = 0;
-      let releases = 0;
-      for (const entry of entries) {
-        if (!matches(entry)) continue;
-        if (entry.type === "CREDIT" && !accounting.refunds_credit_budget) continue;
-        amount += entry.amount;
-        if (entry.type === "RESERVATION") reservations += 1;
-        if (entry.type === "RELEASE") releases += 1;
-      }
-      return { amount, count: Math.max(0, reservations - releases) };
-    };
+    // D-87: same counting unit as the Prisma repository -- see rollUpWindow.
+    const rollupEntry = (e: LedgerEntryRow): LedgerRollupEntry => ({
+      transactionKey: this.authorizations.get(e.authorizationId)?.external_ref ?? e.authorizationId,
+      type: e.type,
+      amount: e.amount,
+    });
+
+    const sumWhere = (matches: (e: LedgerEntryRow) => boolean) =>
+      rollUpWindow(entries.filter(matches).map(rollupEntry), accounting, {
+        excludeFromCount: options.excludeTransactionFromCount,
+      });
 
     return {
       day: sumWhere((e) => e.dayKey === keys.day),
