@@ -60,6 +60,11 @@ video {
 
 .mono {
   font-family: var(--font-mono);
+  /* A 66-character transaction hash has no break opportunity in it, so at
+     390px it pushed /proof's page 190px wide -- found by measuring, not by
+     looking. `anywhere` rather than `break-word` so the hash also stops
+     counting toward its container's min-content width. */
+  overflow-wrap: anywhere;
 }
 
 .kicker {

@@ -8,7 +8,8 @@
     "prebuild": "node scripts/generate-version.mjs",
     "build": "next build",
     "postbuild": "cp vercel.json out/vercel.json",
-    "clean": "rm -rf .next out"
+    "clean": "rm -rf .next out",
+    "diagrams": "node scripts/render-diagrams.mjs"
   },
   "dependencies": {
     "next": "^16.0.0",
@@ -16,6 +17,7 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^12.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0"
   }

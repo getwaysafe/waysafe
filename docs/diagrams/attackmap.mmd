@@ -1,0 +1,81 @@
+flowchart LR
+  classDef closed fill:#dcf2dc,stroke:#2e7d32,stroke-width:2px,color:#14321a
+  classDef open fill:#ffe6cc,stroke:#c75300,stroke-width:2px,color:#4a2200
+  classDef partial fill:#dceaf8,stroke:#1565c0,stroke-width:2px,color:#0c2b4d
+
+  S1["<b>1</b> Leaked agent key"]
+  S2["<b>2</b> Principal passkey"]
+  S3["<b>3</b> RCE on the API process"]
+  S4["<b>4</b> Database write access"]
+  S5["<b>5</b> Compromised dependency"]
+  S6["<b>6</b> Hostile merchant"]
+  S7["<b>7</b> Replayed rail webhook"]
+  S8["<b>8</b> Forged rail webhook"]
+  S9["<b>9</b> Leaked org credential"]
+  S10["<b>10</b> Prompt injection into the compiler"]
+
+  C1["CLOSED — route auth is default-deny<br/>by credential tier<br/>D-64, D-65"]:::closed
+  C2["CLOSED — a step-up needs a separate<br/>approver mandate, and costs both budgets<br/>D-62, D-71, D-73"]:::closed
+  C3["CLOSED — challenge purpose is binding.<br/>A second passkey needs a grant<br/>D-66, D-67"]:::closed
+  C4["CLOSED — merchant trust is per identifier.<br/>The directory is exact-match<br/>D-69, D-70"]:::closed
+  C5["CLOSED — the asset registry owns decimals<br/>D-68"]:::closed
+  C6["CLOSED — a replay returns the original.<br/>A unique index decides the race<br/>D-74"]:::closed
+  C7["CLOSED — ledger rows carry the window<br/>the authorization was decided in<br/>D-72"]:::closed
+  C8["CLOSED — HMAC signature checked<br/>on every rail webhook<br/>D-32"]:::closed
+  C9["CLOSED — no model is ever in the<br/>authorization path, and the compiler<br/>asks rather than inventing a limit<br/>non-negotiable 1 and 8"]:::closed
+  C12["CLOSED — the fetched URL is policy-checked<br/>and the connection pinned to the<br/>address that was validated<br/>D-75"]:::closed
+  C13["CLOSED — decision, hold and evidence event<br/>are one transaction<br/>D-76, D-90"]:::closed
+  C14["CLOSED — an agent reaches only its own<br/>authorizations, and never chooses<br/>the instrument at execution<br/>D-78"]:::closed
+  C15["CLOSED — an increment is a new decision<br/>on the delta; the ceiling is checked<br/>against the aggregate<br/>D-79"]:::closed
+  C16["CLOSED — the whole card lifecycle:<br/>reversal and expiry release, a capture<br/>records what SETTLED, a refund total<br/>credits only the delta<br/>D-81, D-82, D-83"]:::closed
+  C17["CLOSED — a purpose per operation.<br/>A policy signature cannot mint<br/>an enrolment grant<br/>D-86"]:::closed
+  C18["CLOSED — a nonzero transfer is never $0.00,<br/>and max_count keeps counting<br/>a payment after it settles<br/>D-87, D-88"]:::closed
+  C10["PARTIAL — the chain is signed<br/>and hash-linked, and every decision<br/>is now in it<br/>D-26, D-53, D-90"]:::partial
+  C19["PARTIAL — a force capture or overcapture<br/>cannot be declined, because nobody asks.<br/>It is charged against the cap and flagged<br/>with what the engine WOULD have decided<br/>D-84"]:::partial
+  C11["PARTIAL — the principal signs one<br/>policy hash, so an injected policy<br/>still needs a human ceremony<br/>D-20"]:::partial
+
+  O1["OPEN — the co-signer key alone completes<br/>any session-signed transaction.<br/>A Safe Guard is named, not built<br/>D-56, D-59"]:::open
+  O2["OPEN — the chain has no external anchor,<br/>so completeness is unprovable<br/>OQ-8"]:::open
+  O3["OPEN — the auth challenge is predictable;<br/>replay is bounded only by signCount<br/>OQ-12"]:::open
+  O4["OPEN — on x402, VERIFIED means the host<br/>asked, not that it is who it claims<br/>OQ-13"]:::open
+  O5["OPEN — DB write access mints credentials<br/>and biases the spend SUM<br/>D-54, no test"]:::open
+  O6["OPEN — a packages/core dependency<br/>can alter evaluate() itself<br/>D-43, no test"]:::open
+  O7["OPEN — no kill switch for the<br/>Safe co-signer key<br/>D-58"]:::open
+  O10["OPEN — an org credential can enrol a<br/>principal's FIRST passkey and activate a<br/>mandate unaided. D-66's grant covers<br/>only a second one"]:::open
+  O11["OPEN — the principal reads a summary,<br/>not the policy hash. Nothing proves the<br/>human understood what they signed"]:::open
+  O12["OPEN — a step-up EXPIRY releases a<br/>reservation with nothing in the<br/>signed chain to say so<br/>OQ-14"]:::open
+  O13["OPEN — no rate limiter on any route.<br/>A leaked key is bounded by policy,<br/>never by volume"]:::open
+
+  S1 --> C1
+  S1 --> C2
+  S1 --> C4
+  S1 --> C12
+  S1 --> C14
+  S1 --> O13
+  S2 --> C3
+  S2 --> C17
+  S2 --> O3
+  S3 --> C10
+  S3 --> O1
+  S3 --> O7
+  S4 --> O5
+  S4 --> C10
+  S5 --> O6
+  S6 --> C5
+  S6 --> C4
+  S6 --> C18
+  S6 --> O4
+  S7 --> C6
+  S7 --> C7
+  S7 --> C13
+  S7 --> C15
+  S7 --> C16
+  S7 --> C19
+  S8 --> C8
+  S9 --> C1
+  S9 --> O10
+  S10 --> C9
+  S10 --> C11
+  S10 --> O11
+  C10 --> O2
+  C13 --> O12

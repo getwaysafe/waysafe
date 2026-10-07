@@ -125,8 +125,13 @@ just unit-tested:**
   published key directory so a rotation doesn't invalidate historical
   signatures (D-53), and independently verifiable with nothing but
   `node:crypto` and a pinned public key.
-- Stripe Issuing enforcement — a card's real-time authorization webhook asks
-  Waysafe before the network approves a charge, in test mode.
+- Stripe Issuing enforcement — every authorization the network presents for
+  real-time approval is decided against the mandate, in test mode, and the
+  charge is declined unless that decision is an ALLOW. A settlement the
+  network clears without asking (a force capture) or above what was approved
+  (an overcapture) cannot be declined, because nobody is asked: it is
+  recorded in the ledger, charged against the cap, flagged on the receipt,
+  and carries what the engine would have decided had it been asked (D-84).
 - The x402 / Safe co-signer — a genuine on-chain 2-of-2 multisig on Polygon
   Amoy. The three bypass cases (a stolen session key alone, a forged
   co-signature, a genuine signature redirected to a different payment) are
@@ -195,11 +200,21 @@ docs/             THREAT-MODEL.md and other reference docs checked into the repo
 See [`SECURITY.md`](SECURITY.md) for the disclosure policy and known open
 issues.
 
-An independent adversarial review was run against commit `387958a` in
-September 2026; all six findings are closed, along with five more the
-remediation itself turned up — see
-[the findings section](SECURITY.md#findings-from-adversarial-review-2026-09-27)
-for each one, the attack it enabled, and where its test lives.
+**Two independent adversarial reviews, eighteen findings fixed.** The first
+ran against commit `387958a`; the second, against `1caf39b`, reported eleven
+more, of which ten were real and one was wrong. Every fix shipped as its own
+commit with the attack written as a passing test against the unfixed code
+first, and most with a negative control proving the test would catch a
+regression rather than agreeing with the implementation.
+[`SECURITY.md`](SECURITY.md) lists each finding, the decision-log entry that
+closed it, the self-found extensions, what the remediation itself got wrong,
+and what is still open.
+
+[`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) is the standing document: five
+diagrams, ten attack surfaces each with its control and its residual risk, and
+what we do not know. The diagrams have one source in
+[`docs/diagrams/`](docs/diagrams/), and a test keeps the document's copies and
+the site's rendered SVGs identical to it.
 
 ## License
 

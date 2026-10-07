@@ -30,7 +30,7 @@ export const POSTGRES_GATED_FILES = [
 
 export default defineConfig({
   test: {
-    include: ["packages/**/*.test.ts", "apps/**/*.test.ts", "apps/**/*.test.tsx"],
+    include: ["packages/**/*.test.ts", "apps/**/*.test.ts", "apps/**/*.test.tsx", "docs/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**", ...POSTGRES_GATED_FILES],
     environment: "node",
     globalSetup: ["./vitest.global-setup.ts"],

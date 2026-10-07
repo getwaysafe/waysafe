@@ -17,7 +17,7 @@ Waysafe decides and never holds funds. Both rails ask Waysafe before money moves
 ```mermaid
 flowchart LR
   P["<b>Principal</b><br/>holds a passkey"]
-  A["<b>Agent</b> (untrusted)<br/>holds an API key + one Safe key"]
+  A["<b>Agent</b> (untrusted)<br/>holds an API key<br/>+ one Safe key"]
   M["<b>Merchant</b>"]
 
   subgraph W["<b>Waysafe</b> — decides, never holds funds"]
@@ -25,25 +25,25 @@ flowchart LR
     CH["<b>Evidence chain</b><br/>signed and hash-linked"]
   end
 
-  ST["<b>Stripe</b><br/>card rail"]
-  SF["<b>Safe</b> — 2 signatures required<br/>agent holds one, Waysafe the other"]
+  ST["<b>Stripe</b><br/>card rail<br/><i>asks before any charge</i>"]
+  SF["<b>Safe</b> — 2 signatures required<br/>agent holds one, Waysafe the other<br/><i>cannot settle on one</i>"]
 
-  P -- "signs one policy, once" --> EV
-  ST -- "asks before any card charge" --> EV
-  A -- "asks before any on-chain payment" --> EV
-  A -. "preflight only, never a control" .-> EV
-  EV -- "approve or decline, under 2s" --> ST
-  EV -- "second signature, only on approve" --> SF
-  EV --> CH
+  P -- "signs the policy" --> EV
+  ST -- "asks first" --> EV
+  A -- "asks first" --> EV
+  A -. "preflight only" .-> EV
+  EV -- "decision" --> ST
+  EV -- "2nd signature" --> SF
+  EV -- "every decision" --> CH
   ST -- "settles" --> M
   SF -- "settles" --> M
 ```
 
 Appendix A lists each key, what it signs, and its blast radius.
 
-### 0.2 The card decision path
+### 0.2 The card lifecycle
 
-Stripe asks, Waysafe answers inside about two seconds, and one transaction covers the decision, the ledger hold and the evidence event.
+Stripe asks, Waysafe answers inside about two seconds, and one transaction covers the decision, the ledger hold and the evidence event. Everything after the decision is the part that was missing until D-81 through D-84: a card authorization is not one event, and a hold that is never released is a cap that never recovers.
 
 ```mermaid
 sequenceDiagram
@@ -55,31 +55,40 @@ sequenceDiagram
     S->>W: issuing_authorization.request
     Note over S,W: Stripe waits about 2s. On timeout or a malformed reply<br/>Stripe declines on its own. That is an account setting,<br/>not something this code enforces.
 
-    W->>DB: findByExternalRef — replay check (D-74)
-    Note over W,DB: This lookup is OUTSIDE the lock, so it is only a fast path.<br/>Two concurrent deliveries both read "not seen".
-    alt already decided
+    W->>DB: findByExternalRefAndRevision — replay check (D-74, D-79)
+    Note over W,DB: Keyed on the revision, not the id alone: Stripe reuses one<br/>authorization id for incremental requests, so the id by itself<br/>cannot tell a redelivery from a request for more money (D-79).
+    alt identical redelivery
         W-->>S: replay the original decision, no new row, no new hold
-    else first delivery
+    else first request, or an INCREMENT
         rect rgba(128,128,128,0.12)
             Note over W,DB: ONE TRANSACTION — mandate row lock held throughout (D-4, D-15)
-            W->>DB: SELECT mandate FOR UPDATE
+            W->>DB: SELECT mandate FOR UPDATE, then re-read its authority (D-80)
             W->>DB: getSpendSnapshot — a SUM over the ledger, never a counter
-            W->>W: evaluate(policy, action, merchant, spend)
-            W->>DB: INSERT authorization + RESERVATION if ALLOW
-            Note over W,DB: The unique index on (mandateId, externalRef) rejects the<br/>loser of a concurrent race HERE, on insert. That index is<br/>the real control. It rolls back, so the loser holds nothing.
+            W->>W: evaluate() — on an increment, on the DELTA
+            Note over W,W: The per-transaction ceiling is checked against the<br/>AGGREGATE, or ten $10 increments would each pass a<br/>$10 cap while totalling $100 (D-79).
+            W->>DB: INSERT authorization + RESERVATION for the delta if ALLOW
             W->>DB: append signed evidence event (D-76)
-            Note over W,DB: Inside the same transaction since D-76. All three commit<br/>or roll back together. A failed append declines the<br/>authorization instead of leaving a hold with no record.
-        end
-        opt insert rejected by the index
-            W-->>S: replay the winner's decision
+            Note over W,DB: All three commit or roll back together. A failed append<br/>declines the authorization instead of leaving a hold<br/>with no record.
         end
     end
 
     W-->>S: approved true or false, plus reason_codes
 
-    Note over S,W: Later, asynchronously
-    S->>W: capture webhook
-    W->>DB: RELEASE the hold and CAPTURE, both stamped with the<br/>window the authorization was decided in (D-72)
+    Note over S,W: Later, asynchronously — and this is where money actually settles
+    alt reversed or expired (issuing_authorization.updated)
+        S->>W: status reversed / expired
+        W->>DB: RELEASE the aggregate hold, exactly once (D-83)
+        Note over W,DB: Nothing moved, so the cap recovers. Before D-83 the hold<br/>survived forever and the cardholder's next genuine<br/>payment was declined by a phantom.
+    else closed and approved — a settlement
+        S->>W: status closed, amount = what SETTLED
+        W->>DB: RELEASE the hold, CAPTURE the SETTLED amount (D-83)
+        Note over W,DB: A partial capture records $2.50 of a $10 hold, not $10.<br/>Both rows carry the window the authorization was<br/>decided in, never the window the webhook arrived in (D-72).
+    end
+
+    Note over S,W: And the two Waysafe is never asked about
+    S->>W: issuing_transaction.created with no authorization, or above one
+    W->>DB: CAPTURE it anyway, and flag the receipt (D-84)
+    Note over W,DB: A force capture or an overcapture cannot be declined —<br/>nobody asked. It is charged against the cap, recorded as<br/>DENY on an EXECUTED row, and carries would_have_decided:<br/>what the engine returns when it is put the question late.
 ```
 
 ### 0.3 The on-chain decision path
@@ -98,7 +107,7 @@ sequenceDiagram
     A->>W: resource_url + instrument_id + session signature
     Note over A,W: The agent CHOOSES the URL. Waysafe will not take payment<br/>requirements from the caller (D-40), only a URL to fetch itself.<br/>That is what makes the result rail-attested, and it is also<br/>the root of OQ-13.
     W->>R: GET resource_url
-    Note over W,R: Fetched under an explicit policy (D-75): https only, public<br/>addresses only, one DNS resolution with the connection pinned<br/>to it, redirects re-validated, time and size capped.
+    Note over W,R: Fetched under an explicit policy (D-75): https only, public<br/>addresses only, one DNS resolution with the connection pinned<br/>to it, redirects re-validated, size capped. ONE absolute deadline<br/>spans DNS, connect, every hop and the body read (D-89) — a<br/>slow-drip body held a 60s budget open for as long as it liked.
     R-->>W: HTTP 402 — payTo, token address, amount, network
 
     W->>REG: resolveAsset(network, token address)
@@ -106,7 +115,7 @@ sequenceDiagram
         W-->>A: DENY — asset not in registry (D-68)
     else known asset
         REG-->>W: decimals from the registry, never from the merchant
-        Note over W,REG: D-68: a merchant that declared the wrong decimals had<br/>5,000 USDC evaluated as 0.00 and settled for real.
+        Note over W,REG: D-68: a merchant that declared the wrong decimals had<br/>5,000 USDC evaluated as 0.00 and settled for real.<br/>D-88: atomic units round UP to the next cent, so a<br/>sub-cent transfer is never recorded as $0.00 either.<br/>The co-signature still authorizes the exact atomic amount.
         W->>W: evaluate(policy, action, merchant, spend)
         alt not ALLOW
             W-->>A: DENY or STEP_UP, and no co-signature
@@ -174,7 +183,7 @@ flowchart TB
 
 ### 0.5 Attack map
 
-Ten surfaces, their controls, and what is still open. Status is in the text of each box, so colour is not the only signal.
+Ten surfaces, their controls, and what is still open. Status is in the text of each box, so colour is not the only signal. The five boxes added after the second independent review are C14 through C18.
 
 ```mermaid
 flowchart LR
@@ -203,8 +212,14 @@ flowchart LR
   C8["CLOSED — HMAC signature checked<br/>on every rail webhook<br/>D-32"]:::closed
   C9["CLOSED — no model is ever in the<br/>authorization path, and the compiler<br/>asks rather than inventing a limit<br/>non-negotiable 1 and 8"]:::closed
   C12["CLOSED — the fetched URL is policy-checked<br/>and the connection pinned to the<br/>address that was validated<br/>D-75"]:::closed
-  C13["CLOSED — decision, hold and evidence event<br/>are one transaction<br/>D-76"]:::closed
-  C10["PARTIAL — the chain is signed<br/>and hash-linked<br/>D-26, D-53"]:::partial
+  C13["CLOSED — decision, hold and evidence event<br/>are one transaction<br/>D-76, D-90"]:::closed
+  C14["CLOSED — an agent reaches only its own<br/>authorizations, and never chooses<br/>the instrument at execution<br/>D-78"]:::closed
+  C15["CLOSED — an increment is a new decision<br/>on the delta; the ceiling is checked<br/>against the aggregate<br/>D-79"]:::closed
+  C16["CLOSED — the whole card lifecycle:<br/>reversal and expiry release, a capture<br/>records what SETTLED, a refund total<br/>credits only the delta<br/>D-81, D-82, D-83"]:::closed
+  C17["CLOSED — a purpose per operation.<br/>A policy signature cannot mint<br/>an enrolment grant<br/>D-86"]:::closed
+  C18["CLOSED — a nonzero transfer is never $0.00,<br/>and max_count keeps counting<br/>a payment after it settles<br/>D-87, D-88"]:::closed
+  C10["PARTIAL — the chain is signed<br/>and hash-linked, and every decision<br/>is now in it<br/>D-26, D-53, D-90"]:::partial
+  C19["PARTIAL — a force capture or overcapture<br/>cannot be declined, because nobody asks.<br/>It is charged against the cap and flagged<br/>with what the engine WOULD have decided<br/>D-84"]:::partial
   C11["PARTIAL — the principal signs one<br/>policy hash, so an injected policy<br/>still needs a human ceremony<br/>D-20"]:::partial
 
   O1["OPEN — the co-signer key alone completes<br/>any session-signed transaction.<br/>A Safe Guard is named, not built<br/>D-56, D-59"]:::open
@@ -216,12 +231,17 @@ flowchart LR
   O7["OPEN — no kill switch for the<br/>Safe co-signer key<br/>D-58"]:::open
   O10["OPEN — an org credential can enrol a<br/>principal's FIRST passkey and activate a<br/>mandate unaided. D-66's grant covers<br/>only a second one"]:::open
   O11["OPEN — the principal reads a summary,<br/>not the policy hash. Nothing proves the<br/>human understood what they signed"]:::open
+  O12["OPEN — a step-up EXPIRY releases a<br/>reservation with nothing in the<br/>signed chain to say so<br/>OQ-14"]:::open
+  O13["OPEN — no rate limiter on any route.<br/>A leaked key is bounded by policy,<br/>never by volume"]:::open
 
   S1 --> C1
   S1 --> C2
   S1 --> C4
   S1 --> C12
+  S1 --> C14
+  S1 --> O13
   S2 --> C3
+  S2 --> C17
   S2 --> O3
   S3 --> C10
   S3 --> O1
@@ -231,10 +251,14 @@ flowchart LR
   S5 --> O6
   S6 --> C5
   S6 --> C4
+  S6 --> C18
   S6 --> O4
   S7 --> C6
   S7 --> C7
   S7 --> C13
+  S7 --> C15
+  S7 --> C16
+  S7 --> C19
   S8 --> C8
   S9 --> C1
   S9 --> O10
@@ -242,6 +266,7 @@ flowchart LR
   S10 --> C11
   S10 --> O11
   C10 --> O2
+  C13 --> O12
 ```
 
 ---
@@ -254,11 +279,13 @@ flowchart LR
 
 **The control.** Route authorization is default-deny by credential tier: every route is org-credential-only unless explicitly listed as agent-accessible. Four more routes with the same shape were closed in the same inversion, the worst being mandate creation, which had let an agent write itself a policy with any ceiling. Resolving a step-up requires a different, principal-named approver mandate's own credential, and an approval now costs budget on both mandates.
 
-**D-numbers.** D-18, D-62, D-64, D-65, D-71, D-73. Reversed once: D-59 recorded this as closed by D-62, and D-64's finding reopened it.
+**D-numbers.** D-18, D-62, D-64, D-65, D-71, D-73, D-78. Reversed once: D-59 recorded this as closed by D-62, and D-64's finding reopened it.
 
-**Tests.** `apps/api/src/server.adversarial.test.ts` (eight attack cases plus a structural guard that enumerates every registered route), `apps/api/src/authorization/service.test.ts`, `apps/api/src/authorization/budget.adversarial.test.ts` (gated on `DATABASE_URL`).
+**Tests.** `apps/api/src/server.adversarial.test.ts` (eight attack cases plus a structural guard that enumerates every registered route), `apps/api/src/authorization/service.test.ts`, `apps/api/src/authorization/budget.adversarial.test.ts` (gated on `DATABASE_URL`), `apps/api/src/review2.adversarial.test.ts` R4 for the object-authorization case (gated).
 
-**Residual risk.** Authority now depends on two credentials, which reduces blast radius only if they are held with genuinely separate custody, and nothing in this codebase enforces that.
+**Blast radius, after D-78.** One leaked agent key reaches that agent's own authorizations and nothing else. Until D-78 the route tier was the only check, so any agent credential in the organization could list, read and execute *another* agent's authorization — and choose the payment instrument at execution, which is how the second independent review spent an authorization it did not own. List and read are now scoped to the acting agent, and execution resolves the instrument from the authorization's own declared `payment_method_ref` rather than from the request body. The step-up route deliberately keeps no ownership check, because D-62 requires the resolver to be a *different* agent.
+
+**Residual risk.** Authority now depends on two credentials, which reduces blast radius only if they are held with genuinely separate custody, and nothing in this codebase enforces that. There is also no rate limiter on any route, so a leaked key is bounded by policy rather than by volume.
 
 ---
 
@@ -270,11 +297,13 @@ flowchart LR
 
 **The control.** Every challenge records the purpose it was issued for, and a caller's mode is validated against it. A mismatch is a `400 challenge_purpose_mismatch`. Enrolling a second passkey for a principal that already has one requires a fresh prior authentication with an existing credential, as a single-use expiring grant bound to that principal and credential.
 
-**D-numbers.** D-20, D-29, D-66, D-67.
+**One purpose per operation, after D-86.** D-66 made the purpose binding but left one value, `AUTHENTICATION`, covering two different operations: activating a mandate, and proving control of an existing passkey in order to enrol another. Both completion paths accepted it, so the signature a principal gives to confirm a policy — the one ceremony a real principal is actually shown — could be redeemed at the passkey route to mint an enrolment grant for an authenticator of the attacker's choosing. The second independent review did exactly that. `MANDATE_AUTHENTICATION` and `REENROLLMENT_AUTHENTICATION` are now distinct, each accepted only by its own path; the legacy value is accepted nowhere.
 
-**Tests.** `apps/api/src/server.adversarial.test.ts`, `apps/api/src/webauthn/service.test.ts`, `apps/api/src/webauthn/webauthn.test.ts`.
+**D-numbers.** D-20, D-29, D-66, D-67, D-86.
 
-**Residual risk.** An org credential can still enrol a principal's *first* passkey and activate a mandate with no human present, because D-66's grant only covers a second one.
+**Tests.** `apps/api/src/server.adversarial.test.ts`, `apps/api/src/webauthn/service.test.ts`, `apps/api/src/webauthn/webauthn.test.ts`, `apps/api/src/review2.adversarial.test.ts` R5 (gated on `DATABASE_URL`) — including a control that the legitimate re-enrollment ceremony still works end to end.
+
+**Residual risk.** An org credential can still enrol a principal's *first* passkey and activate a mandate with no human present, because D-66's grant only covers a second one. OQ-12 — the mandate-activation challenge being derived from the public policy hash rather than being random — is **narrowed by D-86** to mandate activation alone: the re-enrollment challenge is random, and is now the only value its own path will take.
 
 **What WebAuthn still resists, and what it does not.** The private key never leaves the authenticator. Relying-party id and origin are checked on every ceremony, and production's RP ID is `dashboard.waysafe.ai` rather than the apex, so no other subdomain can ever present it (D-29). Two paths defeat that and neither is defended against here: a compromised script running at the legitimate origin, and device-level compromise that never goes through a browser ceremony.
 
@@ -332,9 +361,18 @@ flowchart LR
 
 **The control.** A replay returns the original decision, writes no new row and takes no new hold. Two concurrent deliveries are decided by a unique index on `(mandateId, externalRef)`, because the lookup alone sits outside the transaction. Every rail webhook's HMAC signature is verified against the raw request bytes, which is why the JSON parser preserves them.
 
-**D-numbers.** D-32, D-74, D-76.
+**The replay key was not enough, and the lifecycle was not modelled.** Four defects the second independent review found here, all now closed and drawn in §0.2:
 
-**Tests.** `apps/api/src/authorization/budget.adversarial.test.ts` cases (d), (d2), (d3) (gated on `DATABASE_URL`), `apps/api/src/enforcement/stripe-issuing.test.ts` for signature verification, `apps/api/src/enforcement/decision-atomicity.test.ts` for D-76.
+- **An incremental request replayed the original approval (D-79).** Stripe reuses one authorization id for increments, so keying the replay on the id alone meant $10 approved, then the same id re-presented at $10,000, approved. The key is now `(externalRef, revision)`, an increment is decided as a new decision on the delta, and the per-transaction ceiling is checked against the aggregate.
+- **A provider event was consumed before its effect committed (D-81).** The event row was written first, so a ledger failure left the event marked processed, the retry classified as a duplicate, and the budget uncredited. The event and its effect now commit together, and a failure is explicitly retryable rather than silently terminal.
+- **A cumulative refund total was applied as a delta (D-82).** Stripe's `amount_refunded` is a running total. $40 then $100 of one $100 charge produced a net ledger amount of **minus $40** — $140 of fresh budget out of a $100 charge. Only the delta is credited now.
+- **Reversals and expiries never released their hold, and a partial capture recorded the wrong amount (D-83).** Every Issuing update except `closed && approved` was ignored, so a reversed authorization held budget forever. A settlement now captures what settled, not what was authorized.
+
+**And two the rail never asks about (D-84).** A **force capture** is a settlement the network clears without ever presenting an authorization; an **overcapture** settles above what was approved. Neither can be declined, because nobody is asked. `issuing_transaction.created` was not handled at all, so both moved money with nothing in Waysafe recording it. Both are now charged against the cap and recorded as a `DENY` on an `EXECUTED` row — honest about both facts — carrying `DENY_SETTLED_WITHOUT_AUTHORIZATION` or `DENY_SETTLED_ABOVE_AUTHORIZATION`, the network's own `merchant_data` for the dispute, and `would_have_decided`: what the engine returns when the forced settlement is put to it after the fact.
+
+**D-numbers.** D-32, D-74, D-76, D-79, D-81, D-82, D-83, D-84.
+
+**Tests.** `apps/api/src/authorization/budget.adversarial.test.ts` cases (d), (d2), (d3) (gated on `DATABASE_URL`), `apps/api/src/enforcement/stripe-issuing.test.ts` for signature verification, `apps/api/src/enforcement/decision-atomicity.test.ts` for D-76, and `apps/api/src/review2.adversarial.test.ts` R1, R2, R6, R7 and R7b for the lifecycle (gated).
 
 **Residual risk.** The unique index excludes one historical literal, `iauth_demo_goodbeans_card_9001`, because six pre-D-74 demo rows carry it and are the subjects of published evidence events. A test keeps that literal unmintable (D-74 follow-up).
 
@@ -348,9 +386,13 @@ flowchart LR
 
 **What it does not prove.** Completeness. A party controlling both the database and the signing key can present a real, correctly-signed chain that omits events. An omission in the middle of a shown range leaves a sequence gap. An omission at the end is invisible, because hashing and signing only ever operate on the events presented.
 
-**D-numbers.** D-26, D-53, D-54, D-76. OQ-8 is the open question.
+**Every decision is now in it (D-90).** This was not true until D-90. The rail-initiated paths each appended decision evidence; `POST /v1/authorizations` persisted the authorization row and any reservation but appended nothing, so the second independent review found only `agent_key.verified` events for an ordinary ALLOW. ALLOW, DENY and STEP_UP now each append a signed `authorization.decided` event in the same transaction as the decision and its hold (D-76): with a failing evidence repository, the request is rejected and Postgres holds neither a row nor a hold.
 
-**Tests.** `packages/core/src/evidence.test.ts`, `packages/core/src/evidence-signing.test.ts`, `packages/sdk/src/index.test.ts` for independent verification without trusting the server, `apps/dashboard/src/lib/demo/browser-verify.test.ts` for the browser verifier. **No test covers tail omission**, which is a property of the construction rather than a behaviour to assert.
+Three paths still write no decision event, and only the first is a gap. A **step-up expiry** releases a reservation with nothing in the chain to say so (**OQ-14**). A request with **no mandate row** has no subject to attach an event to, and the attempt is still recorded as `agent_key.verified` or `agent_key.rejected`. An **idempotent replay** returns the original decision, whose event already exists.
+
+**D-numbers.** D-26, D-53, D-54, D-76, D-90. OQ-8 and OQ-14 are the open questions.
+
+**Tests.** `packages/core/src/evidence.test.ts`, `packages/core/src/evidence-signing.test.ts`, `packages/sdk/src/index.test.ts` for independent verification without trusting the server, `apps/dashboard/src/lib/demo/browser-verify.test.ts` for the browser verifier, `apps/api/src/review2.adversarial.test.ts` R12 for decision evidence on the agent path and its rollback property (gated on `DATABASE_URL`). **No test covers tail omission**, which is a property of the construction rather than a behaviour to assert.
 
 **Residual risk.** Closing the completeness gap needs an external anchor: a public chain, a transparency log, or an RFC 3161 timestamp. No such mechanism exists here.
 

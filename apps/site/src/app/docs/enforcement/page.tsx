@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { REPO_TREE } from "@/lib/docs-nav";
+import { Diagram } from "@/components/Diagram";
 
 export const metadata: Metadata = {
   title: "Enforcement — Waysafe docs",
@@ -83,7 +84,46 @@ export default function Page() {
             There is no channel to reach a person inside a two-second synchronous window.
           </li>
         </ul>
-        <div className="card" style={{ marginTop: 8, marginBottom: 16, background: "#fff8e1", borderColor: "#f0c96b" }}>
+        <h4 style={{ marginTop: 36, marginBottom: 8 }}>What the card rail does not stop</h4>
+        <p style={{ maxWidth: 700 }}>
+          Waysafe decides every authorization the network presents for real-time approval. A card
+          network can also clear a settlement it never presented — a <strong>force capture</strong>,
+          which happens when a terminal was offline at the time of sale — or settle{" "}
+          <strong>above</strong> the amount that was approved. Neither asks anyone first, so
+          neither can be declined.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          What Waysafe does instead is refuse to ignore them. On{" "}
+          <code>issuing_transaction.created</code>, the settled amount is written to the ledger and
+          charged against the mandate&rsquo;s cumulative cap, so the next genuine payment sees the
+          money as gone. The receipt is recorded as a <code>DENY</code> on a row that is{" "}
+          <code>EXECUTED</code> — honest about both facts — carrying{" "}
+          <code>DENY_SETTLED_WITHOUT_AUTHORIZATION</code> or{" "}
+          <code>DENY_SETTLED_ABOVE_AUTHORIZATION</code>, the network&rsquo;s own{" "}
+          <code>merchant_data</code> (trading name, city, terminal id), and{" "}
+          <code>would_have_decided</code> — what the engine returns when the forced settlement is
+          put to it after the fact. That last field is the dispute basis: it is the difference
+          between &ldquo;money moved&rdquo; and &ldquo;money moved that this mandate would have
+          refused.&rdquo;
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          A reversal or an expiry releases the hold; a partial capture records the{" "}
+          <em>settled</em> amount, not the authorized one; an incremental request is decided as a
+          new decision on the delta, with the per-transaction ceiling checked against the running
+          total. See <code>DECISIONS.md</code> D-79 and D-81 through D-84.
+        </p>
+        <Diagram
+          name="card"
+          alt={"The card lifecycle: Stripe asks, Waysafe decides and holds budget inside one transaction; an incremental request is a new decision on the delta; a reversal or expiry releases the hold; a settlement captures what actually settled. A force capture or overcapture cannot be declined because nobody asks, so it is recorded, charged against the cap, and flagged with what the engine would have decided."}
+          caption={
+            <>
+              The whole lifecycle, not just the decision. Source:{" "}
+              <code>docs/diagrams/card.mmd</code>.
+            </>
+          }
+        />
+
+        <div className="card" style={{ marginTop: 16, marginBottom: 16, background: "#fff8e1", borderColor: "#f0c96b" }}>
           <p style={{ margin: 0 }}>
             <strong>Status:</strong> this path runs the real engine against{" "}
             <strong>recorded</strong> Stripe Issuing authorization requests today — real payloads,
@@ -110,6 +150,15 @@ export default function Page() {
           only what its own fetch returned. An agent cannot get itself co-signed by asserting what
           it&rsquo;s paying for.
         </p>
+        <Diagram
+          name="x402"
+          alt={"On x402 Waysafe fetches the merchant's payment requirements itself rather than taking them from the agent, reads the asset's decimals from its own registry rather than the merchant's claim, and holds one of the Safe's two required signatures -- so a refused payment has nothing to submit on-chain."}
+          caption={
+            <>
+              Source: <code>docs/diagrams/x402.mmd</code>.
+            </>
+          }
+        />
         <p style={{ maxWidth: 700 }}>
           <strong>Merchant verification is weaker on this rail than on the card rail, and that is
           worth stating outright.</strong> On a card, identity is an acquirer-assigned merchant id
@@ -186,6 +235,22 @@ export default function Page() {
           have the agent&rsquo;s runtime call <code>POST /v1/enforcement/x402</code> with its session
           signature. The agent&rsquo;s cooperation buys it nothing it didn&rsquo;t already have: one
           signature against a threshold of two.
+        </p>
+
+        <h3 style={{ marginTop: 40 }}>What&rsquo;s still open</h3>
+        <p style={{ maxWidth: 700 }}>
+          Everything above is what these two rails enforce. What they do <em>not</em> — the
+          co-signer key with no rotation plan or kill switch, the evidence chain&rsquo;s lack of an
+          external anchor, OQ-13 above, and the rest — is inventoried surface by surface in{" "}
+          <a className="link" href={`${REPO_TREE}/docs/THREAT-MODEL.md`} target="_blank" rel="noopener noreferrer">
+            docs/THREAT-MODEL.md
+          </a>
+          , with an attack map of all ten and a status on each. Two independent adversarial reviews
+          have been run against this repository; the findings and fixes are in{" "}
+          <a className="link" href={`${REPO_TREE}/SECURITY.md`} target="_blank" rel="noopener noreferrer">
+            SECURITY.md
+          </a>
+          .
         </p>
     </>
   );

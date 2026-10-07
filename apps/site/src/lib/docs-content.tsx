@@ -168,6 +168,95 @@ export const METHODS: {
   },
 ];
 
+/**
+ * Every evidence event type this codebase appends, with what it attaches to.
+ *
+ * Transcribed, not imported: `apps/site` deliberately has no `@waysafe/api`
+ * dependency (D-50). `docs-content.test.ts` reads the real source files and
+ * asserts this list is exactly the set that exists, so a transcription that
+ * falls behind fails a test rather than publishing a stale dictionary.
+ */
+export const EVIDENCE_EVENT_TYPES: { type: string; subject: string; description: string }[] = [
+  {
+    type: "authorization.decided",
+    subject: "authorization",
+    description:
+      "An agent-path decision: POST /v1/authorizations returning ALLOW, DENY or STEP_UP. Carries the decision, its reason codes, the amount, the mandate version and policy hash it was decided against, the resolved merchant, whether it reserved budget, and any step-up expiry. Appended in the same transaction as the decision and its hold (D-76, D-90).",
+  },
+  {
+    type: "agent_key.verified",
+    subject: "agent",
+    description: "An agent credential was presented and matched the agent it claimed to be (D-18).",
+  },
+  {
+    type: "agent_key.rejected",
+    subject: "agent",
+    description:
+      "A credential was presented and did not match. Written unconditionally, before any decision, so an attempt against a mandate that does not exist still leaves a record.",
+  },
+  {
+    type: "step_up.approved",
+    subject: "mandate",
+    description:
+      "A pending step-up was approved by a separate, principal-named approver mandate's own credential. One event per mandate involved, so both chains show it (D-62, D-71).",
+  },
+  { type: "step_up.declined", subject: "mandate", description: "A pending step-up was declined. Any reservation is released." },
+  {
+    type: "step_up.resolution_rejected",
+    subject: "mandate",
+    description:
+      "A resolution attempt was refused — self-approval, an expired step-up, or a spending mandate that lapsed while the step-up was open (D-73, D-85).",
+  },
+  {
+    type: "execution.completed",
+    subject: "authorization",
+    description: "An authorized payment was executed on a rail. Carries the provider, its reference, and the fee it took.",
+  },
+  { type: "execution.rejected", subject: "authorization", description: "A payment adapter refused the execution. No capture is written." },
+  {
+    type: "refund.applied",
+    subject: "authorization",
+    description:
+      "A refund was credited back to the budget. The provider's cumulative refunded total arrives on every update; only the delta is credited (D-82).",
+  },
+  { type: "mandate.authenticated", subject: "mandate_version", description: "The principal authenticated this policy version over WebAuthn, freezing it (D-20)." },
+  { type: "mandate.authentication_rejected", subject: "mandate_version", description: "A WebAuthn ceremony for this version was refused — a purpose mismatch, a bad origin, or an unknown credential (D-66, D-86)." },
+  {
+    type: "mandate.card_issuing_terms_accepted",
+    subject: "mandate_version",
+    description:
+      "The cardholder's own acceptance of Stripe's Issuing terms, sourced only from a real authentication ceremony and never synthesized (D-38).",
+  },
+  { type: "enforcement.stripe_issuing.decision", subject: "authorization", description: "A card authorization decided in the network's real-time window (D-33)." },
+  {
+    type: "enforcement.stripe_issuing.released",
+    subject: "authorization",
+    description: "A reversed or expired card authorization's hold released, exactly once (D-83).",
+  },
+  {
+    type: "enforcement.stripe_issuing.captured",
+    subject: "authorization",
+    description: "A card authorization settled. Records the amount that SETTLED, which a partial capture makes smaller than the amount authorized (D-83).",
+  },
+  {
+    type: "enforcement.stripe_issuing.unauthorized_settlement",
+    subject: "authorization",
+    description:
+      "A force capture: the network cleared a settlement it never presented for approval. Carries the raw merchant_data a dispute needs and would_have_decided — what the engine returns when the settlement is put to it after the fact (D-84).",
+  },
+  {
+    type: "enforcement.stripe_issuing.over_authorized_settlement",
+    subject: "authorization",
+    description: "An overcapture: the settled amount exceeded what was approved. Same shape as above, with the excess named (D-84).",
+  },
+  {
+    type: "enforcement.x402.decision",
+    subject: "authorization",
+    description:
+      "An on-chain payment decided before any co-signature. Carries the atomic amount alongside the cents the budget was charged, since cents round up (D-88).",
+  },
+];
+
 export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP"; description: string }[] = [
   { code: "ALLOW_WITHIN_MANDATE", decision: "ALLOW", description: "The action is within the delegated authority." },
   {

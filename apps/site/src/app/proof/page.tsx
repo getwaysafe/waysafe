@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Diagram } from "@/components/Diagram";
 import proof from "@/data/proof.json";
 import { CopyButton } from "@/components/CopyButton";
 
@@ -190,8 +191,13 @@ export default function ProofPage() {
         <h2 style={{ marginTop: 48 }}>On-chain bypass rejections (Polygon Amoy, live)</h2>
         <p style={{ maxWidth: 720 }}>
           All three were broadcast to Polygon Amoy and reverted on-chain. Each row links to the
-          transaction.
+          transaction. The signature each one was missing is the second one in this path:
         </p>
+        <Diagram
+          name="x402"
+          alt={"On x402 Waysafe fetches the merchant's payment requirements itself rather than taking them from the agent, reads the asset's decimals from its own registry rather than the merchant's claim, and holds one of the Safe's two required signatures -- so a refused payment has nothing to submit on-chain."}
+          maxWidth={760}
+        />
         <div className="table-scroll">
           <table>
             <thead>

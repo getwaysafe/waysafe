@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { EVIDENCE_EXAMPLE } from "@/lib/docs-content";
 import { CopyButton } from "@/components/CopyButton";
+import { Diagram } from "@/components/Diagram";
 
 export const metadata: Metadata = {
   title: "Concepts — Waysafe docs",
@@ -16,6 +17,24 @@ export default function Page() {
           Four objects, in the order they come into existence. Skip this if you just ran the
           quickstart above — you already saw all four.
         </p>
+
+        <Diagram
+          name="context"
+          alt={"Waysafe sits between the principal who signs a policy and the two payment rails that settle: Stripe asks it before any card charge, and the Safe cannot settle on one signature, so both rails reach the merchant only through a decision Waysafe made. The agent's own call to Waysafe is a preflight, never a control."}
+          caption="Who holds which key, and who asks whom."
+        />
+
+        <Diagram
+          name="trust"
+          alt={"Anything an agent asserts -- a merchant name, a PSP account id, a payee address, which resource URL to fetch -- caps at STEP_UP rather than producing ALLOW, and the asset decimals a merchant declares are overridden by Waysafe's own registry. Neither an agent nor a merchant can forge an evidence signature, raise a limit, or turn its own STEP_UP into an ALLOW."}
+          caption={
+            <>
+              What each party can assert, and what that assertion cannot produce. The rule behind
+              every row: trust comes from <em>who attested</em> an identifier, never from which
+              field it arrived in.
+            </>
+          }
+        />
         <p style={{ maxWidth: 700 }}>
           <strong>Mandate.</strong> A stable handle: which principal, and a lifecycle status
           (<code>PENDING_AUTHENTICATION</code>, <code>ACTIVE</code>, <code>EXPIRED</code>,{" "}

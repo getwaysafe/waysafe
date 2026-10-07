@@ -1,0 +1,43 @@
+sequenceDiagram
+    autonumber
+    participant S as Stripe Issuing
+    participant W as Waysafe API
+    participant DB as Postgres
+
+    S->>W: issuing_authorization.request
+    Note over S,W: Stripe waits about 2s. On timeout or a malformed reply<br/>Stripe declines on its own. That is an account setting,<br/>not something this code enforces.
+
+    W->>DB: findByExternalRefAndRevision — replay check (D-74, D-79)
+    Note over W,DB: Keyed on the revision, not the id alone: Stripe reuses one<br/>authorization id for incremental requests, so the id by itself<br/>cannot tell a redelivery from a request for more money (D-79).
+    alt identical redelivery
+        W-->>S: replay the original decision, no new row, no new hold
+    else first request, or an INCREMENT
+        rect rgba(128,128,128,0.12)
+            Note over W,DB: ONE TRANSACTION — mandate row lock held throughout (D-4, D-15)
+            W->>DB: SELECT mandate FOR UPDATE, then re-read its authority (D-80)
+            W->>DB: getSpendSnapshot — a SUM over the ledger, never a counter
+            W->>W: evaluate() — on an increment, on the DELTA
+            Note over W,W: The per-transaction ceiling is checked against the<br/>AGGREGATE, or ten $10 increments would each pass a<br/>$10 cap while totalling $100 (D-79).
+            W->>DB: INSERT authorization + RESERVATION for the delta if ALLOW
+            W->>DB: append signed evidence event (D-76)
+            Note over W,DB: All three commit or roll back together. A failed append<br/>declines the authorization instead of leaving a hold<br/>with no record.
+        end
+    end
+
+    W-->>S: approved true or false, plus reason_codes
+
+    Note over S,W: Later, asynchronously — and this is where money actually settles
+    alt reversed or expired (issuing_authorization.updated)
+        S->>W: status reversed / expired
+        W->>DB: RELEASE the aggregate hold, exactly once (D-83)
+        Note over W,DB: Nothing moved, so the cap recovers. Before D-83 the hold<br/>survived forever and the cardholder's next genuine<br/>payment was declined by a phantom.
+    else closed and approved — a settlement
+        S->>W: status closed, amount = what SETTLED
+        W->>DB: RELEASE the hold, CAPTURE the SETTLED amount (D-83)
+        Note over W,DB: A partial capture records $2.50 of a $10 hold, not $10.<br/>Both rows carry the window the authorization was<br/>decided in, never the window the webhook arrived in (D-72).
+    end
+
+    Note over S,W: And the two Waysafe is never asked about
+    S->>W: issuing_transaction.created with no authorization, or above one
+    W->>DB: CAPTURE it anyway, and flag the receipt (D-84)
+    Note over W,DB: A force capture or an overcapture cannot be declined —<br/>nobody asked. It is charged against the cap, recorded as<br/>DENY on an EXECUTED row, and carries would_have_decided:<br/>what the engine returns when it is put the question late.

@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    participant A as Agent (untrusted)
+    participant W as Waysafe API
+    participant R as Whatever the URL points at
+    participant REG as Asset registry
+    participant SF as Safe (2 signatures)
+
+    A->>W: resource_url + instrument_id + session signature
+    Note over A,W: The agent CHOOSES the URL. Waysafe will not take payment<br/>requirements from the caller (D-40), only a URL to fetch itself.<br/>That is what makes the result rail-attested, and it is also<br/>the root of OQ-13.
+    W->>R: GET resource_url
+    Note over W,R: Fetched under an explicit policy (D-75): https only, public<br/>addresses only, one DNS resolution with the connection pinned<br/>to it, redirects re-validated, size capped. ONE absolute deadline<br/>spans DNS, connect, every hop and the body read (D-89) — a<br/>slow-drip body held a 60s budget open for as long as it liked.
+    R-->>W: HTTP 402 — payTo, token address, amount, network
+
+    W->>REG: resolveAsset(network, token address)
+    alt address not in the registry
+        W-->>A: DENY — asset not in registry (D-68)
+    else known asset
+        REG-->>W: decimals from the registry, never from the merchant
+        Note over W,REG: D-68: a merchant that declared the wrong decimals had<br/>5,000 USDC evaluated as 0.00 and settled for real.<br/>D-88: atomic units round UP to the next cent, so a<br/>sub-cent transfer is never recorded as $0.00 either.<br/>The co-signature still authorizes the exact atomic amount.
+        W->>W: evaluate(policy, action, merchant, spend)
+        alt not ALLOW
+            W-->>A: DENY or STEP_UP, and no co-signature
+            Note over W,SF: The agent holds ONE of the Safe's two required signatures.<br/>Without Waysafe's second one there is nothing to submit,<br/>and the contract rejects a short signature set on-chain.
+        else ALLOW
+            W->>SF: Waysafe's signature joins the agent's
+            SF-->>W: transaction mined
+            W-->>A: ALLOW plus the transaction hash
+        end
+    end

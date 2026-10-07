@@ -1,0 +1,22 @@
+flowchart LR
+  P["<b>Principal</b><br/>holds a passkey"]
+  A["<b>Agent</b> (untrusted)<br/>holds an API key<br/>+ one Safe key"]
+  M["<b>Merchant</b>"]
+
+  subgraph W["<b>Waysafe</b> — decides, never holds funds"]
+    EV["<b>evaluate()</b><br/>plain TypeScript, no model"]
+    CH["<b>Evidence chain</b><br/>signed and hash-linked"]
+  end
+
+  ST["<b>Stripe</b><br/>card rail<br/><i>asks before any charge</i>"]
+  SF["<b>Safe</b> — 2 signatures required<br/>agent holds one, Waysafe the other<br/><i>cannot settle on one</i>"]
+
+  P -- "signs the policy" --> EV
+  ST -- "asks first" --> EV
+  A -- "asks first" --> EV
+  A -. "preflight only" .-> EV
+  EV -- "decision" --> ST
+  EV -- "2nd signature" --> SF
+  EV -- "every decision" --> CH
+  ST -- "settles" --> M
+  SF -- "settles" --> M

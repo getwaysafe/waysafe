@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import proof from "@/data/proof.json";
 import { SITE_TITLE } from "@/lib/constants";
+import { REPO_TREE } from "@/lib/docs-nav";
 
 const DESCRIPTION =
   "Spend authorization for AI agents, enforced by the payment rail — not the agent. Even a compromised agent can't spend outside its mandate.";
@@ -83,14 +84,24 @@ export default function HomePage() {
             agent holding the credential walks through all of them.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
-            Give a compromised agent the raw card number and no Waysafe SDK, and it still
-            can&rsquo;t spend outside the mandate — Stripe&rsquo;s real-time authorization asks
-            Waysafe before the network approves the charge, not after. That path runs the real
-            engine against recorded Stripe Issuing authorization requests today; live sandbox
-            authorization is pending Stripe&rsquo;s live Issuing onboarding. Hand the session key alone to a
-            script with no Waysafe in it, and the transaction can&rsquo;t be signed — the
-            payer&rsquo;s wallet is a genuine 2-of-2, and one key isn&rsquo;t enough. Neither script
-            ever had to call Waysafe, agree with it, or even know it exists.
+            Give a compromised agent the raw card number and no Waysafe SDK, and every
+            authorization the network presents for real-time approval is still decided by Waysafe
+            against the mandate — the charge is declined unless that decision is an ALLOW. That
+            path runs the real engine against recorded Stripe Issuing authorization requests today;
+            live sandbox authorization is pending Stripe&rsquo;s live Issuing onboarding. Hand the
+            session key alone to a script with no Waysafe in it, and the transfer can&rsquo;t settle
+            without Waysafe&rsquo;s co-signature — the payer&rsquo;s wallet is a genuine 2-of-2, and
+            one key isn&rsquo;t enough. Neither script ever had to call Waysafe, agree with it, or
+            even know it exists.
+          </p>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
+            A card network can also clear a settlement it never presented for approval — a force
+            capture — or settle above the amount that was approved. Waysafe does not stop either,
+            and says so rather than implying a guarantee it doesn&rsquo;t have. What it does is
+            record them: the amount lands in the ledger and is charged against the mandate&rsquo;s
+            cap, the receipt is flagged as unauthorized or over-authorized, and it carries the
+            network&rsquo;s own payload alongside what the engine would have decided had it been
+            asked — which is what a dispute needs.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
             This is proven on-chain, recorded on{" "}
@@ -202,8 +213,9 @@ export default function HomePage() {
           <p className="muted" style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
             AP2, Visa Intelligent Commerce and Mastercard Agent Pay each solve delegated
             authorization within their own rail, by issuing a credential the agent carries. An
-            agent rarely spends on one rail. Waysafe is the required signer across them: the
-            transaction cannot complete without a decision Waysafe produced, that decision can
+            agent rarely spends on one rail. Waysafe sits in the authorization path of each of
+            them: on cards it decides every authorization the network presents for real-time
+            approval, on x402 a transfer cannot settle without its co-signature, that decision can
             take a rail&rsquo;s own credential as an input, and the record reads the same whether
             the rail underneath is a card network or a chain.
           </p>
@@ -224,6 +236,25 @@ export default function HomePage() {
               Card decisions run the real engine against recorded Stripe Issuing authorization
               requests. Live sandbox authorization is pending Stripe&rsquo;s live Issuing
               onboarding.
+            </li>
+            <li>
+              A settlement the card network clears without asking is recorded and flagged, not
+              prevented. Waysafe decides what it is asked about; it does not police what the
+              network does unilaterally.
+            </li>
+            <li>
+              Two independent adversarial reviews have been run against this repository, and
+              eighteen findings are fixed — each with the attack written as a test first. The
+              findings, the fixes, and what is still open are in{" "}
+              <a
+                className="link"
+                href={`${REPO_TREE}/SECURITY.md`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                SECURITY.md
+              </a>
+              .
             </li>
           </ul>
         </div>

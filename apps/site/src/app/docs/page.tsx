@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Diagram } from "@/components/Diagram";
 import Link from "next/link";
 import { DOCS_NAV, REPO, REPO_TREE } from "@/lib/docs-nav";
 
@@ -25,6 +26,18 @@ export default function DocsOverviewPage() {
         verify without trusting Waysafe.
       </p>
 
+      <Diagram
+        name="context"
+        alt={"Waysafe sits between the principal who signs a policy and the two payment rails that settle: Stripe asks it before any card charge, and the Safe cannot settle on one signature, so both rails reach the merchant only through a decision Waysafe made. The agent's own call to Waysafe is a preflight, never a control."}
+        caption={
+          <>
+            Who holds which key, and who asks whom. The same diagram opens{" "}
+            <a className="link" href="/docs/concepts">Concepts</a> and{" "}
+            <code>docs/THREAT-MODEL.md</code> §0.1.
+          </>
+        }
+      />
+
       <div
         className="card"
         style={{ marginTop: 24, marginBottom: 8, background: "#f1f7f7", borderColor: "#9ac9cb" }}
@@ -40,8 +53,10 @@ export default function DocsOverviewPage() {
       <ul style={{ paddingLeft: 20, lineHeight: 1.8, fontSize: "1.02rem", maxWidth: 760 }}>
         <li>
           <strong>A card program.</strong> Point your Stripe Issuing real-time authorization
-          webhook at Waysafe; the network declines anything outside the mandate, with no agent-side
-          code at all.
+          webhook at Waysafe; every authorization the network presents is decided against the
+          mandate and declined unless the decision is an ALLOW, with no agent-side code at all. A
+          settlement the network clears without asking is recorded and flagged rather than stopped
+          — see <a className="link" href="/docs/enforcement">Enforcement</a>.
         </li>
         <li>
           <strong>Wallet / x402 infrastructure.</strong> Deploy a 2-of-2 Safe per mandate with

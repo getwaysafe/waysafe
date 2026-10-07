@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { REPO_TREE } from "@/lib/docs-nav";
-import { DecisionBadge, METHODS, REASON_CODES } from "@/lib/docs-content";
+import { DecisionBadge, EVIDENCE_EVENT_TYPES, METHODS, REASON_CODES } from "@/lib/docs-content";
 
 export const metadata: Metadata = {
   title: "Reference — Waysafe docs",
@@ -261,6 +261,39 @@ const waysafe = new Waysafe({
                     <code style={{ fontSize: "0.82rem" }}>{r.code}</code>
                   </td>
                   <td>{r.description}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <h2 style={{ marginTop: 56 }}>Evidence event types</h2>
+        <p style={{ maxWidth: 700 }}>
+          Every type this codebase appends to the signed chain, and what each attaches to. A
+          chain is organization-scoped: one sequence, one hash link per entry, with{" "}
+          <code>subject_type</code> and <code>subject_id</code> naming what the entry is about.
+        </p>
+        <p style={{ maxWidth: 700 }}>
+          Decisions on the agent path are in this chain too, which was not true before{" "}
+          <code>DECISIONS.md</code> D-90 — the rail-initiated paths each appended their own
+          decision evidence and <code>POST /v1/authorizations</code> appended nothing. A step-up
+          that <em>expires</em> still writes no event; it is the one gap, tracked as OQ-14.
+        </p>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: "34%" }}>Type</th>
+                <th style={{ width: "16%" }}>Subject</th>
+                <th>What it records</th>
+              </tr>
+            </thead>
+            <tbody>
+              {EVIDENCE_EVENT_TYPES.map((e) => (
+                <tr key={e.type}>
+                  <td className="mono" style={{ fontSize: "0.8rem" }}>{e.type}</td>
+                  <td className="mono muted" style={{ fontSize: "0.78rem" }}>{e.subject}</td>
+                  <td style={{ fontSize: "0.92rem" }}>{e.description}</td>
                 </tr>
               ))}
             </tbody>
