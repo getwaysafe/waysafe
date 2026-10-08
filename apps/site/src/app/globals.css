@@ -195,6 +195,14 @@ pre {
   font-family: var(--font-mono);
 }
 
+/* An inline <code> holding a long field path has no break opportunity in it,
+   which pushed /docs/policy 38px past a 390px viewport. A <code> inside a
+   <pre> is excluded: those scroll in their own box, and wrapping them would
+   reflow code samples. */
+:not(pre) > code {
+  overflow-wrap: anywhere;
+}
+
 pre {
   background: var(--midnight);
   color: var(--frost);

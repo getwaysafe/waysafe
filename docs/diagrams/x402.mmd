@@ -1,30 +1,30 @@
 sequenceDiagram
     autonumber
     participant A as Agent (untrusted)
-    participant W as Waysafe API
+    participant W as Waysafe
     participant R as Whatever the URL points at
-    participant REG as Asset registry
-    participant SF as Safe (2 signatures)
+    participant REG as Known-token registry
+    participant SF as Wallet (2 signatures)
 
-    A->>W: resource_url + instrument_id + session signature
-    Note over A,W: The agent CHOOSES the URL. Waysafe will not take payment<br/>requirements from the caller (D-40), only a URL to fetch itself.<br/>That is what makes the result rail-attested, and it is also<br/>the root of OQ-13.
-    W->>R: GET resource_url
-    Note over W,R: Fetched under an explicit policy (D-75): https only, public<br/>addresses only, one DNS resolution with the connection pinned<br/>to it, redirects re-validated, size capped. ONE absolute deadline<br/>spans DNS, connect, every hop and the body read (D-89) — a<br/>slow-drip body held a 60s budget open for as long as it liked.
-    R-->>W: HTTP 402 — payTo, token address, amount, network
+    A->>W: a URL, a wallet, and its own signature
+    Note over A,W: The agent chooses the URL. Waysafe will not take a price<br/>from the agent, only a URL it fetches itself. That is what<br/>makes the price the merchant's, and it is also the reason<br/>for the known limitation below.
+    W->>R: fetch the URL
+    Note over W,R: Fetched under a strict policy: public HTTPS addresses only,<br/>resolved once with the connection pinned to the address that<br/>was checked, every redirect re-checked, size capped, and one<br/>deadline over the whole fetch that nothing the server sends<br/>can extend.
+    R-->>W: payment requested: payout address, token, amount
 
-    W->>REG: resolveAsset(network, token address)
-    alt address not in the registry
-        W-->>A: DENY — asset not in registry (D-68)
-    else known asset
-        REG-->>W: decimals from the registry, never from the merchant
-        Note over W,REG: D-68: a merchant that declared the wrong decimals had<br/>5,000 USDC evaluated as 0.00 and settled for real.<br/>D-88: atomic units round UP to the next cent, so a<br/>sub-cent transfer is never recorded as $0.00 either.<br/>The co-signature still authorizes the exact atomic amount.
-        W->>W: evaluate(policy, action, merchant, spend)
-        alt not ALLOW
-            W-->>A: DENY or STEP_UP, and no co-signature
-            Note over W,SF: The agent holds ONE of the Safe's two required signatures.<br/>Without Waysafe's second one there is nothing to submit,<br/>and the contract rejects a short signature set on-chain.
-        else ALLOW
+    W->>REG: is this a token we know?
+    alt not a known token
+        W-->>A: Declined. Waysafe does not guess at an unknown token.
+    else known token
+        REG-->>W: the token's decimals, from Waysafe's own registry
+        Note over W,REG: Never from the merchant. One that declared the wrong<br/>decimals had 5,000 USDC read as 0.00 and settled for real.<br/>Amounts below a cent round up rather than to zero, so a<br/>real transfer is never recorded as nothing. The signature<br/>still authorizes the exact amount on the chain.
+        W->>W: check the payment against the policy
+        alt not approved
+            W-->>A: Declined, or sent for approval. No signature.
+            Note over W,SF: The agent holds one of the wallet's two required<br/>signatures. Without the second there is nothing to<br/>submit, and the chain rejects an incomplete set.
+        else approved
             W->>SF: Waysafe's signature joins the agent's
-            SF-->>W: transaction mined
-            W-->>A: ALLOW plus the transaction hash
+            SF-->>W: the transfer is confirmed on-chain
+            W-->>A: Approved, with the transaction hash
         end
     end

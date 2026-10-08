@@ -29,8 +29,8 @@ export default function Page() {
           </a>
         </p>
         <p style={{ maxWidth: 700 }}>
-          Stripe&rsquo;s real-time authorization webhook, called by Stripe — not by the agent —
-          when a card is presented. The inbound body is a standard Stripe event; only{" "}
+          Stripe&rsquo;s real-time authorization webhook. Stripe calls it when a card is
+          presented. The agent does not. The inbound body is a standard Stripe event; only{" "}
           <code>issuing_authorization.request</code> is a synchronous decision this route owes a
           same-request answer to. The request must carry a valid <code>Stripe-Signature</code>{" "}
           header, verified against the Issuing webhook secret before anything is decided.
@@ -95,9 +95,9 @@ export default function Page() {
         <p style={{ maxWidth: 700 }}>
           What Waysafe does instead is refuse to ignore them. On{" "}
           <code>issuing_transaction.created</code>, the settled amount is written to the ledger and
-          charged against the mandate&rsquo;s cumulative cap, so the next genuine payment sees the
+          charged against the mandate&rsquo;s cumulative cap, so the next real payment sees the
           money as gone. The receipt is recorded as a <code>DENY</code> on a row that is{" "}
-          <code>EXECUTED</code> — honest about both facts — carrying{" "}
+          <code>EXECUTED</code>, which records both facts, carrying{" "}
           <code>DENY_SETTLED_WITHOUT_AUTHORIZATION</code> or{" "}
           <code>DENY_SETTLED_ABOVE_AUTHORIZATION</code>, the network&rsquo;s own{" "}
           <code>merchant_data</code> (trading name, city, terminal id), and{" "}
@@ -110,7 +110,7 @@ export default function Page() {
           A reversal or an expiry releases the hold; a partial capture records the{" "}
           <em>settled</em> amount, not the authorized one; an incremental request is decided as a
           new decision on the delta, with the per-transaction ceiling checked against the running
-          total. See <code>DECISIONS.md</code> D-79 and D-81 through D-84.
+          total.
         </p>
         <Diagram
           name="card"
@@ -170,7 +170,8 @@ export default function Page() {
           this host asked for this payment</em>, not <em>this host is who it claims to be</em>. A
           mandate that names real merchants is unaffected; a mandate leaning on{" "}
           <code>unlisted: ALLOW</code> plus &ldquo;the merchant was verified&rdquo; gets materially
-          less assurance here than the same words buy on a card. Tracked as OQ-13.
+          less assurance here than the same words buy on a card. This is a known limitation, and
+          it is listed as one in the threat model.
         </p>
         <pre>{`// request
 {
@@ -187,7 +188,7 @@ export default function Page() {
 {
   "decision": "ALLOW",                   // or "DENY" / "STEP_UP"
   "reason_codes": ["ALLOW_WITHIN_MANDATE"],
-  "co_signature": {                      // null for anything but a genuine ALLOW
+  "co_signature": {                      // null unless the decision was ALLOW
     "pay_to": "0x...",
     "asset": "0x...",
     "network": "polygon-amoy",
@@ -240,8 +241,9 @@ export default function Page() {
         <h3 style={{ marginTop: 40 }}>What&rsquo;s still open</h3>
         <p style={{ maxWidth: 700 }}>
           Everything above is what these two rails enforce. What they do <em>not</em> — the
-          co-signer key with no rotation plan or kill switch, the evidence chain&rsquo;s lack of an
-          external anchor, OQ-13 above, and the rest — is inventoried surface by surface in{" "}
+          signing key that has no rotation plan or kill switch, the lack of anything outside
+          Waysafe that proves the record is complete, the limitation above, and the rest — is
+          inventoried surface by surface in{" "}
           <a className="link" href={`${REPO_TREE}/docs/THREAT-MODEL.md`} target="_blank" rel="noopener noreferrer">
             docs/THREAT-MODEL.md
           </a>

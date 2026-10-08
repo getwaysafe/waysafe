@@ -5,7 +5,7 @@ flowchart LR
 
   S1["<b>1</b> Leaked agent key"]
   S2["<b>2</b> Principal passkey"]
-  S3["<b>3</b> RCE on the API process"]
+  S3["<b>3</b> Code execution on the API"]
   S4["<b>4</b> Database write access"]
   S5["<b>5</b> Compromised dependency"]
   S6["<b>6</b> Hostile merchant"]
@@ -14,37 +14,37 @@ flowchart LR
   S9["<b>9</b> Leaked org credential"]
   S10["<b>10</b> Prompt injection into the compiler"]
 
-  C1["CLOSED — route auth is default-deny<br/>by credential tier<br/>D-64, D-65"]:::closed
-  C2["CLOSED — a step-up needs a separate<br/>approver mandate, and costs both budgets<br/>D-62, D-71, D-73"]:::closed
-  C3["CLOSED — challenge purpose is binding.<br/>A second passkey needs a grant<br/>D-66, D-67"]:::closed
-  C4["CLOSED — merchant trust is per identifier.<br/>The directory is exact-match<br/>D-69, D-70"]:::closed
-  C5["CLOSED — the asset registry owns decimals<br/>D-68"]:::closed
-  C6["CLOSED — a replay returns the original.<br/>A unique index decides the race<br/>D-74"]:::closed
-  C7["CLOSED — ledger rows carry the window<br/>the authorization was decided in<br/>D-72"]:::closed
-  C8["CLOSED — HMAC signature checked<br/>on every rail webhook<br/>D-32"]:::closed
-  C9["CLOSED — no model is ever in the<br/>authorization path, and the compiler<br/>asks rather than inventing a limit<br/>non-negotiable 1 and 8"]:::closed
-  C12["CLOSED — the fetched URL is policy-checked<br/>and the connection pinned to the<br/>address that was validated<br/>D-75"]:::closed
-  C13["CLOSED — decision, hold and evidence event<br/>are one transaction<br/>D-76, D-90"]:::closed
-  C14["CLOSED — an agent reaches only its own<br/>authorizations, and never chooses<br/>the instrument at execution<br/>D-78"]:::closed
-  C15["CLOSED — an increment is a new decision<br/>on the delta; the ceiling is checked<br/>against the aggregate<br/>D-79"]:::closed
-  C16["CLOSED — the whole card lifecycle:<br/>reversal and expiry release, a capture<br/>records what SETTLED, a refund total<br/>credits only the delta<br/>D-81, D-82, D-83"]:::closed
-  C17["CLOSED — a purpose per operation.<br/>A policy signature cannot mint<br/>an enrolment grant<br/>D-86"]:::closed
-  C18["CLOSED — a nonzero transfer is never $0.00,<br/>and max_count keeps counting<br/>a payment after it settles<br/>D-87, D-88"]:::closed
-  C10["PARTIAL — the chain is signed<br/>and hash-linked, and every decision<br/>is now in it<br/>D-26, D-53, D-90"]:::partial
-  C19["PARTIAL — a force capture or overcapture<br/>cannot be declined, because nobody asks.<br/>It is charged against the cap and flagged<br/>with what the engine WOULD have decided<br/>D-84"]:::partial
-  C11["PARTIAL — the principal signs one<br/>policy hash, so an injected policy<br/>still needs a human ceremony<br/>D-20"]:::partial
+  C1["CLOSED — a route refuses any<br/>credential not named for it"]:::closed
+  C2["CLOSED — approval needs a second<br/>mandate, and costs both budgets"]:::closed
+  C3["CLOSED — a signature is good for<br/>one purpose only"]:::closed
+  C4["CLOSED — each identifier carries<br/>its own proof"]:::closed
+  C5["CLOSED — Waysafe owns the<br/>token decimals"]:::closed
+  C6["CLOSED — a repeat delivery gets<br/>the original answer"]:::closed
+  C7["CLOSED — a hold counts against the<br/>period it was approved in"]:::closed
+  C8["CLOSED — every webhook signature<br/>is verified"]:::closed
+  C9["CLOSED — no model is in the<br/>authorization path"]:::closed
+  C12["CLOSED — a fetched URL is checked,<br/>and the connection pinned to it"]:::closed
+  C13["CLOSED — decision, hold and receipt<br/>commit together"]:::closed
+  C14["CLOSED — an agent reaches only<br/>its own authorizations"]:::closed
+  C15["CLOSED — a raised amount is a new<br/>decision on the increase"]:::closed
+  C16["CLOSED — the whole card lifecycle:<br/>release, settle, refund"]:::closed
+  C17["CLOSED — a policy signature cannot<br/>enrol a passkey"]:::closed
+  C18["CLOSED — no transfer records as zero,<br/>and counts stay counted"]:::closed
+  C10["PARTIAL — the chain is signed and<br/>linked, decisions included"]:::partial
+  C11["PARTIAL — an injected policy still<br/>needs a human ceremony"]:::partial
+  C19["PARTIAL — a payment nobody was asked<br/>about is recorded and flagged"]:::partial
 
-  O1["OPEN — the co-signer key alone completes<br/>any session-signed transaction.<br/>A Safe Guard is named, not built<br/>D-56, D-59"]:::open
-  O2["OPEN — the chain has no external anchor,<br/>so completeness is unprovable<br/>OQ-8"]:::open
-  O3["OPEN — the auth challenge is predictable;<br/>replay is bounded only by signCount<br/>OQ-12"]:::open
-  O4["OPEN — on x402, VERIFIED means the host<br/>asked, not that it is who it claims<br/>OQ-13"]:::open
-  O5["OPEN — DB write access mints credentials<br/>and biases the spend SUM<br/>D-54, no test"]:::open
-  O6["OPEN — a packages/core dependency<br/>can alter evaluate() itself<br/>D-43, no test"]:::open
-  O7["OPEN — no kill switch for the<br/>Safe co-signer key<br/>D-58"]:::open
-  O10["OPEN — an org credential can enrol a<br/>principal's FIRST passkey and activate a<br/>mandate unaided. D-66's grant covers<br/>only a second one"]:::open
-  O11["OPEN — the principal reads a summary,<br/>not the policy hash. Nothing proves the<br/>human understood what they signed"]:::open
-  O12["OPEN — a step-up EXPIRY releases a<br/>reservation with nothing in the<br/>signed chain to say so<br/>OQ-14"]:::open
-  O13["OPEN — no rate limiter on any route.<br/>A leaked key is bounded by policy,<br/>never by volume"]:::open
+  O1["OPEN — Waysafe's own signing key alone<br/>completes a signed transfer"]:::open
+  O2["OPEN — nothing outside Waysafe proves<br/>the record is complete"]:::open
+  O3["OPEN — the activation challenge<br/>is predictable"]:::open
+  O4["OPEN — only the merchant vouches for<br/>its own payout address"]:::open
+  O5["OPEN — database write access mints<br/>credentials and biases spend"]:::open
+  O6["OPEN — a dependency can alter the<br/>policy engine itself"]:::open
+  O7["OPEN — no kill switch for the<br/>signing key"]:::open
+  O10["OPEN — an org credential can enrol a<br/>principal's FIRST passkey unaided"]:::open
+  O11["OPEN — the principal reads a summary.<br/>Nothing proves they understood it"]:::open
+  O12["OPEN — an approval request that lapses<br/>leaves no signed record"]:::open
+  O13["OPEN — no rate limit. A leaked key is<br/>bounded by policy, not volume"]:::open
 
   S1 --> C1
   S1 --> C2

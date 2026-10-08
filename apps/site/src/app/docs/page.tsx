@@ -28,6 +28,7 @@ export default function DocsOverviewPage() {
 
       <Diagram
         name="context"
+        minWidth={900}
         alt={"Waysafe sits between the principal who signs a policy and the two payment rails that settle: Stripe asks it before any card charge, and the Safe cannot settle on one signature, so both rails reach the merchant only through a decision Waysafe made. The agent's own call to Waysafe is a preflight, never a control."}
         caption={
           <>
@@ -78,7 +79,7 @@ export default function DocsOverviewPage() {
         ))}
       </div>
 
-      <h2 style={{ marginTop: 48 }}>Status, honestly</h2>
+      <h2 style={{ marginTop: 48 }}>Where this stands</h2>
       <ul style={{ paddingLeft: 20, lineHeight: 1.8, fontSize: "1.02rem", maxWidth: 760 }}>
         <li>The policy engine and evidence chain are real and running.</li>
         <li>

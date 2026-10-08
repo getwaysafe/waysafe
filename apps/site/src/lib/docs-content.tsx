@@ -92,7 +92,7 @@ export const METHODS: {
     signature:
       "resolveStepUp(authorizationId: string, approver: { agentId: string; principalId: string; mandateId?: string; idempotencyKey?: string }): Promise<AuthorizationDecision>",
     description:
-      "Resolves a needs-higher-authority step-up as an approver mandate (D-62). Never a bare approve/decline flag — the real evaluate() engine runs against the approver's own policy. ALLOW resolves to STEP_UP_APPROVED; DENY or STEP_UP resolves to STEP_UP_DECLINED. Already resolved or expired: replays the recorded outcome, never re-evaluates.",
+      "Resolves a needs-higher-authority step-up as an approver mandate. Never a bare approve/decline flag — the real evaluate() engine runs against the approver's own policy. ALLOW resolves to STEP_UP_APPROVED; DENY or STEP_UP resolves to STEP_UP_DECLINED. Already resolved or expired: replays the recorded outcome, never re-evaluates.",
     throws: "StepUpResolutionRejectedError, AuthorizationStatusConflictError, NetworkError",
   },
   {
@@ -172,7 +172,7 @@ export const METHODS: {
  * Every evidence event type this codebase appends, with what it attaches to.
  *
  * Transcribed, not imported: `apps/site` deliberately has no `@waysafe/api`
- * dependency (D-50). `docs-content.test.ts` reads the real source files and
+ * dependency. `docs-content.test.ts` reads the real source files and
  * asserts this list is exactly the set that exists, so a transcription that
  * falls behind fails a test rather than publishing a stale dictionary.
  */
@@ -181,12 +181,12 @@ export const EVIDENCE_EVENT_TYPES: { type: string; subject: string; description:
     type: "authorization.decided",
     subject: "authorization",
     description:
-      "An agent-path decision: POST /v1/authorizations returning ALLOW, DENY or STEP_UP. Carries the decision, its reason codes, the amount, the mandate version and policy hash it was decided against, the resolved merchant, whether it reserved budget, and any step-up expiry. Appended in the same transaction as the decision and its hold (D-76, D-90).",
+      "An agent-path decision: POST /v1/authorizations returning ALLOW, DENY or STEP_UP. Carries the decision, its reason codes, the amount, the mandate version and policy hash it was decided against, the resolved merchant, whether it reserved budget, and any step-up expiry. Appended in the same transaction as the decision and its hold.",
   },
   {
     type: "agent_key.verified",
     subject: "agent",
-    description: "An agent credential was presented and matched the agent it claimed to be (D-18).",
+    description: "An agent credential was presented and matched the agent it claimed to be.",
   },
   {
     type: "agent_key.rejected",
@@ -198,14 +198,14 @@ export const EVIDENCE_EVENT_TYPES: { type: string; subject: string; description:
     type: "step_up.approved",
     subject: "mandate",
     description:
-      "A pending step-up was approved by a separate, principal-named approver mandate's own credential. One event per mandate involved, so both chains show it (D-62, D-71).",
+      "A pending step-up was approved by a separate, principal-named approver mandate's own credential. One event per mandate involved, so both chains show it.",
   },
   { type: "step_up.declined", subject: "mandate", description: "A pending step-up was declined. Any reservation is released." },
   {
     type: "step_up.resolution_rejected",
     subject: "mandate",
     description:
-      "A resolution attempt was refused — self-approval, an expired step-up, or a spending mandate that lapsed while the step-up was open (D-73, D-85).",
+      "A resolution attempt was refused — self-approval, an expired step-up, or a spending mandate that lapsed while the step-up was open.",
   },
   {
     type: "execution.completed",
@@ -217,43 +217,43 @@ export const EVIDENCE_EVENT_TYPES: { type: string; subject: string; description:
     type: "refund.applied",
     subject: "authorization",
     description:
-      "A refund was credited back to the budget. The provider's cumulative refunded total arrives on every update; only the delta is credited (D-82).",
+      "A refund was credited back to the budget. The provider's cumulative refunded total arrives on every update; only the delta is credited.",
   },
-  { type: "mandate.authenticated", subject: "mandate_version", description: "The principal authenticated this policy version over WebAuthn, freezing it (D-20)." },
-  { type: "mandate.authentication_rejected", subject: "mandate_version", description: "A WebAuthn ceremony for this version was refused — a purpose mismatch, a bad origin, or an unknown credential (D-66, D-86)." },
+  { type: "mandate.authenticated", subject: "mandate_version", description: "The principal authenticated this policy version over WebAuthn, freezing it." },
+  { type: "mandate.authentication_rejected", subject: "mandate_version", description: "A WebAuthn ceremony for this version was refused — a purpose mismatch, a bad origin, or an unknown credential." },
   {
     type: "mandate.card_issuing_terms_accepted",
     subject: "mandate_version",
     description:
-      "The cardholder's own acceptance of Stripe's Issuing terms, sourced only from a real authentication ceremony and never synthesized (D-38).",
+      "The cardholder's own acceptance of Stripe's Issuing terms, sourced only from a real authentication ceremony and never synthesized.",
   },
-  { type: "enforcement.stripe_issuing.decision", subject: "authorization", description: "A card authorization decided in the network's real-time window (D-33)." },
+  { type: "enforcement.stripe_issuing.decision", subject: "authorization", description: "A card authorization decided in the network's real-time window." },
   {
     type: "enforcement.stripe_issuing.released",
     subject: "authorization",
-    description: "A reversed or expired card authorization's hold released, exactly once (D-83).",
+    description: "A reversed or expired card authorization's hold released, exactly once.",
   },
   {
     type: "enforcement.stripe_issuing.captured",
     subject: "authorization",
-    description: "A card authorization settled. Records the amount that SETTLED, which a partial capture makes smaller than the amount authorized (D-83).",
+    description: "A card authorization settled. Records the amount that SETTLED, which a partial capture makes smaller than the amount authorized.",
   },
   {
     type: "enforcement.stripe_issuing.unauthorized_settlement",
     subject: "authorization",
     description:
-      "A force capture: the network cleared a settlement it never presented for approval. Carries the raw merchant_data a dispute needs and would_have_decided — what the engine returns when the settlement is put to it after the fact (D-84).",
+      "A force capture: the network cleared a settlement it never presented for approval. Carries the raw merchant_data a dispute needs and would_have_decided — what the engine returns when the settlement is put to it after the fact.",
   },
   {
     type: "enforcement.stripe_issuing.over_authorized_settlement",
     subject: "authorization",
-    description: "An overcapture: the settled amount exceeded what was approved. Same shape as above, with the excess named (D-84).",
+    description: "An overcapture: the settled amount exceeded what was approved. Same shape as above, with the excess named.",
   },
   {
     type: "enforcement.x402.decision",
     subject: "authorization",
     description:
-      "An on-chain payment decided before any co-signature. Carries the atomic amount alongside the cents the budget was charged, since cents round up (D-88).",
+      "An on-chain payment decided before any co-signature. Carries the atomic amount alongside the cents the budget was charged, since cents round up.",
   },
 ];
 
@@ -364,49 +364,49 @@ export const REASON_CODES: { code: string; decision: "ALLOW" | "DENY" | "STEP_UP
     code: "DENY_STEP_UP_EXPIRED",
     decision: "DENY",
     description:
-      "The step-up's time limit had already passed, so it can no longer be approved. Distinct from DENY_MANDATE_EXPIRED: the mandate's authority is intact, and the window to resolve this particular step-up has closed (D-73).",
+      "The step-up's time limit had already passed, so it can no longer be approved. Distinct from DENY_MANDATE_EXPIRED: the mandate's authority is intact, and the window to resolve this particular step-up has closed.",
   },
   {
     code: "DENY_ASSET_NOT_IN_REGISTRY",
     decision: "DENY",
     description:
-      "The (chain, token contract address) pair is not one this deployment can evaluate or settle. Matching is by address, never by symbol (D-68).",
+      "The (chain, token contract address) pair is not one this deployment can evaluate or settle. Matching is by address, never by symbol.",
   },
   {
     code: "DENY_ASSET_DECIMALS_MISMATCH",
     decision: "DENY",
     description:
-      "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction (D-68).",
+      "The counterparty declared a decimal scale that disagrees with the asset registry's. A loud denial, never a silent correction.",
   },
   {
     code: "DENY_SETTLED_WITHOUT_AUTHORIZATION",
     decision: "DENY",
     description:
-      "The payment rail settled this transaction without ever asking Waysafe to approve it -- a card-network force capture. Recorded as a DENY on a row whose status is EXECUTED: what Waysafe would have said, and the fact that the money moved anyway (D-84).",
+      "The payment rail settled this transaction without ever asking Waysafe to approve it -- a card-network force capture. Recorded as a DENY on a row whose status is EXECUTED: what Waysafe would have said, and the fact that the money moved anyway.",
   },
   {
     code: "DENY_SETTLED_ABOVE_AUTHORIZATION",
     decision: "DENY",
     description:
-      "The settled amount exceeded what Waysafe authorized -- an overcapture, real on amount-controllable categories such as fuel and restaurants. The authorized portion settles normally; the excess carries this code (D-84).",
+      "The settled amount exceeded what Waysafe authorized -- an overcapture, real on amount-controllable categories such as fuel and restaurants. The authorized portion settles normally; the excess carries this code.",
   },
   {
     code: "DENY_DECISION_NOT_RECORDED",
     decision: "DENY",
     description:
-      "The decision could not be durably recorded, so it was not authorized. The decision, its ledger hold and its evidence event commit in one transaction; if that fails, nothing survives and the rail is answered with a decline (D-76).",
+      "The decision could not be durably recorded, so it was not authorized. The decision, its ledger hold and its evidence event commit in one transaction; if that fails, nothing survives and the rail is answered with a decline.",
   },
   {
     code: "DENY_RESOURCE_URL_NOT_PERMITTED",
     decision: "DENY",
     description:
-      "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read. Production permits HTTPS to public addresses only, with the connection pinned to the address it validated and every redirect re-checked (D-75).",
+      "Waysafe refused to fetch the resource URL supplied, so no payment requirement was ever read. Production permits HTTPS to public addresses only, with the connection pinned to the address it validated and every redirect re-checked.",
   },
   {
     code: "DENY_ASSET_UNSPECIFIED",
     decision: "DENY",
     description:
-      "The payment requirement named no token contract address, so no asset could be resolved (D-68).",
+      "The payment requirement named no token contract address, so no asset could be resolved.",
   },
   {
     code: "STEP_UP_AMOUNT_THRESHOLD",
@@ -590,28 +590,28 @@ export const COUNTERPARTY_FIELDS: PolicyFieldRow[] = [
     type: "array of { scheme, value, label? }",
     status: "IMPLEMENTED",
     reasonCode: "STEP_UP_MERCHANT_UNVERIFIED / DENY_MERCHANT_NOT_ALLOWLISTED / STEP_UP_MERCHANT_NOT_ALLOWLISTED",
-    semantics: "Domain allowlist. Satisfies ALLOW only at VERIFIED trust (directory-corroborated) — an asserted-only domain match caps at STEP_UP regardless (non-negotiable #3).",
+    semantics: "Domain allowlist. Satisfies ALLOW only at VERIFIED trust (directory-corroborated) — a domain the agent merely asserted caps at STEP_UP regardless.",
   },
   {
     field: "merchants.allow[]/deny[] (scheme: psp_account)",
     type: "array",
     status: "IMPLEMENTED",
     reasonCode: "same as domain, plus DENY_MERCHANT_BLOCKED for deny[]",
-    semantics: "VERIFIED only when a payment rail's own callback supplied the value (D-34); the same value asserted by the agent on the request caps at ASSERTED, same ceiling as a bare name.",
+    semantics: "VERIFIED only when a payment rail's own callback supplied the value; the same value asserted by the agent on the request caps at ASSERTED, same ceiling as a bare name.",
   },
   {
     field: "merchants.allow[]/deny[] (scheme: network_mid)",
     type: "array",
     status: "IMPLEMENTED",
     reasonCode: "same as psp_account",
-    semantics: "Card-network merchant ID. Same D-34 rail-vs-agent rule as psp_account.",
+    semantics: "Card-network merchant ID. Same rule as psp_account: the rail supplying it verifies, the agent asserting it does not.",
   },
   {
     field: "merchants.allow[]/deny[] (scheme: onchain_address)",
     type: "array",
     status: "IMPLEMENTED",
     reasonCode: "same as psp_account",
-    semantics: "x402 payee address (D-40). Same D-34 rule: rail-attested verifies, agent-attested caps at ASSERTED.",
+    semantics: "Stablecoin payout address. Same rule again: supplied by the rail it verifies, asserted by the agent it caps at ASSERTED.",
   },
   {
     field: "merchants.allow[] (scheme: name)",
@@ -714,7 +714,7 @@ export const EVIDENCE_FIELDS: PolicyFieldRow[] = [
     type: "n/a",
     status: "IMPLEMENTED",
     reasonCode: "STEP_UP_MERCHANT_UNVERIFIED (cap) / ALLOW_WITHIN_MANDATE (when met)",
-    semantics: "Not configurable. D-34: VERIFIED trust is required for ALLOW via an identity scheme, unconditionally, for every mandate. There is no policy field to raise or lower this bar — every mandate gets the same fixed minimum trust tier. See DECISIONS.md for this session's note on documenting it as a settable field.",
+    semantics: "Not configurable. VERIFIED trust is required for an ALLOW through an identity scheme, on every mandate, with no exceptions. There is no policy field that raises or lowers this bar.",
   },
 ];
 
@@ -737,7 +737,7 @@ export const ESCALATION_FIELDS: PolicyFieldRow[] = [
     field: "step_up.ttl_seconds",
     type: "positive integer, default 900",
     status: "IMPLEMENTED",
-    reasonCode: "(governs the expiry-to-DENY path, D-31)",
+    reasonCode: "(governs the expiry-to-DENY path)",
     semantics: "How long a pending step-up stays open before it expires. See Invariant on expiry below.",
   },
   {
@@ -760,7 +760,7 @@ export const ESCALATION_FIELDS: PolicyFieldRow[] = [
     status: "IMPLEMENTED",
     reasonCode: "DENY_STEP_UP_SELF_APPROVAL / DENY_MANDATE_NOT_AN_APPROVER",
     semantics:
-      "D-62: who may resolve a needs-higher-authority step-up on this mandate. Absent or empty means unresolvable — expires to DENY (D-31). See Approver Mandates below — this closes the D-59 gap that section used to describe.",
+      "Who may resolve a step-up on this mandate that needs higher authority. Absent or empty means unresolvable, and it expires to DENY. See Approver Mandates below, which describes the gap this closed.",
   },
   {
     field: "an approver mandate escalating further",
@@ -791,7 +791,7 @@ export const ESCALATION_FIELDS: PolicyFieldRow[] = [
 // npm run quickstart, timed end to end, finished in ~12s on a warm npm
 // cache. A first install over the real network will take longer; nothing
 // in this sequence waits on a database, a compiler API key, or anything
-// else external -- see D-55.
+// else external.
 export const QUICKSTART_COMMANDS = `git clone https://github.com/getwaysafe/waysafe.git
 cd waysafe
 npm install
@@ -824,7 +824,7 @@ export const QUICKSTART_OUTPUT_ALLOW = `1. Connect
 
 // Same run, section 7 -- the DENY. Sections 5-6 and 8-10 (execution, a
 // step-up resolved by a real approver mandate after a rejected self-approval
-// attempt (D-62), a malformed-request error, and independent evidence-chain
+// attempt, a malformed-request error, and independent evidence-chain
 // verification) are elided here, not edited out of the script; run it
 // yourself to see them.
 export const QUICKSTART_OUTPUT_DENY = `7. A purchase over the hard cap -- DENY. This is a normal return value, not a thrown error
@@ -832,8 +832,7 @@ export const QUICKSTART_OUTPUT_DENY = `7. A purchase over the hard cap -- DENY. 
     - DENY_TRANSACTION_LIMIT_EXCEEDED: The amount exceeds the per-transaction maximum of $150.00.
   asExecutable() on a DENY: null`;
 
-// D-55: real, not hand-written -- pulled live from the same captured run
-// /proof publishes, so this example can never drift from what's actually
-// in that file.
+// Pulled from the same captured run /proof publishes rather than written
+// by hand, so this example can never drift from what is in that file.
 export const EVIDENCE_EXAMPLE = proof.evidence.events.find((e) => e.type === "mandate.authenticated");
 

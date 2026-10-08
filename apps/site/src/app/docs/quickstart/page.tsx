@@ -27,7 +27,7 @@ export default function Page() {
             <code>packages/db</code>&rsquo;s schema uses native Postgres enums, <code>String[]</code>{" "}
             columns, and (the disqualifying one) real <code>SELECT ... FOR UPDATE</code> row locking
             that the cumulative-spend guarantee depends on, none of which SQLite can express — so the
-            in-memory adapter already built for <code>npm test</code> is the honest zero-setup path,
+            in-memory adapter already built for <code>npm test</code> is the zero-setup path,
             not a shortcut around it.
           </p>
         </details>
@@ -42,7 +42,7 @@ export default function Page() {
         <pre>{QUICKSTART_OUTPUT_DENY}</pre>
         <p style={{ maxWidth: 700 }}>
           Sections 5–6 and 8–10 of the same run (execution, a step-up resolved by a real approver
-          mandate after a rejected self-approval attempt (D-62), a typed SDK error, and
+          mandate after a rejected self-approval attempt, a typed SDK error, and
           independently verifying the signed evidence chain) are elided here for density — run{" "}
           <code>npm run quickstart</code> yourself to see them, or read{" "}
           <code>examples/quickstart.ts</code> directly.

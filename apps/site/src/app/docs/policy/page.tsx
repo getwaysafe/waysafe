@@ -26,9 +26,9 @@ export default function Page() {
           </p>
         </div>
         <p style={{ maxWidth: 700 }}>
-          Reason codes are additive-only and never renamed (non-negotiable #7) — every code named
-          below, including the reserved one, is a permanent commitment once it ships. Amounts are
-          integer minor units throughout, same as everywhere else in this SDK.
+          Reason codes are additive only and are never renamed. Every code named below, including
+          the reserved one, is a permanent commitment once it ships. Amounts are integer minor
+          units throughout, the same as everywhere else in this SDK.
         </p>
 
         <h3 style={{ marginTop: 32 }}>Amount</h3>
@@ -61,8 +61,8 @@ export default function Page() {
 
         <h3 style={{ marginTop: 32 }}>Evidence</h3>
         <p style={{ maxWidth: 700 }}>
-          The minimum merchant trust tier required to ALLOW is a real rule the engine enforces
-          unconditionally (D-34) — it is not, today, a field a mandate can set.
+          The minimum merchant trust required for an ALLOW is a rule the engine enforces on every
+          decision. It is not, today, a field a mandate can set.
         </p>
         <PolicyFieldTable rows={EVIDENCE_FIELDS} />
 
@@ -105,11 +105,12 @@ export default function Page() {
         <h3 style={{ marginTop: 40 }}>Approver Mandates</h3>
         <div className="card" style={{ marginTop: 8, marginBottom: 16, background: "#e8f5e9", borderColor: "#7cb87f" }}>
           <p style={{ margin: 0 }}>
-            <strong>D-62: real, shipped, tested.</strong> Resolving a needs-higher-authority
-            step-up now requires a different, named approver mandate&rsquo;s own credential — the
-            same <code>evaluate()</code> engine, a real ledger entry, real reason codes. This
-            closes D-59 (below). Two things stay SPECIFIED, not built — delegation depth beyond
-            one level, and the needs-evidence class ((a) below) — each called out where it applies.
+            <strong>Shipped and tested.</strong> Resolving a step-up that needs higher authority
+            requires a different, named approver mandate&rsquo;s own credential. It runs the same
+            engine, writes a real ledger entry, and returns real reason codes. This closes the gap
+            described at the end of this section. Two things stay specified and unbuilt: delegation
+            more than one level deep, and the needs-evidence class, (a) below. Each is called out
+            where it applies.
           </p>
         </div>
         <p style={{ maxWidth: 700 }}>
@@ -120,7 +121,7 @@ export default function Page() {
         </p>
         <p style={{ maxWidth: 700 }}>
           The principal signs the approver&rsquo;s authority <strong>once</strong>, at enrollment,
-          via WebAuthn (D-20) — the same passkey ceremony that activates any mandate.{" "}
+          using the same passkey ceremony that activates any mandate.{" "}
           <code>escalation.approvers</code> is set at mandate creation, alongside every other
           policy field, by the same signature. (No separate &ldquo;update this mandate&rdquo;
           ceremony exists yet — changing an existing mandate&rsquo;s approver set means creating a
@@ -131,13 +132,14 @@ export default function Page() {
         <p style={{ maxWidth: 700 }}>
           Because that one signature is what the whole model rests on, enrolling a{" "}
           <strong>second</strong> passkey for a principal that already has one requires a fresh
-          prior authentication with an existing credential — a single-use, expiring grant bound to
-          that specific principal and credential (D-66). An adversarial review found that an
-          authentication challenge could previously be answered with a <em>registration</em>
-          response, enrolling an attacker&rsquo;s own passkey against a victim principal. Every
-          challenge now carries a purpose recorded at issuance and validated against the
-          caller&rsquo;s mode; a mismatch is a{" "}
-          <code>400 challenge_purpose_mismatch</code>, never silently ignored.
+          prior authentication with an existing credential. That produces a single-use, expiring
+          grant bound to that specific principal and credential. An adversarial review found that
+          an authentication challenge could previously be answered with a <em>registration</em>
+          response, which enrolled an attacker&rsquo;s own passkey against a victim principal. A
+          later review found a second route to the same place: the signature a principal gives to
+          confirm a policy could be redeemed as a passkey enrolment grant. Every challenge now
+          records what it was issued for, and each ceremony accepts only its own purpose. A
+          mismatch returns <code>400 challenge_purpose_mismatch</code>.
         </p>
         <p style={{ maxWidth: 700 }}>
           An approver is any actor holding an approver mandate: a treasury service, a manager, a
@@ -159,17 +161,20 @@ export default function Page() {
           spend directly.
         </p>
         <p style={{ maxWidth: 700 }}>
-          An approval costs budget on <strong>both</strong> mandates, for two different reasons
-          (D-71). The approver&rsquo;s entry above is the ceiling on how much it may approve. The{" "}
+          An approval costs budget on <strong>both</strong> mandates, for two different reasons.
+          The approver&rsquo;s entry above is the ceiling on how much it may approve. The{" "}
           <em>spending</em> mandate also takes a hold at approval time, so the approved amount
           counts against the cap the principal actually signed. An adversarial review found that
           it did not: with <code>reserve_on_step_up: false</code> the spending mandate&rsquo;s
           ledger was untouched by an approval, so an unlimited number of payments could be
-          approved against its cap. The approver&rsquo;s charge is a separate check, never a
-          substitute for the spender&rsquo;s.
+          approved against its cap. A second review found a further case: several approvals that
+          take no hold were each invisible to the others, so three $90 requests against a $100
+          limit could all be approved. An approval now re-checks the spending mandate&rsquo;s own
+          limit at the moment it is granted. The approver&rsquo;s charge is a separate check. It is
+          never a substitute for the spender&rsquo;s.
         </p>
         <p style={{ maxWidth: 700 }}>
-          Approval <strong>re-validates under the lock</strong> (D-73). Three things can lapse
+          Approval <strong>re-validates under the lock</strong>. Three things can lapse
           between a step-up being raised and an approver resolving it: the step-up&rsquo;s own
           TTL, the spending mandate being revoked, and that mandate&rsquo;s policy{" "}
           <code>expires_at</code>. All three are re-read inside the same row lock that takes the
@@ -184,7 +189,7 @@ export default function Page() {
           own <code>evaluate()</code> also returns <code>STEP_UP</code> for the action, the
           resolution declines with <code>DENY_APPROVER_WOULD_ESCALATE</code> — it does
           not chain to a second approver. A delegation-depth field is not currently reserved
-          anywhere in <code>packages/core</code> — checked directly, not assumed — so this stays
+          anywhere in <code>packages/core</code>, checked directly rather than assumed, so this stays
           documented as a gap rather than a reservation that doesn&rsquo;t exist. The intent
           stands regardless of the naming: a delegation-depth field belongs in a future schema
           from the start, so chains can be added later without a migration.
@@ -204,12 +209,12 @@ export default function Page() {
           approver&rsquo;s own policy, and each approval still costs real, permanent budget on
           that approver&rsquo;s own mandate — a cycle can&rsquo;t be used to escalate authority
           without limit, only up to whatever the weakest link&rsquo;s own signed cumulative cap
-          allows. See <code>DECISIONS.md</code> D-62 and <code>THREAT-MODEL.md</code> for this
-          named as a bounded risk, not left undiscussed.
+          allows. The threat model names this as a bounded risk rather than leaving it
+          undiscussed.
         </p>
         <p style={{ maxWidth: 700 }}>
           Approval authorizes <strong>one action</strong>. It never mutates <em>policy</em> on
-          either mandate — no raised cap, no extended window, no new approver — approving a
+          either mandate. No raised cap, no extended window, no new approver. Approving a
           $9,000 purchase does not raise the mandate&rsquo;s per-transaction ceiling for the next
           one. (It does write the real ledger entry described above; that&rsquo;s ledger, not
           policy.)
@@ -232,7 +237,7 @@ export default function Page() {
           rail&rsquo;s own callback corroborating a domain, for instance — with no approver, no
           human, at machine speed. This class of automatic resolution is SPECIFIED, not built: no
           code today re-evaluates a pending step-up when new evidence arrives, only when a real
-          approver mandate explicitly resolves it. What is real today (D-34) is that the{" "}
+          approver mandate explicitly resolves it. What is real today is that the{" "}
           <em>same underlying trust rule</em> already runs on every fresh evaluation — a
           rail-attested merchant on a new request resolves to <code>VERIFIED</code> the same way
           it always does; nothing here re-checks a specific pending authorization automatically.
@@ -243,15 +248,16 @@ export default function Page() {
         </p>
         <p style={{ maxWidth: 700 }}>
           <strong>(c) Unresolvable</strong> is a <code>DENY</code> at evaluation time, not a
-          step-up that sits around waiting to expire — consistent with OQ-1&rsquo;s resolution
-          (D-27): a hard ceiling denies outright rather than escalating something that was never
-          going to be approvable.
+          step-up that sits waiting to expire. A hard ceiling denies outright rather than
+          escalating something that was never going to be approvable.
         </p>
         <p style={{ maxWidth: 700 }}>
           <strong>Expiry and fail direction:</strong> an unresolved step-up expires to{" "}
-          <code>DENY</code>. <code>step_up.ttl_seconds</code> and the expiry-sweep path (D-31) are
-          real, implemented today (see Escalation above), and hold identically whether the step-up
-          is ever offered to an approver or not.
+          <code>DENY</code>. <code>step_up.ttl_seconds</code> and the sweep that applies it are
+          implemented today, see Escalation above, and hold the same way whether the step-up is
+          ever offered to an approver or not. An expiry releases any hold it was carrying. It does
+          not yet write its own entry to the signed record, which is a known gap named in the
+          threat model.
         </p>
         <p style={{ maxWidth: 700 }}>
           <strong>The full sequence:</strong>
@@ -264,17 +270,18 @@ asExecutable(decision)  ->  non-null exactly when STEP_UP_APPROVED (same as a fr
 execute(executable, params)  ->  status EXECUTED`}</pre>
         <p style={{ maxWidth: 700 }}>
           <code>STEP_UP_APPROVED</code> is executable the identical way <code>AUTHORIZED</code>{" "}
-          is — <code>asExecutable()</code> has treated the two identically since before this
-          section existed; D-62 didn&rsquo;t need to change that, only what can produce{" "}
+          is. <code>asExecutable()</code> has treated the two the same way since before approver
+          mandates existed. Approver mandates changed only what can produce{" "}
           <code>STEP_UP_APPROVED</code> in the first place.
         </p>
         <p style={{ maxWidth: 700 }}>
-          <strong>D-59, closed:</strong> an agent credential could resolve its own step-up — the
-          same agent key that produced a <code>STEP_UP</code> decision could immediately call the
-          resolution endpoint on it, with no human, no second credential, and no code path that
-          refused it, collapsing <code>STEP_UP</code> to the same outcome as <code>ALLOW</code> for
-          anyone holding just that one key. Closed by requiring the resolving credential to belong
-          to a <em>different</em>, named approver mandate: rejected with{" "}
+          <strong>A closed gap, stated plainly:</strong> an agent credential could once resolve
+          its own step-up. The same agent key that produced a <code>STEP_UP</code> decision could
+          call the resolution endpoint on it immediately, with no human, no second credential, and
+          no code path that refused it. For anyone holding that one key, <code>STEP_UP</code>
+          collapsed to the same outcome as <code>ALLOW</code>. It is closed by requiring the
+          resolving credential to belong to a <em>different</em>, named approver mandate. It is
+          rejected with{" "}
           <code>DENY_STEP_UP_SELF_APPROVAL</code> if it&rsquo;s the same mandate, checked first,
           ahead of every other rule. An org-level credential — which has no agent identity at all
           — was never a valid resolver either, and still isn&rsquo;t: it can never match a real

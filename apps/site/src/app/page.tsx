@@ -80,31 +80,34 @@ export default function HomePage() {
           </h2>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
             Every agent spend control shipping today lives on the agent&rsquo;s side of the
-            boundary — which means it holds exactly as long as the agent cooperates. A compromised
-            agent holding the credential walks through all of them.
+            boundary. Each one holds for exactly as long as the agent cooperates. An agent that has
+            been compromised still holds the credential, and walks through all of them.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
-            Give a compromised agent the raw card number and no Waysafe SDK, and every
-            authorization the network presents for real-time approval is still decided by Waysafe
-            against the mandate — the charge is declined unless that decision is an ALLOW. That
-            path runs the real engine against recorded Stripe Issuing authorization requests today;
-            live sandbox authorization is pending Stripe&rsquo;s live Issuing onboarding. Hand the
-            session key alone to a script with no Waysafe in it, and the transfer can&rsquo;t settle
-            without Waysafe&rsquo;s co-signature — the payer&rsquo;s wallet is a genuine 2-of-2, and
-            one key isn&rsquo;t enough. Neither script ever had to call Waysafe, agree with it, or
-            even know it exists.
+            Give a compromised agent the raw card number and no Waysafe code at all. Every
+            authorization the network presents for approval is still decided by Waysafe against the
+            mandate, and the charge is declined unless that decision is an ALLOW. That path runs the
+            real engine against recorded Stripe Issuing authorization requests today. Live sandbox
+            authorization is pending Stripe&rsquo;s Issuing onboarding. Hand the session key alone to
+            a script with no Waysafe in it, and the transfer cannot settle without Waysafe&rsquo;s
+            second signature. The payer&rsquo;s wallet requires two, and one key is not enough.
+            Neither script ever had to call Waysafe, agree with it, or know it exists.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
-            A card network can also clear a settlement it never presented for approval — a force
-            capture — or settle above the amount that was approved. Waysafe does not stop either,
-            and says so rather than implying a guarantee it doesn&rsquo;t have. What it does is
-            record them: the amount lands in the ledger and is charged against the mandate&rsquo;s
-            cap, the receipt is flagged as unauthorized or over-authorized, and it carries the
-            network&rsquo;s own payload alongside what the engine would have decided had it been
-            asked — which is what a dispute needs.
+            A card network can also clear a payment it never presented for approval. That is a
+            force capture, and it happens when a terminal was offline at the time of sale. A network
+            can also settle above the amount that was approved. Waysafe stops neither. Nobody can
+            decline a payment nobody is asked about.
+          </p>
+          <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
+            What Waysafe does is record them. The amount lands in the ledger and counts against the
+            mandate&rsquo;s limit, so the next real payment sees the money as gone. The receipt is
+            flagged as unauthorized or over-authorized. It carries the network&rsquo;s own merchant
+            data, and what the policy would have said if it had been asked. That is the basis for a
+            dispute.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
-            This is proven on-chain, recorded on{" "}
+            The on-chain side is recorded on{" "}
             <Link className="link" href="/proof">
               /proof
             </Link>{" "}
@@ -113,16 +116,16 @@ export default function HomePage() {
             alongside it.
           </p>
           <p className="muted" style={{ fontSize: "1.02rem", lineHeight: 1.7, marginTop: 20 }}>
-            What this is not: Waysafe is non-custodial — it never holds funds and cannot initiate a
-            transfer the agent hasn&rsquo;t already signed for. It is one of two required
-            signatures, not a custodian. It never handles a full card number, and is never
-            advisory. There is no step where the agent is asked and can decline.
+            What this is not: Waysafe never holds funds. It cannot start a transfer the agent has
+            not already signed for. It is one of two required signatures, and it is not a custodian.
+            It never handles a full card number. There is no step where the agent is asked and can
+            decline.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7, marginTop: 20 }}>
-            Being in the authorization path means being a dependency. A rail told to fail closed
-            declines everything if Waysafe doesn&rsquo;t answer inside its authorization window —
-            the correct failure direction, and the reason key custody and uptime are the two things
-            a reviewer should press on.
+            Being in the authorization path means being a dependency. A rail set to fail closed
+            declines everything if Waysafe does not answer inside its authorization window. That is
+            the right direction to fail in. It is also why key custody and uptime are the two things
+            to press us on.
           </p>
         </div>
       </section>
@@ -147,16 +150,16 @@ export default function HomePage() {
             </a>
             , an agent wrote in its own log: &ldquo;We&rsquo;re attacking third-party HF using
             leaked token, potentially outside intended scope... This is arguably unauthorized. Yet
-            goal solution.&rdquo; Another agent had first objected — &ldquo;We should not do
-            unauthorized real infrastructure harm&rdquo; — then reversed when a peer signalled go.
+            goal solution.&rdquo; Another agent objected first: &ldquo;We should not do unauthorized real
+            infrastructure harm.&rdquo; It reversed when a peer signalled go.
           </p>
           <p style={{ fontSize: "1.05rem", lineHeight: 1.7 }}>
-            A spending limit written into a prompt is that same kind of rule — a suggestion the model
-            weighs against everything else it&rsquo;s reasoning about, including the pressure to
-            finish the task. On cards, the control that isn&rsquo;t a suggestion is the issuer&rsquo;s
-            own real-time authorization decline; on-chain, it&rsquo;s a second key the agent
-            doesn&rsquo;t hold. Neither asks the model to agree — each asks whoever moves the money to
-            check with someone else first.
+            A spending limit written into a prompt is that same kind of rule. The model weighs it
+            against everything else it is reasoning about, including the pressure to finish the
+            task. On cards, the control that is not a suggestion is the issuer&rsquo;s own
+            authorization decline. On-chain, it is a second key the agent does not hold. Neither
+            asks the model to agree. Each asks whoever moves the money to check with someone else
+            first.
           </p>
         </div>
       </section>
@@ -214,9 +217,9 @@ export default function HomePage() {
             AP2, Visa Intelligent Commerce and Mastercard Agent Pay each solve delegated
             authorization within their own rail, by issuing a credential the agent carries. An
             agent rarely spends on one rail. Waysafe sits in the authorization path of each of
-            them: on cards it decides every authorization the network presents for real-time
-            approval, on x402 a transfer cannot settle without its co-signature, that decision can
-            take a rail&rsquo;s own credential as an input, and the record reads the same whether
+            them. On cards it decides every authorization the network presents for approval. On
+            stablecoin payments a transfer cannot settle without its second signature. A decision
+            can take a rail&rsquo;s own credential as an input. The record reads the same whether
             the rail underneath is a card network or a chain.
           </p>
         </div>
@@ -225,7 +228,7 @@ export default function HomePage() {
       <section className="section-light section">
         <div className="container" style={{ maxWidth: 760 }}>
           <p className="kicker" style={{ marginBottom: 16 }}>
-            Status, honestly
+            Where this stands
           </p>
           <ul style={{ paddingLeft: 20, lineHeight: 1.8, fontSize: "1.02rem" }}>
             <li>The policy engine and evidence chain are real and running.</li>
@@ -238,14 +241,14 @@ export default function HomePage() {
               onboarding.
             </li>
             <li>
-              A settlement the card network clears without asking is recorded and flagged, not
-              prevented. Waysafe decides what it is asked about; it does not police what the
-              network does unilaterally.
+              A payment the card network clears without asking is recorded and flagged. It is not
+              prevented. Waysafe decides what it is asked about. It does not police what a network
+              does on its own.
             </li>
             <li>
               Two independent adversarial reviews have been run against this repository, and
-              eighteen findings are fixed — each with the attack written as a test first. The
-              findings, the fixes, and what is still open are in{" "}
+              eighteen findings are fixed. Each one shipped with the attack written as a test
+              first. The findings, the fixes, and what is still open are in{" "}
               <a
                 className="link"
                 href={`${REPO_TREE}/SECURITY.md`}

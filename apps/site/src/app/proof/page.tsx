@@ -25,9 +25,9 @@ function truncate(hex: string, lead = 10, tail = 8): string {
 }
 
 // Whether this row's transaction was actually broadcast and mined, versus
-// never reaching the network at all. Every row today is SUBMITTED · MINED
-// (D-57 broadcast all three bypass cases for real, closing the gap D-55
-// left for two of them) -- kept generic, not hardcoded to that, since a
+// never reaching the network at all. Every row today is SUBMITTED · MINED:
+// all three bypass cases were broadcast for real, closing a gap an earlier
+// version left for two of them. Kept generic rather than hardcoded, since a
 // row without a real tx hash is still a meaningfully different claim and
 // this component is what would have to show it again if one ever existed.
 function OnChainLabel({ submitted }: { submitted: boolean }) {
@@ -46,10 +46,11 @@ function OnChainLabel({ submitted }: { submitted: boolean }) {
 // /v1/evidence/public-key). Same algorithm as
 // packages/core/src/evidence.ts's computeEventHash/verifyEvidenceChain and
 // evidence-signing.ts's verifyEventSignature -- reimplemented here, not
-// imported, so this file is genuinely self-contained. key_directory routing
-// mirrors D-53: an event carrying a key_id is checked against the matching
-// directory entry; an event with none (written before the key directory
-// existed) falls back to publicKey, the one key this chain has ever used.
+// imported, so this file is self-contained. key_directory routing mirrors
+// the signing-key directory: an event carrying a key_id is checked against
+// the matching directory entry. An event with none, written before the key
+// directory existed, falls back to publicKey, the one key this chain has
+// ever used.
 const VERIFY_SNIPPET = `import { createHash, createPublicKey, verify } from "node:crypto";
 
 function sortKeysDeep(v) {
@@ -255,7 +256,7 @@ export default function ProofPage() {
           </table>
         </div>
 
-        <h2 style={{ marginTop: 48 }}>The genuine ALLOW (x402, on-chain)</h2>
+        <h2 style={{ marginTop: 48 }}>The ALLOW that was approved (on-chain)</h2>
         <div className="card">
           <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12 }}>
             <DecisionBadge decision={proof.allow_attempt.decision} />

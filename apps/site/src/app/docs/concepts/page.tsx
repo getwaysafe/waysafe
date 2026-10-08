@@ -20,12 +20,14 @@ export default function Page() {
 
         <Diagram
           name="context"
+          minWidth={900}
           alt={"Waysafe sits between the principal who signs a policy and the two payment rails that settle: Stripe asks it before any card charge, and the Safe cannot settle on one signature, so both rails reach the merchant only through a decision Waysafe made. The agent's own call to Waysafe is a preflight, never a control."}
           caption="Who holds which key, and who asks whom."
         />
 
         <Diagram
           name="trust"
+          minWidth={820}
           alt={"Anything an agent asserts -- a merchant name, a PSP account id, a payee address, which resource URL to fetch -- caps at STEP_UP rather than producing ALLOW, and the asset decimals a merchant declares are overridden by Waysafe's own registry. Neither an agent nor a merchant can forge an evidence signature, raise a limit, or turn its own STEP_UP into an ALLOW."}
           caption={
             <>

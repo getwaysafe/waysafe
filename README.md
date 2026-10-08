@@ -13,8 +13,8 @@ const decision = await waysafe.authorize({ agent_id, principal_id, action });
 
 This runs against Stripe **test mode** and the **Polygon Amoy testnet**.
 There is no production deployment. No real money has moved through this
-system. Everything described below — including "real" and "genuine" — means
-real against a test-mode or testnet backend, not real production traffic.
+system. Where this file says "real", it means real against a test-mode or
+testnet backend. It does not mean production traffic.
 See [`docs/THREAT-MODEL.md`](docs/THREAT-MODEL.md) before relying on any of
 this for anything that matters.
 
@@ -36,7 +36,7 @@ clone has no `@waysafe/sdk` to import until it's built. This is in-memory,
 not a database — `packages/db`'s schema uses native Postgres enums,
 `String[]` columns, and real `SELECT ... FOR UPDATE` row locking that the
 cumulative-spend guarantee below depends on, none of which SQLite can
-express, so the in-memory adapter already used by `npm test` is the honest
+express, so the in-memory adapter already used by `npm test` is the
 zero-setup path, not a shortcut around a real Postgres deployment.
 
 Real, unedited output from an actual run, sections 1–4 (connect, compile,
@@ -75,16 +75,17 @@ Same run, same mandate, a purchase over the hard cap:
 ```
 
 Sections 5–6 and 8–10 of the same run (execution, a step-up resolved by a
-real approver mandate after a rejected self-approval attempt (D-62), a typed
+real approver mandate after a rejected self-approval attempt, a typed
 SDK error, and independently verifying the signed evidence chain) are elided
 here for length — run `npm run quickstart` yourself, or read
 `examples/quickstart.ts` directly. Same commands and output as
 [waysafe.ai/docs/quickstart](https://waysafe.ai/docs/quickstart).
 
-## The nine non-negotiables
+## The nine rules this is built on
 
-The clearest statement of what this actually is. Full text and the reasoning
-behind each is in [`CLAUDE.md`](CLAUDE.md); condensed:
+The clearest statement of what this is. Violating one is a bug even if the
+tests pass. Condensed here; the full text and the reasoning behind each is in
+the contributor guide at the repository root.
 
 1. **A model never authorizes a transaction.** An LLM appears in exactly one
    place — the intent compiler, turning natural language into a *proposed*
@@ -123,27 +124,27 @@ just unit-tested:**
   specified-but-unbuilt or absent entirely.
 - The evidence chain — append-only, hash-chained, Ed25519-signed, with a
   published key directory so a rotation doesn't invalidate historical
-  signatures (D-53), and independently verifiable with nothing but
-  `node:crypto` and a pinned public key.
+  signatures, and independently verifiable with nothing but `node:crypto`
+  and a pinned public key.
 - Stripe Issuing enforcement — every authorization the network presents for
   real-time approval is decided against the mandate, in test mode, and the
   charge is declined unless that decision is an ALLOW. A settlement the
   network clears without asking (a force capture) or above what was approved
   (an overcapture) cannot be declined, because nobody is asked: it is
   recorded in the ledger, charged against the cap, flagged on the receipt,
-  and carries what the engine would have decided had it been asked (D-84).
-- The x402 / Safe co-signer — a genuine on-chain 2-of-2 multisig on Polygon
+  and carries what the engine would have decided had it been asked.
+- The stablecoin co-signer — an on-chain 2-of-2 multisig wallet on Polygon
   Amoy. The three bypass cases (a stolen session key alone, a forged
-  co-signature, a genuine signature redirected to a different payment) are
-  broadcast to the real network and reverted on-chain, not simulated — see
-  [waysafe.ai/proof](https://waysafe.ai/proof) for the actual transaction
-  hashes.
-- Approver mandates (D-62) — resolving a step-up runs the real `evaluate()`
-  engine a second time, against a *different*, named approver mandate's own
-  policy. Closes a real, previously-open gap (D-59): an agent credential
-  could resolve its own step-up before this shipped. See
-  [waysafe.ai/docs/policy](https://waysafe.ai/docs/policy) for
-  the full mechanics.
+  co-signature, and a real signature redirected to a different payment) are
+  broadcast to the real network and reverted on-chain. They are not
+  simulated. See [waysafe.ai/proof](https://waysafe.ai/proof) for the
+  transaction hashes.
+- Approver mandates — resolving a step-up runs the `evaluate()` engine a
+  second time, against a *different*, named approver mandate's own policy.
+  This closes a gap that was open until it shipped: an agent credential
+  could resolve its own step-up. See
+  [waysafe.ai/docs/policy](https://waysafe.ai/docs/policy) for the full
+  mechanics.
 
 **Not built — specified or discussed, never shipped:**
 

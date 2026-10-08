@@ -1,40 +1,42 @@
 flowchart TB
-  subgraph AG["An agent with a valid API key CAN assert"]
+  classDef limitation fill:#ffe6cc,stroke:#c75300,stroke-width:2px,color:#4a2200
+
+  subgraph AG["An agent can claim"]
     direction TB
-    A1["a merchant name, domain,<br/>psp_account, network_mid,<br/>onchain_address"]
-    A2["an amount, a currency,<br/>a category"]
-    A3["which resource_url<br/>Waysafe should fetch"]
-    A4["a session signature over<br/>its own intended payment"]
+    A1["any merchant name<br/>or account identifier"]
+    A2["any amount, currency<br/>or category"]
+    A3["which URL Waysafe fetches"]
+    A4["a signature over<br/>the payment it wants"]
   end
 
-  subgraph AGN["and that assertion CANNOT produce ALLOW"]
+  subgraph AGN["None of it earns an ALLOW"]
     direction TB
-    B1["any identifier it asserted<br/>caps at STEP_UP<br/>D-3, D-34, D-69"]
-    B2["an identifier is never<br/>vouched for by a verified<br/>sibling in the same request<br/>D-69"]
-    B3["payment requirements are<br/>never taken from the caller<br/>D-40"]
-    B4["1 of 2 Safe owners.<br/>Threshold is 2.<br/>D-41"]
+    B1["A claim the agent made<br/>can only ask for approval"]
+    B2["One checked identifier<br/>never vouches for another"]
+    B3["Waysafe reads the price<br/>from the merchant, not the agent"]
+    B4["One of two signatures.<br/>Two are required."]
   end
 
-  subgraph ME["A merchant CAN assert"]
+  subgraph ME["A merchant can declare"]
     direction TB
-    C1["its own payTo address<br/>and domain, in its 402"]
+    C1["its own payout address<br/>and domain"]
     C2["a token contract address"]
-    C3["a decimals field"]
+    C3["how many decimals<br/>that token has"]
   end
 
-  subgraph MEN["and that assertion CANNOT change the amount"]
+  subgraph MEN["None of it changes the amount"]
     direction TB
-    D1["decimals come from the<br/>asset registry, keyed on<br/>chain id + address.<br/>Mismatch is a loud DENY.<br/>D-68"]
-    D2["an unknown address is<br/>DENY, never a guess<br/>D-68"]
-    D3["OPEN: nothing binds that<br/>payTo to that domain<br/>except the merchant's own<br/>response. OQ-13"]
+    D1["Decimals come from Waysafe's<br/>own registry of known tokens"]
+    D2["An unknown token is declined,<br/>never guessed at"]
+    D3["Known limitation: only the<br/>merchant vouches for its<br/>own payout address"]:::limitation
   end
 
-  subgraph NE["NEITHER can"]
+  subgraph NE["Neither can"]
     direction TB
-    E1["forge an evidence signature<br/>evidence key is not in either hand"]
-    E2["raise a limit, or edit a policy<br/>policy is frozen at a hash<br/>the principal signed"]
-    E3["turn its own STEP_UP into ALLOW<br/>needs a different, principal-named<br/>approver mandate's credential<br/>D-62, D-64"]
-    E4["spend without the rail asking first<br/>enforcement is rail-initiated<br/>non-negotiable 9"]
+    E1["forge a receipt signature"]
+    E2["raise a limit or edit a policy"]
+    E3["approve its own request<br/>for approval"]
+    E4["spend without the rail<br/>asking Waysafe first"]
   end
 
   A1 --> B1

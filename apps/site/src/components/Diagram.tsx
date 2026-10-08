@@ -11,9 +11,14 @@
  * something.
  *
  * The figure scrolls horizontally inside its own box rather than letting the
- * page scroll: these are wide, and at 390px a sequence diagram legibly
- * does not fit. `max-width: 100%` on the image keeps the common case
- * unscrolled.
+ * page scroll. These are wide. The widest is about six times as wide as it
+ * is tall, and at 390px of viewport it rendered 56 pixels tall, which is a
+ * picture nobody can read.
+ *
+ * So the image carries a `minWidth` as well as a `maxWidth`. Below that
+ * width it stops shrinking and the box scrolls instead. The page itself
+ * never scrolls: the overflow belongs to the figure. Measured at 390px on
+ * every page that carries one.
  */
 
 interface DiagramProps {
@@ -25,9 +30,15 @@ interface DiagramProps {
   caption?: React.ReactNode;
   /** Natural display width in px. The image never exceeds its container. */
   maxWidth?: number;
+  /**
+   * Width below which the figure scrolls instead of shrinking further.
+   * Set it from the diagram's shape: a wide flowchart needs more than a
+   * tall sequence diagram to stay readable.
+   */
+  minWidth?: number;
 }
 
-export function Diagram({ name, alt, caption, maxWidth = 980 }: DiagramProps) {
+export function Diagram({ name, alt, caption, maxWidth = 980, minWidth = 560 }: DiagramProps) {
   return (
     <figure style={{ margin: "32px 0", maxWidth: "100%" }}>
       <div style={{ overflowX: "auto", maxWidth: "100%", WebkitOverflowScrolling: "touch" }}>
@@ -42,6 +53,7 @@ export function Diagram({ name, alt, caption, maxWidth = 980 }: DiagramProps) {
               display: "block",
               width: "100%",
               maxWidth,
+              minWidth,
               height: "auto",
               borderRadius: 10,
               border: "1px solid var(--hairline)",

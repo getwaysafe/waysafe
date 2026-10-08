@@ -113,7 +113,7 @@ const waysafe = new Waysafe({
           <code>STEP_UP</code>, exactly like an unverified <code>name</code>.
         </p>
         <p style={{ maxWidth: 700 }}>
-          Trust belongs to each <em>identifier</em>, not to the merchant as a whole (D-69). Sending
+          Trust belongs to each <em>identifier</em>, not to the merchant as a whole. Sending
           a real domain alongside an account id of your own does not launder the account id: a
           match produces <code>ALLOW</code> only when the identifier that matched is itself
           verified <strong>and</strong> no identifier on the request is unverified. The{" "}
@@ -126,7 +126,7 @@ const waysafe = new Waysafe({
           response (or the reverse) is a <code>400</code> (
           <code>{`{"error":"challenge_purpose_mismatch"}`}</code>), never silently accepted.
           Enrolling a second passkey for a principal that already has one additionally requires a
-          fresh prior authentication with an existing credential (D-66).
+          fresh prior authentication with an existing credential.
         </p>
         <p style={{ maxWidth: 700 }}>
           Response status: <code>201</code> on a fresh decision, <code>200</code> if{" "}
@@ -193,7 +193,7 @@ const waysafe = new Waysafe({
 
 // status: "needs_clarification" -- HTTP 200, not an error. Asking is a
 // valid, expected outcome: the compiler never invents a spending ceiling
-// the principal didn't state (non-negotiable #8).
+// the principal didn't state.
 { "status": "needs_clarification",
   "clarifications": [
     { "path": "/limits/per_transaction", "question": "What's the most this can spend in one transaction?",
@@ -274,10 +274,11 @@ const waysafe = new Waysafe({
           <code>subject_type</code> and <code>subject_id</code> naming what the entry is about.
         </p>
         <p style={{ maxWidth: 700 }}>
-          Decisions on the agent path are in this chain too, which was not true before{" "}
-          <code>DECISIONS.md</code> D-90 — the rail-initiated paths each appended their own
-          decision evidence and <code>POST /v1/authorizations</code> appended nothing. A step-up
-          that <em>expires</em> still writes no event; it is the one gap, tracked as OQ-14.
+          Decisions made through the API are in this chain too. That was not true until a second
+          adversarial review found it: the rail-initiated paths each appended their own decision
+          evidence, and <code>POST /v1/authorizations</code> appended nothing. A step-up that{" "}
+          <em>expires</em> still writes no event. That is a known gap, named in the threat
+          model.
         </p>
         <div className="table-scroll">
           <table>
