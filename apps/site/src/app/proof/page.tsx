@@ -405,9 +405,9 @@ export default function ProofPage() {
 
         <h3 style={{ marginTop: 32 }}>Key directory</h3>
         <p style={{ maxWidth: 720 }}>
-          Every key a signature above might have been made under, oldest first — what a real key
-          rotation would add a second entry to, without invalidating anything signed under the
-          first. This run has exactly one, matching the public key above.
+          The keys that can sign Waysafe&rsquo;s records, oldest first. If the signing key is ever
+          changed, the new key is added here and older records still verify. Right now there is one
+          key, and it matches the public key above.
         </p>
         <div style={{ position: "relative" }}>
           <CopyButton text={JSON.stringify(proof.evidence.key_directory, null, 2)} />
